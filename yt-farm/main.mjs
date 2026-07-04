@@ -680,7 +680,8 @@ export async function runFarm(slot, profileId) {
     console.log(`\n📊 [КАНАЛ №${channelNumber}] Захожу на главную https://studio.youtube.com/ для финального сбора статистики...`);
     try {
       await page.goto('https://studio.youtube.com/', { waitUntil: 'networkidle' }).catch(() => {});
-      await new Promise(r => setTimeout(r, capDelay(6000)));
+      console.log(`[КАНАЛ №${channelNumber}] Жду 15 секунд после перехода на статистику...`);
+      await asyncSleep(15000);
 
       const dashboardText = await page.evaluate(() => {
         const cards = Array.from(document.querySelectorAll('*'));
