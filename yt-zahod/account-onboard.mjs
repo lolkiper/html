@@ -18,25 +18,82 @@ function loadConfig() {
   return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 }
 
-function parseProxy(raw) {
+export function parseProxy(raw) {
   if (!raw || raw === '-' || raw === 'none') return null;
-  const parts = String(raw).split(':');
+
+  let value = String(raw).trim();
+  if (!value) return null;
+
+  let type = 'http';
+  const knownTypes = new Set(['http', 'https', 'socks4', 'socks5', 'ssh']);
+
+  const atMatch = value.match(
+    /^(?:(https?|socks4|socks5):\/\/)?(?<login>[^:]+):(?<password>[^@]+)@(?<host>[^:]+):(?<port>\d+)\/?$/i
+  );
+  if (atMatch?.groups) {
+    return {
+      host: atMatch.groups.host.trim(),
+      port: atMatch.groups.port.trim(),
+      login: atMatch.groups.login.trim(),
+      password: atMatch.groups.password.trim(),
+      type: (atMatch[1] || 'http').toLowerCase(),
+    };
+  }
+
+  const schemeMatch = value.match(/^(https?|socks4|socks5):\/\/(.+)$/i);
+  if (schemeMatch) {
+    type = schemeMatch[1].toLowerCase();
+    value = schemeMatch[2];
+  }
+
+  const parts = value.split(':');
   if (parts.length < 2) return null;
-  const [host, port, login, password, type] = parts;
-  return {
-    host: host.trim(),
-    port: port.trim(),
-    login: login?.trim() || '',
-    password: password?.trim() || '',
-    type: (type || 'http').trim().toLowerCase(),
-  };
+
+  const host = parts[0].trim();
+  const port = parts[1].trim();
+
+  if (parts.length >= 5 && knownTypes.has(parts[parts.length - 1].trim().toLowerCase())) {
+    return {
+      host,
+      port,
+      login: parts[2].trim(),
+      password: parts.slice(3, -1).join(':').trim(),
+      type: parts[parts.length - 1].trim().toLowerCase(),
+    };
+  }
+
+  if (parts.length >= 4) {
+    return {
+      host,
+      port,
+      login: parts[2].trim(),
+      password: parts.slice(3).join(':').trim(),
+      type,
+    };
+  }
+
+  if (parts.length === 3) {
+    return {
+      host,
+      port,
+      login: parts[2].trim(),
+      password: '',
+      type,
+    };
+  }
+
+  return { host, port, login: '', password: '', type };
 }
 
 /**
  * Формат accounts.txt (одна строка = один аккаунт):
- * email|password|totp_secret|proxy_host:port:login:pass:http|profile_name
+ * email|password|totp_secret|proxy|profile_name
  *
- * proxy можно "-" если без прокси.
+ * proxy — любой из форматов:
+ *   http://host:port:login:pass
+ *   host:port:login:pass:http
+ *   login:pass@host:port
+ * Если прокси нет — "-"
  * profile_name опционально.
  */
 export function parseAccountsFile(filePath) {
