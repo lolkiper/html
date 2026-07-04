@@ -36,35 +36,49 @@ async function humanMouseMove(page, targetX, targetY) {
 }
 
 async function humanClick(page, target, options = {}) {
-  if (target && typeof target.scrollIntoViewIfNeeded !== 'function') {
-    const box = await target.boundingBox().catch(() => null);
-    if (box) {
-      const x = box.x + box.width * (0.28 + Math.random() * 0.44);
-      const y = box.y + box.height * (0.28 + Math.random() * 0.44);
-      await humanMouseMove(page, x, y);
-      await page.waitForTimeout(randomBetween(60, 220));
-      await page.mouse.click(x, y, { delay: randomBetween(45, 160) });
-      return;
+  if (typeof target === 'string') {
+    return humanClick(page, page.locator(target).first(), options);
+  }
+
+  // Locator
+  if (target && typeof target.scrollIntoViewIfNeeded === 'function') {
+    await target.scrollIntoViewIfNeeded().catch(() => {});
+    await humanDelay(120, 400);
+
+    if (typeof target.boundingBox === 'function') {
+      const box = await target.boundingBox().catch(() => null);
+      if (box) {
+        const x = box.x + box.width * (0.28 + Math.random() * 0.44);
+        const y = box.y + box.height * (0.28 + Math.random() * 0.44);
+        await humanMouseMove(page, x, y);
+        await page.waitForTimeout(randomBetween(60, 220));
+        await page.mouse.click(x, y, { delay: randomBetween(45, 160) });
+        return;
+      }
+    }
+
+    await target.click({ delay: randomBetween(50, 140), force: true, ...options });
+    return;
+  }
+
+  // ElementHandle (waitForSelector / page.$)
+  if (target && typeof target.click === 'function') {
+    if (typeof target.boundingBox === 'function') {
+      const box = await target.boundingBox().catch(() => null);
+      if (box) {
+        const x = box.x + box.width * (0.28 + Math.random() * 0.44);
+        const y = box.y + box.height * (0.28 + Math.random() * 0.44);
+        await humanMouseMove(page, x, y);
+        await page.waitForTimeout(randomBetween(60, 220));
+        await page.mouse.click(x, y, { delay: randomBetween(45, 160) });
+        return;
+      }
     }
     await target.click({ delay: randomBetween(50, 140), ...options });
     return;
   }
 
-  const locator = typeof target === 'string' ? page.locator(target).first() : target;
-  await locator.scrollIntoViewIfNeeded().catch(() => {});
-  await humanDelay(120, 400);
-
-  const box = await locator.boundingBox().catch(() => null);
-  if (!box) {
-    await locator.click({ delay: randomBetween(50, 140), ...options });
-    return;
-  }
-
-  const x = box.x + box.width * (0.28 + Math.random() * 0.44);
-  const y = box.y + box.height * (0.28 + Math.random() * 0.44);
-  await humanMouseMove(page, x, y);
-  await page.waitForTimeout(randomBetween(60, 220));
-  await page.mouse.click(x, y, { delay: randomBetween(45, 160) });
+  throw new Error('humanClick: не удалось кликнуть — неизвестный тип элемента');
 }
 
 async function humanType(page, text, delayRange = [55, 130]) {
