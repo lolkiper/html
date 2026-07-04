@@ -129,11 +129,11 @@ function atomicWriteJson(filePath, data) {
 }
 
 function pauseBetweenUploads() {
-  const rawMin = Number(ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 1000);
-  const rawMax = Number(ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 1000);
+  const rawMin = Number(ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 5000);
+  const rawMax = Number(ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 5000);
   const lo = Math.min(rawMin, rawMax);
   const hi = Math.max(rawMin, rawMax);
-  const waitMs = capDelay(randomBetween(lo, hi));
+  const waitMs = randomBetween(lo, hi);
   console.log(`[Anti-detect] Пауза ${Math.round(waitMs / 1000)}с перед следующим видео...`);
   return new Promise((r) => setTimeout(r, waitMs));
 }

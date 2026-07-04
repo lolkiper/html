@@ -14,8 +14,8 @@
     "LOCK_MAX_WAIT_MS": 120000
   },
   "ANTIDETECT": {
-    "BETWEEN_UPLOAD_MIN_MS": 1000,
-    "BETWEEN_UPLOAD_MAX_MS": 1000
+    "BETWEEN_UPLOAD_MIN_MS": 5000,
+    "BETWEEN_UPLOAD_MAX_MS": 5000
   },
   "PROFILE_MAPPING": {
     "dolphin_profile_id_1": [1],
