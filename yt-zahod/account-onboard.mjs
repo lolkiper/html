@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'url';
-import { DolphinClient, normalizeToken, DOLPHIN_API_VERSION } from './dolphin-api.mjs';
+import { DolphinClient, normalizeToken } from './dolphin-api.mjs';
 import { loginGoogleOnYouTube, setYouTubeLanguageEnglish } from './google-youtube-login.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -179,7 +179,6 @@ export async function runOnboard(options = {}) {
   });
 
   console.log('[Onboard] Авторизация в локальном Dolphin API...');
-  console.log(`[Onboard] dolphin-api.mjs версия: ${DOLPHIN_API_VERSION}`);
   await dolphin.loginWithToken();
   console.log('[Onboard] Проверка доступа к Cloud API...');
   await dolphin.verifyCloudAccess();
