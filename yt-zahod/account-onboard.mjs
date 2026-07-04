@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'url';
-import { DolphinClient } from './dolphin-api.mjs';
+import { DolphinClient, normalizeToken } from './dolphin-api.mjs';
 import { loginGoogleOnYouTube, setYouTubeLanguageEnglish } from './google-youtube-login.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -158,6 +158,12 @@ async function processAccount(account, config, dolphin) {
 
 export async function runOnboard(options = {}) {
   const config = loadConfig();
+  if (/dolphin-anty-api\.cc/i.test(config.DOLPHIN_CLOUD_API_URL || '')) {
+    console.warn('[Onboard] ⚠️ В конфиге Cloud API .cc — используем https://dolphin-anty-api.com');
+    config.DOLPHIN_CLOUD_API_URL = 'https://dolphin-anty-api.com';
+  }
+  config.DOLPHIN_TOKEN = normalizeToken(config.DOLPHIN_TOKEN);
+
   const accountsFile = options.accountsFile || config.ACCOUNTS_FILE || 'accounts.txt';
   const accounts = parseAccountsFile(accountsFile);
 

@@ -2,6 +2,21 @@ import axios from 'axios';
 
 const DEFAULT_CLOUD = 'https://dolphin-anty-api.com';
 
+export function normalizeToken(token) {
+  return String(token || '')
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["']|["']$/g, '');
+}
+
+export function normalizeCloudUrl(url) {
+  let value = String(url || DEFAULT_CLOUD).trim().replace(/\/$/, '');
+  if (/dolphin-anty-api\.cc$/i.test(value)) {
+    value = DEFAULT_CLOUD;
+  }
+  return value;
+}
+
 function authHeaders(token) {
   return {
     'Content-Type': 'application/json',
@@ -48,8 +63,8 @@ async function axiosCall(promise, context) {
 export class DolphinClient {
   constructor({ localApiUrl, cloudApiUrl, token }) {
     this.localApiUrl = (localApiUrl || 'http://localhost:3001').replace(/\/$/, '');
-    this.cloudApiUrl = (cloudApiUrl || DEFAULT_CLOUD).replace(/\/$/, '');
-    this.token = token;
+    this.cloudApiUrl = normalizeCloudUrl(cloudApiUrl);
+    this.token = normalizeToken(token);
   }
 
   async loginWithToken() {

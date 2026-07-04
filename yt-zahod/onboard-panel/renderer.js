@@ -34,10 +34,13 @@ function setStatus(status) {
 }
 
 function readConfigFromForm() {
+  const cloudApi = els.cloudApi.value.trim().replace(/\/$/, '');
   return {
-    DOLPHIN_TOKEN: els.dolphinToken.value.trim(),
+    DOLPHIN_TOKEN: els.dolphinToken.value.trim().replace(/^Bearer\s+/i, ''),
     DOLPHIN_LOCAL_API_URL: els.localApi.value.trim(),
-    DOLPHIN_CLOUD_API_URL: els.cloudApi.value.trim(),
+    DOLPHIN_CLOUD_API_URL: /dolphin-anty-api\.cc$/i.test(cloudApi)
+      ? 'https://dolphin-anty-api.com'
+      : cloudApi,
     TOTP_WEBSITE: els.totpSite.value.trim(),
     DELAY_BETWEEN_ACCOUNTS_MS: Number(els.delayMs.value) || 5000,
     SKIP_ALREADY_OK: els.skipOk.checked,

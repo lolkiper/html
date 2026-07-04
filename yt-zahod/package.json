@@ -11,6 +11,7 @@
     "start": "node main.mjs",
     "onboard": "node account-onboard.mjs",
     "onboard-panel": "electron onboard-panel/main.mjs",
+    "test-dolphin": "node test-dolphin-api.mjs",
     "build:onboard": "electron-builder --win portable --config electron-builder.onboard.json"
   },
   "dependencies": {
