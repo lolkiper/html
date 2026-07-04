@@ -174,6 +174,8 @@ export async function runOnboard(options = {}) {
 
   console.log('[Onboard] Авторизация в локальном Dolphin API...');
   await dolphin.loginWithToken();
+  console.log('[Onboard] Проверка доступа к Cloud API...');
+  await dolphin.verifyCloudAccess();
 
   const delayMs = Number(config.DELAY_BETWEEN_ACCOUNTS_MS ?? 5000);
   const results = loadResults();

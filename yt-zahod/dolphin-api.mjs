@@ -10,6 +10,41 @@ function authHeaders(token) {
   };
 }
 
+function formatApiError(err, context) {
+  if (!err?.response) {
+    return `${context}: ${err?.message || String(err)}`;
+  }
+
+  const { status, statusText, data } = err.response;
+  const url = err.config?.url || '';
+  const body = typeof data === 'string'
+    ? data
+    : data?.message || data?.error || JSON.stringify(data);
+
+  let hint = '';
+  if (status === 401) {
+    hint = ' Проверьте DOLPHIN_TOKEN: создайте новый на https://dolphin-anty.com/panel → API.';
+  } else if (status === 403) {
+    hint = [
+      ' Cloud API отклонил запрос. Частые причины:',
+      '1) бесплатный тариф Free — создание профилей через API недоступно (нужен Free+/Starter);',
+      '2) истёк или неверный токен;',
+      '3) неверный Cloud API URL (обычно https://dolphin-anty-api.com, не .cc);',
+      '4) лимит профилей на аккаунте.',
+    ].join('');
+  }
+
+  return `${context}: HTTP ${status} ${statusText}${url ? ` (${url})` : ''} — ${body}.${hint}`;
+}
+
+async function axiosCall(promise, context) {
+  try {
+    return await promise;
+  } catch (err) {
+    throw new Error(formatApiError(err, context));
+  }
+}
+
 export class DolphinClient {
   constructor({ localApiUrl, cloudApiUrl, token }) {
     this.localApiUrl = (localApiUrl || 'http://localhost:3001').replace(/\/$/, '');
@@ -18,27 +53,50 @@ export class DolphinClient {
   }
 
   async loginWithToken() {
-    const { data } = await axios.post(
-      `${this.localApiUrl}/v1.0/auth/login-with-token`,
-      { token: this.token },
-      { headers: { 'Content-Type': 'application/json' } }
+    const { data } = await axiosCall(
+      axios.post(
+        `${this.localApiUrl}/v1.0/auth/login-with-token`,
+        { token: this.token },
+        { headers: { 'Content-Type': 'application/json' } }
+      ),
+      'Локальный Dolphin API'
     );
     return data;
   }
 
+  async verifyCloudAccess() {
+    if (!this.token?.trim()) {
+      throw new Error('DOLPHIN_TOKEN пустой. Вставьте токен из https://dolphin-anty.com/panel → API.');
+    }
+
+    await axiosCall(
+      axios.get(`${this.cloudApiUrl}/browser_profiles`, {
+        params: { limit: 1, page: 1 },
+        headers: authHeaders(this.token),
+      }),
+      'Проверка Cloud API Dolphin'
+    );
+  }
+
   async fetchUserAgent(platform = 'windows', browserVersion = '140') {
-    const { data } = await axios.get(`${this.cloudApiUrl}/fingerprints/useragent`, {
-      params: { browser_type: 'anty', browser_version: browserVersion, platform },
-      headers: authHeaders(this.token),
-    });
+    const { data } = await axiosCall(
+      axios.get(`${this.cloudApiUrl}/fingerprints/useragent`, {
+        params: { browser_type: 'anty', browser_version: browserVersion, platform },
+        headers: authHeaders(this.token),
+      }),
+      'Запрос fingerprint user-agent'
+    );
     return typeof data === 'string' ? data : data?.value || data?.useragent || data;
   }
 
   async fetchWebglInfo(platform = 'windows') {
-    const { data } = await axios.get(`${this.cloudApiUrl}/fingerprints/webgl`, {
-      params: { browser_type: 'anty', platform },
-      headers: authHeaders(this.token),
-    });
+    const { data } = await axiosCall(
+      axios.get(`${this.cloudApiUrl}/fingerprints/webgl`, {
+        params: { browser_type: 'anty', platform },
+        headers: authHeaders(this.token),
+      }),
+      'Запрос fingerprint WebGL'
+    );
     return data;
   }
 
@@ -90,10 +148,13 @@ export class DolphinClient {
     const proxyPayload = this.buildProxyPayload(proxy);
     if (proxyPayload) payload.proxy = proxyPayload;
 
-    const { data } = await axios.post(
-      `${this.cloudApiUrl}/browser_profiles`,
-      payload,
-      { headers: authHeaders(this.token) }
+    const { data } = await axiosCall(
+      axios.post(
+        `${this.cloudApiUrl}/browser_profiles`,
+        payload,
+        { headers: authHeaders(this.token) }
+      ),
+      'Создание профиля Dolphin'
     );
 
     const profileId = data?.browserProfileId || data?.id || data?.data?.id;
