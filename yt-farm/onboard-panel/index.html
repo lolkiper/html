@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Onboard Panel</title>
+    <style>
+        :root {
+            --bg-color: #0c0714;
+            --card-bg: #140d22;
+            --input-bg: #1b122c;
+            --accent-purple: #bd53ed;
+            --accent-glow: #ff5ef2;
+            --text-main: #f1f1f1;
+            --text-muted: #a78bfa;
+            --border-color: rgba(189, 83, 237, 0.3);
+            --border-focus: rgba(255, 94, 242, 0.8);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            padding: 30px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            background: linear-gradient(145deg, #120a1f, #08040f);
+            border: 2px solid var(--border-color);
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 0 30px rgba(189, 83, 237, 0.15);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            position: relative;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #fff;
+            text-shadow: 0 0 10px var(--accent-purple), 0 0 20px var(--accent-glow);
+            display: inline-flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .header h1::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: var(--accent-glow);
+            border-radius: 50%;
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .sub-header {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-top: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            margin-top: 14px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .status-badge.idle {
+            background: rgba(167, 139, 250, 0.15);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+        }
+
+        .status-badge.running {
+            background: rgba(52, 211, 153, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(52, 211, 153, 0.4);
+            box-shadow: 0 0 12px rgba(52, 211, 153, 0.25);
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            margin-bottom: 25px;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 25px;
+            position: relative;
+            box-shadow: inset 0 0 15px rgba(0,0,0,0.5);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 20px;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-title::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 16px;
+            background-color: var(--accent-glow);
+            border-radius: 2px;
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        input[type="text"], input[type="password"], input[type="number"], textarea {
+            width: 100%;
+            background-color: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            color: #fff;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: var(--border-focus);
+            box-shadow: 0 0 10px rgba(255, 94, 242, 0.3);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 140px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            margin-top: 15px;
+            font-size: 13px;
+            color: var(--text-main);
+        }
+
+        .checkbox-container input {
+            accent-color: var(--accent-glow);
+            width: 16px;
+            height: 16px;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-muted);
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            transition: all 0.3s ease;
+            margin-top: 15px;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            border-color: var(--accent-glow);
+            color: #fff;
+            box-shadow: 0 0 10px rgba(255, 94, 242, 0.2);
+        }
+
+        .btn-secondary:disabled,
+        .btn-start:disabled,
+        .btn-stop:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .action-zone {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 30px;
+            margin-bottom: 30px;
+        }
+
+        .btn-start {
+            background: linear-gradient(90deg, #bd53ed, #ff5ef2);
+            color: #fff;
+            border: none;
+            padding: 20px;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(189, 83, 237, 0.5);
+            transition: all 0.3s ease;
+        }
+
+        .btn-start:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 0 30px rgba(255, 94, 242, 0.8);
+        }
+
+        .btn-stop {
+            background: transparent;
+            border: 2px solid #ef4444;
+            color: #ef4444;
+            padding: 20px;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-stop:hover:not(:disabled) {
+            background: rgba(239, 68, 68, 0.1);
+            box-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            text-align: left;
+        }
+
+        .results-table th {
+            color: var(--text-muted);
+            font-size: 12px;
+            text-transform: uppercase;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .results-table td {
+            padding: 15px;
+            font-size: 14px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .empty-row {
+            text-align: center;
+            color: #6b7280;
+            font-style: italic;
+        }
+
+        .status-ok { color: #34d399; font-weight: 600; }
+        .status-err { color: #f87171; font-weight: 600; }
+
+        .folder-path {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 15px;
+            word-break: break-all;
+            font-family: monospace;
+        }
+
+        .log-output {
+            background-color: #08040f;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            height: 180px;
+            padding: 15px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            color: #34d399;
+            overflow-y: auto;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        @media (max-width: 900px) {
+            .grid-2, .form-row, .action-zone { grid-template-columns: 1fr; }
+            body { padding: 16px; }
+            .container { padding: 24px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>YouTube Onboard Panel</h1>
+        <div class="sub-header">Dolphin профили · Proxy · Вход · 2FA · English</div>
+        <div id="statusBadge" class="status-badge idle">Готов</div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-title">Настройки</div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="dolphinToken">Dolphin Token</label>
+                    <input type="password" id="dolphinToken" placeholder="API токен">
+                </div>
+                <div class="form-group">
+                    <label for="localApi">Local API URL</label>
+                    <input type="text" id="localApi" value="http://localhost:3001">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="cloudApi">Cloud API URL</label>
+                    <input type="text" id="cloudApi" value="https://dolphin-anty-api.com">
+                </div>
+                <div class="form-group">
+                    <label for="totpSite">2FA сайт</label>
+                    <input type="text" id="totpSite" value="https://2fa.live/">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="delayMs">Пауза между аккаунтами (мс)</label>
+                <input type="number" id="delayMs" value="5000" min="0" step="500">
+            </div>
+
+            <label class="checkbox-container">
+                <input type="checkbox" id="skipOk" checked>
+                Пропускать уже успешные
+            </label>
+
+            <button type="button" class="btn-secondary" id="btnSaveConfig">💾 Сохранить настройки</button>
+            <div class="folder-path" id="pathsInfo">Папка: ...</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Аккаунты (accounts.txt)</div>
+            <div class="form-group">
+                <label for="accountsText">Формат: email|password|totp_secret|host:port:login:pass:http|имя_профиля</label>
+                <textarea id="accountsText" placeholder="Введите данные аккаунтов..."></textarea>
+            </div>
+            <button type="button" class="btn-secondary" id="btnSaveAccounts">💾 Сохранить accounts.txt</button>
+        </div>
+    </div>
+
+    <div class="action-zone">
+        <button type="button" class="btn-start" id="btnStart">▶ START</button>
+        <button type="button" class="btn-stop" id="btnStop" disabled>■ STOP</button>
+    </div>
+
+    <div class="card" style="margin-bottom: 25px;">
+        <div class="card-title">Результаты</div>
+        <table class="results-table">
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Profile ID</th>
+                    <th>Статус</th>
+                    <th>Ошибка</th>
+                </tr>
+            </thead>
+            <tbody id="resultsBody">
+                <tr>
+                    <td colspan="4" class="empty-row">Пока нет результатов</td>
+                </tr>
+            </tbody>
+        </table>
+        <button type="button" class="btn-secondary" id="btnRefreshResults">🔄 Обновить</button>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Лог</div>
+        <div class="log-output" id="logBox"></div>
+        <button type="button" class="btn-secondary" id="btnClearLog">🗑️ Очистить лог</button>
+    </div>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>

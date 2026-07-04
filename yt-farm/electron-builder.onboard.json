@@ -1,0 +1,26 @@
+{
+  "appId": "com.ytfarm.onboard",
+  "productName": "YouTube-Onboard-Pro",
+  "directories": {
+    "output": "dist-onboard"
+  },
+  "files": [
+    "onboard-panel/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    { "from": "account-onboard.mjs", "to": "yt-farm" },
+    { "from": "dolphin-api.mjs", "to": "yt-farm" },
+    { "from": "google-youtube-login.mjs", "to": "yt-farm" },
+    { "from": "totp-website.mjs", "to": "yt-farm" },
+    { "from": "onboard-config.example.json", "to": "yt-farm" },
+    { "from": "accounts.example.txt", "to": "yt-farm" }
+  ],
+  "win": {
+    "target": [{ "target": "portable", "arch": ["x64"] }],
+    "artifactName": "YouTube-Onboard-Pro.exe"
+  },
+  "portable": {
+    "artifactName": "YouTube-Onboard-Pro.exe"
+  }
+}
