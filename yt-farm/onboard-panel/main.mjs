@@ -154,6 +154,9 @@ ipcMain.handle('start-onboard', async () => {
   if (process.versions?.electron) {
     env.ELECTRON_RUN_AS_NODE = '1';
   }
+  const asarNodeModules = path.join(process.resourcesPath, 'app.asar', 'node_modules');
+  const nodePathParts = [asarNodeModules, env.NODE_PATH].filter(Boolean);
+  env.NODE_PATH = nodePathParts.join(path.delimiter);
 
   workerChild = spawn(process.execPath, [script], {
     cwd: p.baseDir,

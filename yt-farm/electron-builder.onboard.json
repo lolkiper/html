@@ -9,12 +9,18 @@
     "package.json"
   ],
   "extraResources": [
-    { "from": "account-onboard.mjs", "to": "yt-farm" },
-    { "from": "dolphin-api.mjs", "to": "yt-farm" },
-    { "from": "google-youtube-login.mjs", "to": "yt-farm" },
-    { "from": "totp-website.mjs", "to": "yt-farm" },
-    { "from": "onboard-config.example.json", "to": "yt-farm" },
-    { "from": "accounts.example.txt", "to": "yt-farm" }
+    {
+      "from": ".",
+      "to": "yt-farm",
+      "filter": [
+        "account-onboard.mjs",
+        "dolphin-api.mjs",
+        "google-youtube-login.mjs",
+        "totp-website.mjs",
+        "onboard-config.example.json",
+        "accounts.example.txt"
+      ]
+    }
   ],
   "win": {
     "target": [{ "target": "portable", "arch": ["x64"] }],
