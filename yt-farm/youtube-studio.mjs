@@ -315,46 +315,150 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     const [datePart, timePartRaw] = scheduledTime.split(' ');
     const [day, month, year] = datePart.split('.');
 
-    // ФИКС: в config.json время хранится в 24-часовом формате ("07:00", "13:00",
-    // "19:00"...), а поле времени в интерфейсе Studio отображает и, судя по всему,
-    // ожидает 12-часовой формат с AM/PM (на скриншотах видно значение "12:00 AM").
-    // Печать "13:00" напрямую в такое поле не проходит валидацию, и оно откатывается
-    // к дефолту — это и есть причина того, что on before-final-save.png время
-    // осталось "12:00 AM" вместо запланированного. Конвертируем в 12-часовой формат для клика по списку.
+    // Время в config — 24ч ("07:00", "13:00"). В Studio может быть 24ч (07:00)
+    // или 12ч (7:00 AM) — ищем оба варианта при клике по списку.
     const [rawH, rawM] = timePartRaw.split(':').map(Number);
+    const time24 = `${String(rawH).padStart(2, '0')}:${String(rawM).padStart(2, '0')}`;
+    const time24Short = `${rawH}:${String(rawM).padStart(2, '0')}`;
+
     const period = rawH >= 12 ? 'PM' : 'AM';
     let hour12 = rawH % 12;
     if (hour12 === 0) hour12 = 12;
-    const timePart = `${hour12}:${String(rawM).padStart(2, '0')} ${period}`;
-    
-    // Американский формат дат для US-интерфейса Studio (например: Jul 5, 2026)
-    // ФИКС: было "Dic" вместо "Dec" — декабрьские даты не проходили валидацию YouTube
-    const monthsEn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const monthIndex = parseInt(month) - 1;
-    const formattedDate = `${monthsEn[monthIndex]} ${parseInt(day)}, ${year}`; 
+    const time12 = `${hour12}:${String(rawM).padStart(2, '0')} ${period}`;
+    const time12Padded = `${String(hour12).padStart(2, '0')}:${String(rawM).padStart(2, '0')} ${period}`;
 
-    // Выбор времени — только кликом по пункту выпадающего списка (без клавиатуры).
-    async function selectTimeByClick(timeInput, timeListbox, timeOption, label) {
-      for (let attempt = 1; attempt <= 3; attempt++) {
+    const timeLabels = [...new Set([time24, time24Short, time12, time12Padded])];
+
+    // Выбор времени — только кликом. Список виртуальный: нужно прокрутить до пункта.
+    async function selectTimeByClick(timeInput) {
+      const slotIndex = rawH * 4 + Math.floor(rawM / 15);
+
+      const scrollTimeList = async () => {
+        return page.evaluate(({ slotIndex: idx }) => {
+          const listboxes = Array.from(document.querySelectorAll('ytcp-time-of-day-picker tp-yt-paper-listbox'));
+          const listbox = listboxes[listboxes.length - 1];
+          if (!listbox) return false;
+
+          const sample = listbox.querySelector('tp-yt-paper-item');
+          const itemHeight = sample?.getBoundingClientRect().height || 36;
+          const targetScroll = Math.max(0, idx * itemHeight - 80);
+
+          const scrollTargets = [
+            listbox.querySelector('iron-list #items'),
+            listbox.querySelector('#items'),
+            listbox.querySelector('iron-list'),
+            listbox.querySelector('.items'),
+            listbox,
+          ].filter(Boolean);
+
+          for (const el of scrollTargets) {
+            try {
+              el.scrollTop = targetScroll;
+            } catch { /* ignore */ }
+          }
+
+          listbox.dispatchEvent(new Event('scroll', { bubbles: true }));
+          return true;
+        }, { slotIndex });
+      };
+
+      const wheelScrollList = async (timeListbox) => {
+        const box = await timeListbox.boundingBox().catch(() => null);
+        if (!box) return;
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        const steps = Math.ceil(slotIndex / 4);
+        for (let i = 0; i < steps; i++) {
+          await page.mouse.wheel(0, 280);
+          await page.waitForTimeout(80);
+        }
+      };
+
+      const clickMatchingItem = async () => {
+        const clicked = await page.evaluate((labels) => {
+          const normalize = (text) => (text || '').replace(/\u202f/g, ' ').replace(/\s+/g, ' ').trim();
+          const listboxes = Array.from(document.querySelectorAll('ytcp-time-of-day-picker tp-yt-paper-listbox'));
+          const listbox = listboxes[listboxes.length - 1];
+          if (!listbox) return { ok: false, reason: 'listbox not found' };
+
+          const items = Array.from(listbox.querySelectorAll('tp-yt-paper-item'));
+          for (const item of items) {
+            const text = normalize(item.innerText || item.textContent);
+            if (labels.some((label) => text === label || text.startsWith(label))) {
+              item.scrollIntoView({ block: 'center', behavior: 'instant' });
+              item.click();
+              return { ok: true, matched: text };
+            }
+          }
+          return { ok: false, reason: 'item not in DOM', visible: items.map((i) => normalize(i.innerText || i.textContent)).slice(0, 8) };
+        }, timeLabels);
+
+        if (clicked.ok) {
+          console.log(`✅ Время установлено кликом: ${clicked.matched}`);
+          return true;
+        }
+        return clicked;
+      };
+
+      for (let attempt = 1; attempt <= 5; attempt++) {
         try {
           await timeInput.scrollIntoViewIfNeeded().catch(() => {});
           await humanClick(page, timeInput);
-          await humanDelay(100, 200);
-          await timeListbox.waitFor({ state: 'visible', timeout: 5000 });
-          await timeOption.waitFor({ state: 'attached', timeout: 5000 });
-          await timeOption.scrollIntoViewIfNeeded().catch(() => {});
-          await humanClick(page, timeOption);
-          console.log(`✅ Время установлено кликом по пункту списка: ${label}`);
-          return;
+          await humanDelay(300, 600);
+
+          const timeListbox = page.locator('ytcp-time-of-day-picker tp-yt-paper-listbox').last();
+          await timeListbox.waitFor({ state: 'visible', timeout: 8000 });
+
+          // Прокрутка к нужному слоту (15 мин = 1 пункт)
+          await scrollTimeList();
+          await wheelScrollList(timeListbox);
+          await page.waitForTimeout(capDelay(400));
+
+          let result = await clickMatchingItem();
+          if (result === true) return;
+
+          // Пошаговая прокрутка — iron-list подгружает пункты по мере скролла
+          for (let step = 0; step < 12; step++) {
+            await page.evaluate(() => {
+              const listboxes = Array.from(document.querySelectorAll('ytcp-time-of-day-picker tp-yt-paper-listbox'));
+              const listbox = listboxes[listboxes.length - 1];
+              if (!listbox) return;
+              const scrollEl = listbox.querySelector('#items') || listbox.querySelector('iron-list') || listbox;
+              scrollEl.scrollTop += 144; // ~4 пункта по 36px
+              scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
+            });
+            await page.waitForTimeout(120);
+            result = await clickMatchingItem();
+            if (result === true) return;
+          }
+
+          // Фолбэк: ищем по всем видимым пунктам через Playwright locator
+          const timeOption = timeListbox.locator('tp-yt-paper-item').filter({
+            hasText: new RegExp(`^\\s*(${timeLabels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*$`),
+          }).first();
+
+          if (await timeOption.count()) {
+            await timeOption.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
+            await humanClick(page, timeOption);
+            console.log(`✅ Время установлено кликом через locator: ${timeLabels[0]}`);
+            return;
+          }
+
+          console.log(`⚠️ Попытка ${attempt}/5: ${result.reason || 'пункт не найден'}${result.visible ? `, видно: ${result.visible.join(', ')}` : ''}`);
         } catch (err) {
-          console.log(`⚠️ Попытка ${attempt}/3 выбора времени кликом: ${err.message}`);
-          await page.keyboard.press('Escape').catch(() => {});
-          await page.waitForTimeout(capDelay(200));
+          console.log(`⚠️ Попытка ${attempt}/5 выбора времени: ${err.message}`);
         }
+
+        await page.keyboard.press('Escape').catch(() => {});
+        await page.waitForTimeout(capDelay(300));
       }
+
       await page.screenshot({ path: 'time-list-error.png', fullPage: true }).catch(() => {});
-      throw new Error(`Не удалось выбрать время "${label}" кликом по списку. См. time-list-error.png`);
+      throw new Error(`Не удалось выбрать время "${timeLabels.join(' / ')}" кликом. См. time-list-error.png`);
     }
+
+    const monthsEn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthIndex = parseInt(month) - 1;
+    const formattedDate = `${monthsEn[monthIndex]} ${parseInt(day)}, ${year}`;
 
     try {
       // === 1. РАЗВОРАЧИВАЕМ СЕКЦИЮ "SCHEDULE" ===
@@ -440,7 +544,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       // Точная структура (подтверждена реальным HTML):
       // ytcp-visibility-scheduler > ytcp-datetime-picker
       //   #datepicker-trigger      — КНОПКА-триггер ("Jul 2, 2026"), открывает календарь-попап
-      //   #time-of-day-container   — обычный текстовый input, можно печатать напрямую
+      //   #time-of-day-container   — поле времени, открывает выпадающий список по клику
       const dateTrigger = page.locator('ytcp-visibility-scheduler ytcp-datetime-picker #datepicker-trigger').first();
       await dateTrigger.waitFor({ state: 'visible', timeout: 10000 });
       await dateTrigger.scrollIntoViewIfNeeded().catch(() => {});
@@ -495,19 +599,11 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       await page.keyboard.press('Escape').catch(() => {});
       await page.waitForTimeout(capDelay(200));
 
-      // === 3. ВЫБОР ВРЕМЕНИ (только клик по пункту списка) ===
+      // === 3. ВЫБОР ВРЕМЕНИ (клик + прокрутка списка, 24ч и 12ч форматы) ===
       const timeInput = page.locator('ytcp-visibility-scheduler ytcp-datetime-picker #time-of-day-container input').first();
       await timeInput.waitFor({ state: 'visible', timeout: 10000 });
 
-      const timeListbox = page.locator('ytcp-time-of-day-picker tp-yt-paper-listbox').last();
-
-      const timeRegex = new RegExp(`^${hour12}:${String(rawM).padStart(2, '0')}\\s*${period}\\s*$`);
-      const timeOption = timeListbox
-        .locator('tp-yt-paper-item')
-        .filter({ hasText: timeRegex })
-        .first();
-
-      await selectTimeByClick(timeInput, timeListbox, timeOption, timePart);
+      await selectTimeByClick(timeInput);
       await page.keyboard.press('Escape').catch(() => {});
 
       console.log(`[Робот] Ожидаю валидации формы серверами YouTube...`);
