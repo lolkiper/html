@@ -14,34 +14,76 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 let CONFIG_SOURCE = 'unknown';
+let LOADED_ENV_FILE = null;
 
-async function loadDotenvFiles() {
+function readTextFile(filePath) {
+  const buf = fs.readFileSync(filePath);
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+    return buf.slice(3).toString('utf-8');
+  }
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+    return buf.toString('utf16le');
+  }
+  return buf.toString('utf-8');
+}
+
+function pickCredential(...values) {
+  for (const value of values) {
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return '';
+}
+
+/** Парсит .env без npm-пакета dotenv — критично для Electron dist */
+function parseEnvFile(envPath) {
+  if (!fs.existsSync(envPath)) return 0;
+  const content = readTextFile(envPath);
+  let loaded = 0;
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let val = trimmed.slice(eq + 1).trim();
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    if (!process.env[key]) {
+      process.env[key] = val;
+      loaded++;
+    }
+  }
+  if (loaded > 0) LOADED_ENV_FILE = envPath;
+  return loaded;
+}
+
+function loadDotenvFiles() {
   const candidates = [
     path.join(APP_DIR, '.env'),
     path.join(process.cwd(), '.env'),
+    path.join(APP_DIR, '..', '.env'),
   ];
-  try {
-    const dotenv = await import('dotenv');
-    for (const envPath of candidates) {
-      if (fs.existsSync(envPath)) {
-        dotenv.config({ path: envPath, override: false });
-      }
-    }
-  } catch {
-    // dotenv опционален
+  let total = 0;
+  for (const envPath of candidates) {
+    total += parseEnvFile(envPath);
   }
+  return total;
 }
 
 function mergeEnvCredentials(raw) {
   return {
     ...raw,
-    DOLPHIN_API_URL: raw.DOLPHIN_API_URL || process.env.DOLPHIN_API_URL || '',
-    DOLPHIN_TOKEN: raw.DOLPHIN_TOKEN || process.env.DOLPHIN_TOKEN || '',
+    DOLPHIN_API_URL: pickCredential(raw.DOLPHIN_API_URL, process.env.DOLPHIN_API_URL),
+    DOLPHIN_TOKEN: pickCredential(raw.DOLPHIN_TOKEN, process.env.DOLPHIN_TOKEN),
   };
 }
 
 async function loadRawConfig() {
-  await loadDotenvFiles();
+  loadDotenvFiles();
 
   const jsPath = path.join(APP_DIR, 'config.js');
   const jsonPath = path.join(APP_DIR, 'config.json');
@@ -55,12 +97,21 @@ async function loadRawConfig() {
 
   if (fs.existsSync(jsonPath)) {
     CONFIG_SOURCE = jsonPath;
-    return mergeEnvCredentials(JSON.parse(fs.readFileSync(jsonPath, 'utf-8')));
+    return mergeEnvCredentials(JSON.parse(readTextFile(jsonPath)));
   }
 
   throw new Error(
     `❌ Не найден config.js или config.json\n   Папка скрипта: ${APP_DIR}`
   );
+}
+
+function listEnvKeys(envPath) {
+  if (!fs.existsSync(envPath)) return [];
+  return readTextFile(envPath)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && line.includes('='))
+    .map((line) => line.split('=')[0].trim());
 }
 
 function assertDolphinConfig(config) {
@@ -69,15 +120,22 @@ function assertDolphinConfig(config) {
   if (!config.DOLPHIN_TOKEN) missing.push('DOLPHIN_TOKEN');
   if (!missing.length) return;
 
-  const envInApp = fs.existsSync(path.join(APP_DIR, '.env'));
-  const envInCwd = fs.existsSync(path.join(process.cwd(), '.env'));
+  const envInApp = path.join(APP_DIR, '.env');
+  const envInCwd = path.join(process.cwd(), '.env');
+  const keysInApp = listEnvKeys(envInApp);
 
   throw new Error(
     `❌ Не заданы ${missing.join(' / ')}\n` +
     `   Конфиг: ${CONFIG_SOURCE}\n` +
-    `   .env в папке скрипта: ${envInApp ? 'есть' : 'нет'} (${APP_DIR})\n` +
-    `   .env в cwd: ${envInCwd ? 'есть' : 'нет'} (${process.cwd()})\n` +
-    `   → Добавь в config.json или создай .env рядом с main.mjs`
+    `   Папка main.mjs: ${APP_DIR}\n` +
+    `   cwd процесса: ${process.cwd()}\n` +
+    `   .env рядом с main.mjs: ${fs.existsSync(envInApp) ? 'есть' : 'нет'}\n` +
+    `   .env в cwd: ${fs.existsSync(envInCwd) ? 'есть' : 'нет'}\n` +
+    (LOADED_ENV_FILE ? `   Загружен .env: ${LOADED_ENV_FILE}\n` : '') +
+    (keysInApp.length ? `   Ключи в .env: ${keysInApp.join(', ')}\n` : '   .env пуст или без KEY=VALUE строк\n') +
+    `   → Проверь .env:\n` +
+    `     DOLPHIN_API_URL=http://localhost:3001\n` +
+    `     DOLPHIN_TOKEN=твой_токен`
   );
 }
 
