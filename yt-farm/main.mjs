@@ -651,7 +651,7 @@ export async function runFarm(slot, profileId) {
         console.error(`⚠️ Ошибка загрузки файла ${videoToUpload.file}. Попыток осталось: ${attempts}. Ошибка: ${error.message}`);
         if (attempts > 0 && !browserClosed) {
           await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded' }).catch(() => {});
-          await new Promise(r => setTimeout(r, capDelay(5000)));
+          await pauseBetweenUploads();
         }
       }
     }
@@ -666,7 +666,7 @@ export async function runFarm(slot, profileId) {
       break;
     }
 
-    if (i < currentBatch.length - 1 && !isBanned && !browserClosed) {
+    if (!isBanned && !browserClosed) {
       await pauseBetweenUploads();
     }
   }
