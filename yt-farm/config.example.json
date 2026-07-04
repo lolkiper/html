@@ -1,0 +1,23 @@
+{
+  "DOLPHIN_API_URL": "http://localhost:3001",
+  "DOLPHIN_TOKEN": "YOUR_TOKEN",
+  "VIDEOS_DIR": "./videos",
+  "MAX_PARALLEL_SLOTS": 1,
+  "SCHEDULE_SETTINGS": {
+    "STEP_HOURS": 6,
+    "NEW_CHANNEL_START_HOUR": 7,
+    "LOW_SCHEDULE_THRESHOLD": 10,
+    "VIDEOS_PER_CHANNEL": 16,
+    "BATCH_SIZE": 10,
+    "SCHEDULE_EXTENSION_BUFFER": 16
+  },
+  "PROFILE_MAPPING": {
+    "dolphin_profile_id_1": [1],
+    "dolphin_profile_id_2": [2]
+  },
+  "BASE_TITLES": [
+    "Amazing Short #1",
+    "Viral Moment"
+  ],
+  "SCHEDULE": []
+}
