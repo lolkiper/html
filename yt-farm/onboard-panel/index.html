@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube Onboard Panel</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>YouTube Onboard Panel</h1>
+      <p class="subtitle">Dolphin профили · Proxy · Вход · 2FA · English</p>
+    </div>
+    <div class="header-actions">
+      <span id="statusBadge" class="badge idle">Готов</span>
+      <button id="btnStart" class="btn primary">▶ Запустить</button>
+      <button id="btnStop" class="btn danger" disabled>■ Стоп</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="card">
+      <h2>Настройки</h2>
+      <div class="form-grid">
+        <label>Dolphin Token<input id="dolphinToken" type="password" placeholder="API токен" /></label>
+        <label>Local API URL<input id="localApi" type="text" value="http://localhost:3001" /></label>
+        <label>Cloud API URL<input id="cloudApi" type="text" value="https://dolphin-anty-api.com" /></label>
+        <label>2FA сайт<input id="totpSite" type="text" value="https://2fa.live/" /></label>
+        <label>Пауза между аккаунтами (мс)<input id="delayMs" type="number" value="5000" /></label>
+        <label class="checkbox"><input id="skipOk" type="checkbox" checked /> Пропускать уже успешные</label>
+      </div>
+      <button id="btnSaveConfig" class="btn secondary">💾 Сохранить настройки</button>
+      <p id="pathsInfo" class="hint"></p>
+    </section>
+
+    <section class="card">
+      <h2>Аккаунты (accounts.txt)</h2>
+      <p class="hint">Формат: email|password|totp_secret|host:port:login:pass:http|имя_профиля</p>
+      <textarea id="accountsText" rows="12" spellcheck="false"></textarea>
+      <button id="btnSaveAccounts" class="btn secondary">💾 Сохранить accounts.txt</button>
+    </section>
+
+    <section class="card wide">
+      <h2>Результаты</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Profile ID</th>
+              <th>Статус</th>
+              <th>Ошибка</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
+      <button id="btnRefreshResults" class="btn secondary">🔄 Обновить</button>
+    </section>
+
+    <section class="card wide">
+      <h2>Лог</h2>
+      <pre id="logBox"></pre>
+      <button id="btnClearLog" class="btn secondary">Очистить лог</button>
+    </section>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
