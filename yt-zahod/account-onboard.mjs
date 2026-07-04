@@ -148,12 +148,21 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function normalizeTotpWebsite(url) {
+  let value = String(url || 'https://2fa.fb.tools/').trim();
+  if (!value) value = 'https://2fa.fb.tools/';
+  if (!/^https?:\/\//i.test(value)) value = `https://${value.replace(/^\/+/, '')}`;
+  return value;
+}
+
 async function processAccount(account, config, dolphin) {
   const startedAt = new Date().toISOString();
   let profileId = account.existingProfileId || null;
   let browser = null;
 
   try {
+    let usedExistingProfile = Boolean(account.existingProfileId);
+
     if (!profileId) {
       console.log(`\n🐬 Создаю профиль Dolphin: ${account.profileName}`);
       const created = await dolphin.createProfile({
@@ -163,22 +172,49 @@ async function processAccount(account, config, dolphin) {
         browserVersion: config.BROWSER_VERSION || '140',
       });
       profileId = created.profileId;
+      usedExistingProfile = false;
       console.log(`✅ Профиль создан: ID ${profileId}`);
     } else {
       console.log(`\n🐬 Использую существующий профиль: ${profileId}`);
     }
 
-    const { wsUrl } = await dolphin.startProfile(profileId, { headless: config.HEADLESS === true });
-    browser = await chromium.connectOverCDP(wsUrl);
-    const context = browser.contexts()[0] || await browser.newContext();
-    const page = context.pages()[0] || await context.newPage();
-    page.setDefaultTimeout(90000);
+    const startBrowser = async () => {
+      const { wsUrl } = await dolphin.startProfile(profileId, { headless: config.HEADLESS === true });
+      browser = await chromium.connectOverCDP(wsUrl);
+      const context = browser.contexts()[0] || await browser.newContext();
+      const page = context.pages()[0] || await context.newPage();
+      page.setDefaultTimeout(90000);
+      return page;
+    };
+
+    let page;
+    try {
+      page = await startBrowser();
+    } catch (startErr) {
+      if (usedExistingProfile) {
+        console.warn(`[Onboard] Профиль ${profileId} не запустился (${startErr.message}), создаю новый...`);
+        if (profileId) await dolphin.stopProfile(profileId).catch(() => {});
+        profileId = null;
+        browser = null;
+        const created = await dolphin.createProfile({
+          name: account.profileName,
+          proxy: account.proxy,
+          platform: config.PLATFORM || 'windows',
+          browserVersion: config.BROWSER_VERSION || '140',
+        });
+        profileId = created.profileId;
+        console.log(`✅ Новый профиль создан: ID ${profileId}`);
+        page = await startBrowser();
+      } else {
+        throw startErr;
+      }
+    }
 
     await loginGoogleOnYouTube(page, {
       email: account.email,
       password: account.password,
       totpSecret: account.totpSecret,
-      totpWebsite: config.TOTP_WEBSITE || 'https://2fa.fb.tools/',
+      totpWebsite: normalizeTotpWebsite(config.TOTP_WEBSITE),
     });
 
     await setYouTubeLanguageEnglish(page);

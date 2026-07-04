@@ -214,7 +214,10 @@ export class DolphinClient {
 
   async startProfile(profileId, { headless = false } = {}) {
     const url = `${this.localApiUrl}/v1.0/browser_profiles/${profileId}/start?automation=1${headless ? '&headless=1' : ''}`;
-    const { data } = await axios.get(url, { headers: authHeaders(this.token) });
+    const { data } = await axiosCall(
+      axios.get(url, { headers: authHeaders(this.token) }),
+      `Запуск профиля Dolphin ${profileId}`
+    );
     if (!data?.automation?.port || !data?.automation?.wsEndpoint) {
       throw new Error(`Dolphin не отдал automation: ${JSON.stringify(data)}`);
     }

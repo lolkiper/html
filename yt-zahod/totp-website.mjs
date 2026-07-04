@@ -13,7 +13,19 @@ function sleep(ms) {
 }
 
 function cleanSecret(secret) {
-  return String(secret || '').replace(/\s+/g, '').toUpperCase();
+  let value = String(secret || '').trim();
+  const otpauthMatch = value.match(/[?&]secret=([A-Za-z2-7]+)/i);
+  if (otpauthMatch) value = otpauthMatch[1];
+  return value.replace(/\s+/g, '').toUpperCase();
+}
+
+function normalizeWebsiteUrl(websiteUrl) {
+  let url = String(websiteUrl || DEFAULT_TOTP_SITE).trim();
+  if (!url) url = DEFAULT_TOTP_SITE;
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url.replace(/^\/+/, '')}`;
+  }
+  return url.replace(/\/$/, '');
 }
 
 function isFbToolsSite(websiteUrl) {
@@ -21,15 +33,13 @@ function isFbToolsSite(websiteUrl) {
 }
 
 function fbToolsApiBase(websiteUrl) {
-  const url = String(websiteUrl || DEFAULT_TOTP_SITE).trim().replace(/\/$/, '');
-  return url.replace(/\/(ru|uk|th)$/i, '');
+  return normalizeWebsiteUrl(websiteUrl).replace(/\/(ru|uk|th)$/i, '');
 }
 
 async function getCodeFromFbToolsApi(secret, websiteUrl) {
   const base = fbToolsApiBase(websiteUrl);
-  const { data } = await axios.get(
-    `${base}/api/otp/${encodeURIComponent(secret)}`,
-    {
+  const apiUrl = `${base}/api/otp/${encodeURIComponent(secret)}`;
+  const { data } = await axios.get(apiUrl, {
       timeout: 30000,
       headers: { Accept: 'application/json' },
     }
@@ -74,7 +84,8 @@ async function readCodeFromPage(page) {
 }
 
 async function getCodeFromBrowserForm(page, secret, websiteUrl) {
-  await page.goto(websiteUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  const url = normalizeWebsiteUrl(websiteUrl);
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await sleep(1500);
 
   const secretSelectors = [
@@ -126,13 +137,15 @@ export async function getTotpCodeFromWebsite(page, secret, websiteUrl = DEFAULT_
   const normalizedSecret = cleanSecret(secret);
   if (!normalizedSecret) throw new Error('Пустой 2FA secret');
 
-  if (isFbToolsSite(websiteUrl)) {
-    return getCodeFromFbToolsApi(normalizedSecret, websiteUrl);
+  const normalizedSite = normalizeWebsiteUrl(websiteUrl);
+
+  if (isFbToolsSite(normalizedSite)) {
+    return getCodeFromFbToolsApi(normalizedSecret, normalizedSite);
   }
 
   if (!page) {
     throw new Error('Для этого 2FA-сайта нужен браузер (page), укажите 2fa.fb.tools для API');
   }
 
-  return getCodeFromBrowserForm(page, normalizedSecret, websiteUrl);
+  return getCodeFromBrowserForm(page, normalizedSecret, normalizedSite);
 }
