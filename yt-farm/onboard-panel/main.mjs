@@ -5,24 +5,43 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const YT_FARM_DIR = path.join(__dirname, '..');
-const baseDir = process.cwd();
 
-const CONFIG_FILE = path.join(baseDir, 'onboard-config.json');
-const ACCOUNTS_FILE = path.join(baseDir, 'accounts.txt');
-const RESULTS_FILE = path.join(baseDir, 'onboard-results.json');
-const EXAMPLE_CONFIG = path.join(YT_FARM_DIR, 'onboard-config.example.json');
-const EXAMPLE_ACCOUNTS = path.join(YT_FARM_DIR, 'accounts.example.txt');
+function getDirs() {
+  const isPackaged = app.isPackaged;
+  return {
+    panelDir: __dirname,
+    farmDir: isPackaged
+      ? path.join(process.resourcesPath, 'yt-farm')
+      : path.join(__dirname, '..'),
+    baseDir: isPackaged
+      ? path.dirname(process.execPath)
+      : process.cwd(),
+  };
+}
+
+function getPaths() {
+  const { farmDir, baseDir } = getDirs();
+  return {
+    CONFIG_FILE: path.join(baseDir, 'onboard-config.json'),
+    ACCOUNTS_FILE: path.join(baseDir, 'accounts.txt'),
+    RESULTS_FILE: path.join(baseDir, 'onboard-results.json'),
+    EXAMPLE_CONFIG: path.join(farmDir, 'onboard-config.example.json'),
+    EXAMPLE_ACCOUNTS: path.join(farmDir, 'accounts.example.txt'),
+    YT_FARM_DIR: farmDir,
+    baseDir,
+  };
+}
 
 let mainWindow = null;
 let workerChild = null;
 
 function ensureDefaults() {
-  if (!fs.existsSync(CONFIG_FILE) && fs.existsSync(EXAMPLE_CONFIG)) {
-    fs.copyFileSync(EXAMPLE_CONFIG, CONFIG_FILE);
+  const p = getPaths();
+  if (!fs.existsSync(p.CONFIG_FILE) && fs.existsSync(p.EXAMPLE_CONFIG)) {
+    fs.copyFileSync(p.EXAMPLE_CONFIG, p.CONFIG_FILE);
   }
-  if (!fs.existsSync(ACCOUNTS_FILE) && fs.existsSync(EXAMPLE_ACCOUNTS)) {
-    fs.copyFileSync(EXAMPLE_ACCOUNTS, ACCOUNTS_FILE);
+  if (!fs.existsSync(p.ACCOUNTS_FILE) && fs.existsSync(p.EXAMPLE_ACCOUNTS)) {
+    fs.copyFileSync(p.EXAMPLE_ACCOUNTS, p.ACCOUNTS_FILE);
   }
 }
 
@@ -69,39 +88,47 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-ipcMain.handle('paths', () => ({
-  baseDir,
-  configFile: CONFIG_FILE,
-  accountsFile: ACCOUNTS_FILE,
-  resultsFile: RESULTS_FILE,
-}));
+ipcMain.handle('paths', () => {
+  const p = getPaths();
+  return {
+    baseDir: p.baseDir,
+    configFile: p.CONFIG_FILE,
+    accountsFile: p.ACCOUNTS_FILE,
+    resultsFile: p.RESULTS_FILE,
+  };
+});
 
 ipcMain.handle('load-config', () => {
+  const p = getPaths();
   ensureDefaults();
-  if (!fs.existsSync(CONFIG_FILE)) return {};
-  return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+  if (!fs.existsSync(p.CONFIG_FILE)) return {};
+  return JSON.parse(fs.readFileSync(p.CONFIG_FILE, 'utf-8'));
 });
 
 ipcMain.handle('save-config', (_e, config) => {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+  const p = getPaths();
+  fs.writeFileSync(p.CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
   return true;
 });
 
 ipcMain.handle('load-accounts', () => {
+  const p = getPaths();
   ensureDefaults();
-  if (!fs.existsSync(ACCOUNTS_FILE)) return '';
-  return fs.readFileSync(ACCOUNTS_FILE, 'utf-8');
+  if (!fs.existsSync(p.ACCOUNTS_FILE)) return '';
+  return fs.readFileSync(p.ACCOUNTS_FILE, 'utf-8');
 });
 
 ipcMain.handle('save-accounts', (_e, text) => {
-  fs.writeFileSync(ACCOUNTS_FILE, text, 'utf-8');
+  const p = getPaths();
+  fs.writeFileSync(p.ACCOUNTS_FILE, text, 'utf-8');
   return true;
 });
 
 ipcMain.handle('load-results', () => {
-  if (!fs.existsSync(RESULTS_FILE)) return { accounts: [] };
+  const p = getPaths();
+  if (!fs.existsSync(p.RESULTS_FILE)) return { accounts: [] };
   try {
-    return JSON.parse(fs.readFileSync(RESULTS_FILE, 'utf-8'));
+    return JSON.parse(fs.readFileSync(p.RESULTS_FILE, 'utf-8'));
   } catch {
     return { accounts: [] };
   }
@@ -114,13 +141,14 @@ ipcMain.handle('start-onboard', async () => {
     throw new Error('Онбординг уже запущен');
   }
 
-  const script = path.join(YT_FARM_DIR, 'account-onboard.mjs');
+  const p = getPaths();
+  const script = path.join(p.YT_FARM_DIR, 'account-onboard.mjs');
   if (!fs.existsSync(script)) {
     throw new Error(`Не найден ${script}`);
   }
 
   sendStatus('running');
-  sendLog(`[Panel] Старт онбординга, cwd=${baseDir}`);
+  sendLog(`[Panel] Старт онбординга, cwd=${p.baseDir}`);
 
   const env = { ...process.env };
   if (process.versions?.electron) {
@@ -128,7 +156,7 @@ ipcMain.handle('start-onboard', async () => {
   }
 
   workerChild = spawn(process.execPath, [script], {
-    cwd: baseDir,
+    cwd: p.baseDir,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
