@@ -6,7 +6,7 @@
 # Если прокси нет — поставьте "-"
 # profile_name — имя профиля в Dolphin (опционально)
 #
-# 2FA: totp_secret вставляется на сайт https://2fa.live/ (или TOTP_WEBSITE из onboard-config.json)
+# 2FA: totp_secret → код через https://2fa.fb.tools/ (или TOTP_WEBSITE из onboard-config.json)
 #
 # Примеры:
 # user1@gmail.com|MyPassword123|JBSWY3DPEHPK3PXP|1.2.3.4:8080:proxyuser:proxypass:http|Channel 1

@@ -1,10 +1,47 @@
 /**
- * Получение 2FA-кода через сайт (по умолчанию https://2fa.live/).
- * Секрет вставляется на сайт, код считывается со страницы.
+ * Получение 2FA-кода через сайт (по умолчанию https://2fa.fb.tools/).
+ * Для 2fa.fb.tools используется публичный API: GET /api/otp/{secret}
+ * Для других сайтов (2fa.live и т.д.) — вставка secret в форму через Playwright.
  */
+
+import axios from 'axios';
+
+const DEFAULT_TOTP_SITE = 'https://2fa.fb.tools/';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function cleanSecret(secret) {
+  return String(secret || '').replace(/\s+/g, '').toUpperCase();
+}
+
+function isFbToolsSite(websiteUrl) {
+  return /2fa\.fb\.tools/i.test(String(websiteUrl || ''));
+}
+
+function fbToolsApiBase(websiteUrl) {
+  const url = String(websiteUrl || DEFAULT_TOTP_SITE).trim().replace(/\/$/, '');
+  return url.replace(/\/(ru|uk|th)$/i, '');
+}
+
+async function getCodeFromFbToolsApi(secret, websiteUrl) {
+  const base = fbToolsApiBase(websiteUrl);
+  const { data } = await axios.get(
+    `${base}/api/otp/${encodeURIComponent(secret)}`,
+    {
+      timeout: 30000,
+      headers: { Accept: 'application/json' },
+    }
+  );
+
+  const code = String(data?.data?.otp || data?.otp || '').replace(/\D/g, '');
+  if (code.length === 6) {
+    console.log('[2FA] Код получен через API 2fa.fb.tools: ******');
+    return code;
+  }
+
+  throw new Error(`2fa.fb.tools API не вернул код: ${JSON.stringify(data)}`);
 }
 
 async function readCodeFromPage(page) {
@@ -16,6 +53,8 @@ async function readCodeFromPage(page) {
     '[data-code]',
     '.token',
     '#code',
+    '[class*="otp"]',
+    '[class*="code"]',
   ];
 
   for (const sel of selectors) {
@@ -34,13 +73,13 @@ async function readCodeFromPage(page) {
   return match ? match[1] : null;
 }
 
-export async function getTotpCodeFromWebsite(page, secret, websiteUrl = 'https://2fa.live/') {
-  const cleanSecret = String(secret || '').replace(/\s+/g, '').toUpperCase();
-  if (!cleanSecret) throw new Error('Пустой 2FA secret');
-
+async function getCodeFromBrowserForm(page, secret, websiteUrl) {
   await page.goto(websiteUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await sleep(1500);
 
   const secretSelectors = [
+    'input[placeholder*="secret" i]',
+    'input[aria-label*="secret" i]',
     '#listToken',
     'input[name="secret"]',
     'input[type="text"]',
@@ -51,7 +90,7 @@ export async function getTotpCodeFromWebsite(page, secret, websiteUrl = 'https:/
   for (const sel of secretSelectors) {
     const input = page.locator(sel).first();
     if (await input.count().catch(() => 0)) {
-      await input.fill(cleanSecret).catch(() => {});
+      await input.fill(secret).catch(() => {});
       filled = true;
       break;
     }
@@ -59,10 +98,12 @@ export async function getTotpCodeFromWebsite(page, secret, websiteUrl = 'https:/
 
   if (!filled) {
     await page.keyboard.press('Control+A').catch(() => {});
-    await page.keyboard.type(cleanSecret, { delay: 30 });
+    await page.keyboard.type(secret, { delay: 30 });
   }
 
-  const submit = page.locator('button:has-text("Submit"), input[type="submit"], button[type="submit"]').first();
+  const submit = page.locator(
+    'button:has-text("Submit"), button:has-text("Generate"), input[type="submit"], button[type="submit"]'
+  ).first();
   if (await submit.count().catch(() => 0)) {
     await submit.click().catch(() => page.keyboard.press('Enter'));
   } else {
@@ -79,4 +120,19 @@ export async function getTotpCodeFromWebsite(page, secret, websiteUrl = 'https:/
   }
 
   throw new Error(`Не удалось получить 2FA-код с ${websiteUrl}`);
+}
+
+export async function getTotpCodeFromWebsite(page, secret, websiteUrl = DEFAULT_TOTP_SITE) {
+  const normalizedSecret = cleanSecret(secret);
+  if (!normalizedSecret) throw new Error('Пустой 2FA secret');
+
+  if (isFbToolsSite(websiteUrl)) {
+    return getCodeFromFbToolsApi(normalizedSecret, websiteUrl);
+  }
+
+  if (!page) {
+    throw new Error('Для этого 2FA-сайта нужен браузер (page), укажите 2fa.fb.tools для API');
+  }
+
+  return getCodeFromBrowserForm(page, normalizedSecret, websiteUrl);
 }

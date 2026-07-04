@@ -55,7 +55,7 @@ function fillConfigForm(config) {
   els.dolphinToken.value = config.DOLPHIN_TOKEN || '';
   els.localApi.value = config.DOLPHIN_LOCAL_API_URL || config.DOLPHIN_API_URL || 'http://localhost:3001';
   els.cloudApi.value = config.DOLPHIN_CLOUD_API_URL || 'https://dolphin-anty-api.com';
-  els.totpSite.value = config.TOTP_WEBSITE || 'https://2fa.live/';
+  els.totpSite.value = config.TOTP_WEBSITE || 'https://2fa.fb.tools/';
   els.delayMs.value = config.DELAY_BETWEEN_ACCOUNTS_MS ?? 5000;
   els.skipOk.checked = config.SKIP_ALREADY_OK !== false;
 }

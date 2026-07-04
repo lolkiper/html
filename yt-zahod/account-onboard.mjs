@@ -121,7 +121,7 @@ async function processAccount(account, config, dolphin) {
       email: account.email,
       password: account.password,
       totpSecret: account.totpSecret,
-      totpWebsite: config.TOTP_WEBSITE || 'https://2fa.live/',
+      totpWebsite: config.TOTP_WEBSITE || 'https://2fa.fb.tools/',
     });
 
     await setYouTubeLanguageEnglish(page);

@@ -3,7 +3,7 @@
   "DOLPHIN_CLOUD_API_URL": "https://dolphin-anty-api.com",
   "DOLPHIN_TOKEN": "YOUR_DOLPHIN_API_TOKEN",
   "ACCOUNTS_FILE": "accounts.txt",
-  "TOTP_WEBSITE": "https://2fa.live/",
+  "TOTP_WEBSITE": "https://2fa.fb.tools/",
   "PLATFORM": "windows",
   "BROWSER_VERSION": "140",
   "MAIN_WEBSITE": "",
