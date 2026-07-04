@@ -1,0 +1,13 @@
+# accounts.txt — один аккаунт на строку
+# Формат:
+# email|password|totp_secret|proxy_host:port:login:pass:http|profile_name
+#
+# proxy: host:port:login:password:type  (type = http / socks5 / socks4)
+# Если прокси нет — поставьте "-"
+# profile_name — имя профиля в Dolphin (опционально)
+#
+# 2FA: totp_secret вставляется на сайт https://2fa.live/ (или TOTP_WEBSITE из onboard-config.json)
+#
+# Примеры:
+# user1@gmail.com|MyPassword123|JBSWY3DPEHPK3PXP|1.2.3.4:8080:proxyuser:proxypass:http|Channel 1
+# user2@gmail.com|Pass456|ABCDEFGH1234567|- |Channel 2

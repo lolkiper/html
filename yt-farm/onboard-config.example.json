@@ -1,0 +1,12 @@
+{
+  "DOLPHIN_LOCAL_API_URL": "http://localhost:3001",
+  "DOLPHIN_CLOUD_API_URL": "https://dolphin-anty-api.com",
+  "DOLPHIN_TOKEN": "YOUR_DOLPHIN_API_TOKEN",
+  "ACCOUNTS_FILE": "accounts.txt",
+  "TOTP_WEBSITE": "https://2fa.live/",
+  "PLATFORM": "windows",
+  "BROWSER_VERSION": "140",
+  "HEADLESS": false,
+  "SKIP_ALREADY_OK": true,
+  "DELAY_BETWEEN_ACCOUNTS_MS": 5000
+}

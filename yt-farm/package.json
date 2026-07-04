@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "farm": "node main.mjs",
-    "start": "node main.mjs"
+    "start": "node main.mjs",
+    "onboard": "node account-onboard.mjs"
   },
   "dependencies": {
     "axios": "^1.7.0",
