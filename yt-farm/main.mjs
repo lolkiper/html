@@ -457,6 +457,7 @@ export async function runFarm(slot, profileId) {
 
   if (!fs.existsSync(finalVideosDir)) {
     console.error(`❌ Папка с video не найдена по пути: ${finalVideosDir}`);
+    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: нет папки videos`);
     return;
   }
 
@@ -475,6 +476,7 @@ export async function runFarm(slot, profileId) {
       status: "ОШИБКА КОНФИГУРАЦИИ"
     }));
 
+    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: ошибка конфигурации`);
     return;
   }
 
@@ -486,7 +488,7 @@ export async function runFarm(slot, profileId) {
   const history = loadHistory(directProfileId);
   let availableVideos = [];
 
-  const { discovered } = { discovered: syncChannelsFromMapping(CONFIG.PROFILE_MAPPING) };
+  const discovered = syncChannelsFromMapping(CONFIG.PROFILE_MAPPING);
   const isNewChannel = discovered.new.some((c) => c.channelNumber === channelNumber);
 
   const schedulePrep = prepareChannelSchedule(
@@ -522,6 +524,7 @@ export async function runFarm(slot, profileId) {
       DATA_TYPE: "STATS_UPDATE", channelNum: channelNumber, profileId: directProfileId,
       subs: "Готово", views: "100%", uploaded: VIDEOS_PER_CHANNEL, status: "АКТИВЕН"
     }));
+    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: все видео уже в history`);
     return;
   }
 
@@ -532,6 +535,7 @@ export async function runFarm(slot, profileId) {
   const batchTimeSlots = schedulePrep.batchSlots(currentBatch.length);
   if (batchTimeSlots.length < currentBatch.length) {
     console.error(`❌ Не хватает тайм-слотов в расписании канала №${channelNumber} (нужно ${currentBatch.length}, есть ${batchTimeSlots.length})`);
+    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: мало слотов в расписании`);
     return;
   }
 
@@ -553,6 +557,7 @@ export async function runFarm(slot, profileId) {
     } else { throw new Error("Dolphin не вернул блок автоматизации."); }
   } catch (err) {
     console.error(`❌ Слот ${CURRENT_SLOT} не смог подключиться к Dolphin:`, err.message);
+    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: ошибка Dolphin`);
     return;
   }
 
@@ -681,10 +686,15 @@ export async function runFarm(slot, profileId) {
 /** Запуск worker-процесса (для UI-панели вместо upload-farm.mjs) */
 export function spawnFarmWorker(slot, profileId) {
   const mainScript = path.join(SCRIPT_DIR, 'main.mjs');
+  const env = { ...process.env };
+  if (process.versions?.electron) {
+    env.ELECTRON_RUN_AS_NODE = '1';
+  }
   return spawn(process.execPath, [mainScript, String(slot), profileId], {
     cwd: baseDir,
     stdio: 'inherit',
     shell: false,
+    env,
   });
 }
 
@@ -694,8 +704,13 @@ export { baseDir, CONFIG };
 if (process.argv[2] && process.argv[3]) {
   const slot = parseInt(process.argv[2], 10);
   const profileId = process.argv[3];
-  runFarm(slot, profileId).catch((err) => {
-    console.error(`⚠️ Ошибка: ${err.message}`);
-    process.exit(1);
-  });
+  console.log(`\n🚀 [Worker] Старт слота ${slot}, профиль ${profileId}`);
+  console.log(`📁 [Worker] cwd=${baseDir}`);
+  runFarm(slot, profileId)
+    .then(() => console.log(`\n💤 [Worker] Слот ${slot} завершён`))
+    .catch((err) => {
+      console.error(`\n❌ [Worker] Слот ${slot} упал: ${err.message}`);
+      if (err.stack) console.error(err.stack);
+      process.exit(1);
+    });
 }
