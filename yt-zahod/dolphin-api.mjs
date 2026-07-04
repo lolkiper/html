@@ -17,6 +17,25 @@ export function normalizeCloudUrl(url) {
   return value;
 }
 
+export function parseUserAgentResponse(data) {
+  if (typeof data === 'string') return data;
+  if (typeof data?.data === 'string') return data.data;
+  if (typeof data?.value === 'string') return data.value;
+  if (typeof data?.useragent === 'string') return data.useragent;
+  return null;
+}
+
+export function parseWebglFields(webglInfo) {
+  const webgl = webglInfo?.webgl || webglInfo || {};
+  return {
+    vendor: webgl.vendor || webgl.webgl_unmasked_vendor || 'Google Inc. (Intel)',
+    renderer: webgl.renderer || webgl.webgl_unmasked_renderer
+      || 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)',
+    webgl2Maximum: webgl.webgl2Maximum || webgl.webgl2maximum || webgl.webgl2_maximum
+      || '{"UNIFORM_BUFFER_OFFSET_ALIGNMENT":256,"MAX_TEXTURE_SIZE":16384}',
+  };
+}
+
 function authHeaders(token) {
   return {
     'Content-Type': 'application/json',
@@ -101,7 +120,11 @@ export class DolphinClient {
       }),
       'Запрос fingerprint user-agent'
     );
-    return typeof data === 'string' ? data : data?.value || data?.useragent || data;
+    const userAgent = parseUserAgentResponse(data);
+    if (!userAgent) {
+      throw new Error(`Dolphin не вернул user-agent: ${JSON.stringify(data)}`);
+    }
+    return userAgent;
   }
 
   async fetchWebglInfo(platform = 'windows') {
@@ -132,7 +155,7 @@ export class DolphinClient {
       this.fetchWebglInfo(platform),
     ]);
 
-    const webgl = webglInfo?.webgl || webglInfo;
+    const webgl = parseWebglFields(webglInfo);
     const payload = {
       name: name || `YT-${Date.now()}`,
       platform,
@@ -140,16 +163,16 @@ export class DolphinClient {
       mainWebsite: 'google',
       useragent: {
         mode: 'manual',
-        value: typeof userAgent === 'string' ? userAgent : userAgent?.value,
+        value: userAgent,
       },
       webrtc: { mode: 'altered', ipAddress: null },
       canvas: { mode: 'real' },
       webgl: { mode: 'real' },
       webglInfo: {
         mode: 'manual',
-        vendor: webgl?.vendor || 'Google Inc. (Intel)',
-        renderer: webgl?.renderer || 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)',
-        webgl2Maximum: webgl?.webgl2Maximum || webgl?.webgl2maximum || '{"UNIFORM_BUFFER_OFFSET_ALIGNMENT":256,"MAX_TEXTURE_SIZE":16384}',
+        vendor: webgl.vendor,
+        renderer: webgl.renderer,
+        webgl2Maximum: webgl.webgl2Maximum,
       },
       timezone: { mode: 'auto', value: null },
       locale: { mode: 'auto', value: null },

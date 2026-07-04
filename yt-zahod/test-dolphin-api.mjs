@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
+import { parseUserAgentResponse, parseWebglFields } from './dolphin-api.mjs';
 
 const baseDir = process.cwd();
 const configPath = path.join(baseDir, 'onboard-config.json');
@@ -95,7 +96,7 @@ ok = await step('Cloud GET /fingerprints/useragent', async () => {
     params: { browser_type: 'anty', browser_version: '140', platform: 'windows' },
     headers: authHeaders(token),
   });
-  const ua = typeof data === 'string' ? data : data?.value || data?.useragent;
+  const ua = parseUserAgentResponse(data);
   return ua ? `UA: ${String(ua).slice(0, 60)}...` : JSON.stringify(data);
 }) && ok;
 
@@ -116,8 +117,8 @@ ok = await step('Cloud POST /browser_profiles (тестовый профиль)'
     params: { browser_type: 'anty', platform: 'windows' },
     headers: authHeaders(token),
   });
-  const userAgent = typeof uaResp.data === 'string' ? uaResp.data : uaResp.data?.value;
-  const webgl = webglResp.data?.webgl || webglResp.data;
+  const userAgent = parseUserAgentResponse(uaResp.data);
+  const webgl = parseWebglFields(webglResp.data);
   const payload = {
     name: `API-TEST-${Date.now()}`,
     platform: 'windows',
@@ -129,9 +130,9 @@ ok = await step('Cloud POST /browser_profiles (тестовый профиль)'
     webgl: { mode: 'real' },
     webglInfo: {
       mode: 'manual',
-      vendor: webgl?.vendor || 'Google Inc. (Intel)',
-      renderer: webgl?.renderer || 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)',
-      webgl2Maximum: webgl?.webgl2Maximum || '{"UNIFORM_BUFFER_OFFSET_ALIGNMENT":256,"MAX_TEXTURE_SIZE":16384}',
+      vendor: webgl.vendor,
+      renderer: webgl.renderer,
+      webgl2Maximum: webgl.webgl2Maximum,
     },
     timezone: { mode: 'auto', value: null },
     locale: { mode: 'auto', value: null },
