@@ -160,7 +160,7 @@ export class DolphinClient {
       name: name || `YT-${Date.now()}`,
       platform,
       browserType: 'anty',
-      mainWebsite: 'google',
+      mainWebsite: mainWebsite ?? '',
       useragent: {
         mode: 'manual',
         value: userAgent,

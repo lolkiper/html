@@ -6,6 +6,7 @@
   "TOTP_WEBSITE": "https://2fa.live/",
   "PLATFORM": "windows",
   "BROWSER_VERSION": "140",
+  "MAIN_WEBSITE": "",
   "HEADLESS": false,
   "SKIP_ALREADY_OK": true,
   "DELAY_BETWEEN_ACCOUNTS_MS": 5000

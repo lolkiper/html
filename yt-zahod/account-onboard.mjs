@@ -104,6 +104,7 @@ async function processAccount(account, config, dolphin) {
         proxy: account.proxy,
         platform: config.PLATFORM || 'windows',
         browserVersion: config.BROWSER_VERSION || '140',
+        mainWebsite: config.MAIN_WEBSITE ?? '',
       });
       profileId = created.profileId;
       console.log(`✅ Профиль создан: ID ${profileId}`);
