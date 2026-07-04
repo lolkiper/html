@@ -143,8 +143,7 @@ function pauseBetweenUploads() {
 // =============================================================================
 
 const SCHEDULE_DEFAULTS = {
-  STEP_HOURS: 6,
-  NEW_CHANNEL_START_HOUR: 7,
+  SCHEDULE_HOURS: [7, 13, 19, 1],
   LOW_SCHEDULE_THRESHOLD: 10,
   VIDEOS_PER_CHANNEL: 16,
   SCHEDULE_EXTENSION_BUFFER: 16,
@@ -152,6 +151,30 @@ const SCHEDULE_DEFAULTS = {
 
 function mergeScheduleSettings(settings = {}) {
   return { ...SCHEDULE_DEFAULTS, ...settings };
+}
+
+function normalizeScheduleHours(settings) {
+  const merged = mergeScheduleSettings(settings);
+  const raw = merged.SCHEDULE_HOURS;
+  if (Array.isArray(raw) && raw.length) {
+    return raw.map((v) => {
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && v.includes(':')) return parseInt(v.split(':')[0], 10);
+      return parseInt(v, 10);
+    }).filter((h) => !Number.isNaN(h));
+  }
+  // Старый конфиг: STEP_HOURS: 6 → [7, 13, 19, 1]
+  if (merged.STEP_HOURS) {
+    const step = Number(merged.STEP_HOURS) || 6;
+    const start = Number(merged.NEW_CHANNEL_START_HOUR ?? 7);
+    const hours = [];
+    for (let h = start; hours.length < Math.floor(24 / step); h = (h + step) % 24) {
+      hours.push(h);
+      if (hours.length > 24) break;
+    }
+    return hours.length ? hours : [7, 13, 19, 1];
+  }
+  return [7, 13, 19, 1];
 }
 
 function parseScheduleTime(str) {
@@ -170,12 +193,6 @@ function formatScheduleTime(date) {
   return `${day}.${month}.${year} ${hours}:${minutes}`;
 }
 
-function addScheduleHours(date, hours) {
-  const result = new Date(date.getTime());
-  result.setHours(result.getHours() + hours);
-  return result;
-}
-
 function snapToQuarterHour(date) {
   const result = new Date(date.getTime());
   result.setMinutes(Math.round(result.getMinutes() / 15) * 15);
@@ -183,9 +200,26 @@ function snapToQuarterHour(date) {
   return result;
 }
 
+function advanceScheduleSlot(date, hours) {
+  const list = hours.length ? hours : [7, 13, 19, 1];
+  const currentH = date.getHours();
+  const idx = list.indexOf(currentH);
+  const nextIdx = idx >= 0 ? (idx + 1) % list.length : 0;
+  const nextHour = list[nextIdx];
+  const result = new Date(date.getTime());
+
+  // 19:00 → 01:00 = следующий день; 01:00 → 07:00 = тот же день
+  if (idx >= 0 && nextHour < list[idx]) {
+    result.setDate(result.getDate() + 1);
+  }
+
+  result.setHours(nextHour, 0, 0, 0);
+  result.setSeconds(0, 0);
+  return snapToQuarterHour(result);
+}
+
 function addScheduleStep(date, settings) {
-  const merged = mergeScheduleSettings(settings);
-  return snapToQuarterHour(addScheduleHours(date, merged.STEP_HOURS));
+  return advanceScheduleSlot(date, normalizeScheduleHours(settings));
 }
 
 function getTomorrowAt(hour) {
@@ -196,12 +230,12 @@ function getTomorrowAt(hour) {
 }
 
 function generateInitialSchedule(slotCount, settings) {
-  const merged = mergeScheduleSettings(settings);
+  const hours = normalizeScheduleHours(settings);
   const schedule = [];
-  let current = snapToQuarterHour(getTomorrowAt(merged.NEW_CHANNEL_START_HOUR));
+  let current = snapToQuarterHour(getTomorrowAt(hours[0]));
   for (let i = 0; i < slotCount; i++) {
     schedule.push(formatScheduleTime(current));
-    if (i < slotCount - 1) current = addScheduleStep(current, merged);
+    if (i < slotCount - 1) current = addScheduleStep(current, settings);
   }
   return schedule;
 }
@@ -345,7 +379,7 @@ function initializeChannelSchedule(channelNumber, settings) {
     channel.initialized = true;
     channel.initializedAt = new Date().toISOString();
 
-    console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, шаг ${merged.STEP_HOURS}ч, минуты fuzz в Studio)`);
+    console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, часы ${normalizeScheduleHours(merged).map((h) => String(h).padStart(2, '0') + ':00').join(' → ')}, fuzz +1–10 мин в Studio)`);
     return channel.schedule;
   });
 }
@@ -518,7 +552,7 @@ export async function runFarm(slot, profileId) {
   );
 
   if (isNewChannel) {
-    console.log(`🆕 Канал №${channelNumber} — первый запуск, расписание с завтра 07:00`);
+    console.log(`🆕 Канал №${channelNumber} — первый запуск, расписание с завтра ${String(normalizeScheduleHours(SCHEDULE_SETTINGS)[0]).padStart(2, '0')}:00`);
   } else {
     const remaining = schedulePrep.schedule.length - schedulePrep.uploadedCount;
     console.log(`📋 Канал №${channelNumber} — известный, свободных слотов: ${remaining}, всего в графике: ${schedulePrep.schedule.length}`);

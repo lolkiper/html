@@ -25,8 +25,7 @@ export const CONFIG = {
   // Опционально — иначе дефолты в upload-farm.mjs
   SCHEDULE_SETTINGS: {
     BATCH_SIZE: 10,
-    STEP_HOURS: 6,
-    NEW_CHANNEL_START_HOUR: 7,
+    SCHEDULE_HOURS: [7, 13, 19, 1],
     LOW_SCHEDULE_THRESHOLD: 10,
   },
 
