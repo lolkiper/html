@@ -43,7 +43,24 @@ function buildTimeLabels(hour, minute) {
   if (hour12 === 0) hour12 = 12;
   const time12 = `${hour12}:${String(minute).padStart(2, '0')} ${period}`;
   const time12Padded = `${String(hour12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${period}`;
+  // 24ч формат первым — у большинства аккаунтов Studio именно он (07:15, не 7:15 AM)
   return [...new Set([time24, time24Short, time12, time12Padded])];
+}
+
+function parseTimeListItem(text) {
+  const norm = (text || '').replace(/\u202f/g, ' ').replace(/\s+/g, ' ').trim();
+  let m = norm.match(/^(\d{1,2}):(\d{2})$/);
+  if (m) return { h: parseInt(m[1], 10), m: parseInt(m[2], 10) };
+  m = norm.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (m) {
+    let h = parseInt(m[1], 10);
+    const min = parseInt(m[2], 10);
+    const p = m[3].toUpperCase();
+    if (p === 'PM' && h !== 12) h += 12;
+    if (p === 'AM' && h === 12) h = 0;
+    return { h, m: min };
+  }
+  return null;
 }
 
 async function humanMouseMove(page, targetX, targetY) {
@@ -339,7 +356,6 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     // Время в config — стандартные слоты 24ч (07:00, 13:15). В Studio кликаем
     // стандарт, затем fuzz минут (1–10) прямо в поле → 07:08, 13:18...
     const [rawH, rawM] = timePartRaw.split(':').map(Number);
-    const timeLabels = buildTimeLabels(rawH, rawM);
 
     // 1) Клик по стандартному слоту в списке (07:00, 07:15...)
     // 2) Удалить последнюю цифру в поле и вставить random 1–10 → 07:08, 07:18...
@@ -366,136 +382,111 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     }
 
     async function selectTimeByClick(timeInput) {
-      const slotIndex = rawH * 4 + Math.floor(rawM / 15);
+      const targetH = rawH;
+      const targetM = rawM;
+      console.log(`[Робот] Кликаю стандарт в списке: ${String(targetH).padStart(2, '0')}:${String(targetM).padStart(2, '0')} (24ч/12ч)`);
 
-      const scrollTimeList = async () => {
-        return page.evaluate(({ slotIndex: idx }) => {
-          const listboxes = Array.from(document.querySelectorAll('ytcp-time-of-day-picker tp-yt-paper-listbox'));
-          const listbox = listboxes[listboxes.length - 1];
-          if (!listbox) return false;
+      const findAndClickInList = async () => page.evaluate(({ targetH: th, targetM: tm }) => {
+        const listboxes = Array.from(document.querySelectorAll('ytcp-time-of-day-picker tp-yt-paper-listbox'));
+        const listbox = listboxes[listboxes.length - 1];
+        if (!listbox) return { ok: false, reason: 'listbox not found' };
 
-          const sample = listbox.querySelector('tp-yt-paper-item');
-          const itemHeight = sample?.getBoundingClientRect().height || 36;
-          const targetScroll = Math.max(0, idx * itemHeight - 80);
-
-          const scrollTargets = [
-            listbox.querySelector('iron-list #items'),
-            listbox.querySelector('#items'),
-            listbox.querySelector('iron-list'),
-            listbox.querySelector('.items'),
-            listbox,
-          ].filter(Boolean);
-
-          for (const el of scrollTargets) {
-            try {
-              el.scrollTop = targetScroll;
-            } catch { /* ignore */ }
+        const parseItem = (text) => {
+          const norm = (text || '').replace(/\u202f/g, ' ').replace(/\s+/g, ' ').trim();
+          let m = norm.match(/^(\d{1,2}):(\d{2})$/);
+          if (m) return { h: parseInt(m[1], 10), m: parseInt(m[2], 10) };
+          m = norm.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+          if (m) {
+            let h = parseInt(m[1], 10);
+            const min = parseInt(m[2], 10);
+            const p = m[3].toUpperCase();
+            if (p === 'PM' && h !== 12) h += 12;
+            if (p === 'AM' && h === 12) h = 0;
+            return { h, m: min };
           }
+          return null;
+        };
 
-          listbox.dispatchEvent(new Event('scroll', { bubbles: true }));
-          return true;
-        }, { slotIndex });
-      };
+        const scrollEl = listbox.querySelector('iron-list #items')
+          || listbox.querySelector('#items')
+          || listbox.querySelector('iron-list')
+          || listbox;
 
-      const wheelScrollList = async (timeListbox) => {
-        const box = await timeListbox.boundingBox().catch(() => null);
-        if (!box) return;
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        const steps = Math.ceil(slotIndex / 4);
-        for (let i = 0; i < steps; i++) {
-          await page.mouse.wheel(0, 280);
-          await page.waitForTimeout(80);
-        }
-      };
-
-      const clickMatchingItem = async () => {
-        const clicked = await page.evaluate((labels) => {
-          const normalize = (text) => (text || '').replace(/\u202f/g, ' ').replace(/\s+/g, ' ').trim();
-          const listboxes = Array.from(document.querySelectorAll('ytcp-time-of-day-picker tp-yt-paper-listbox'));
-          const listbox = listboxes[listboxes.length - 1];
-          if (!listbox) return { ok: false, reason: 'listbox not found' };
-
-          const items = Array.from(listbox.querySelectorAll('tp-yt-paper-item'));
-          for (const item of items) {
-            const text = normalize(item.innerText || item.textContent);
-            if (labels.some((label) => text === label || text.startsWith(label))) {
+        const tryClickVisible = () => {
+          for (const item of listbox.querySelectorAll('tp-yt-paper-item')) {
+            const parsed = parseItem(item.innerText || item.textContent);
+            if (parsed && parsed.h === th && parsed.m === tm) {
               item.scrollIntoView({ block: 'center', behavior: 'instant' });
               item.click();
-              return { ok: true, matched: text };
+              return (item.innerText || item.textContent || '').trim();
             }
           }
-          return { ok: false, reason: 'item not in DOM', visible: items.map((i) => normalize(i.innerText || i.textContent)).slice(0, 8) };
-        }, timeLabels);
+          return null;
+        };
 
-        if (clicked.ok) {
-          console.log(`✅ Стандартный слот выбран кликом: ${clicked.matched}`);
-          return true;
+        let matched = tryClickVisible();
+        if (matched) return { ok: true, matched };
+
+        const step = 120;
+        const maxScroll = scrollEl.scrollHeight || 4000;
+        for (let top = 0; top <= maxScroll; top += step) {
+          scrollEl.scrollTop = top;
+          scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
+          matched = tryClickVisible();
+          if (matched) return { ok: true, matched };
         }
-        return clicked;
-      };
+
+        const visible = Array.from(listbox.querySelectorAll('tp-yt-paper-item'))
+          .slice(0, 6)
+          .map((i) => (i.innerText || i.textContent || '').trim());
+        return { ok: false, reason: 'not found after scroll', visible };
+      }, { targetH, targetM });
 
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
           await timeInput.scrollIntoViewIfNeeded().catch(() => {});
           await humanClick(page, timeInput);
-          await humanDelay(300, 600);
+          await humanDelay(400, 700);
 
-          const timeListbox = page.locator('ytcp-time-of-day-picker tp-yt-paper-listbox').last();
-          await timeListbox.waitFor({ state: 'visible', timeout: 8000 });
+          await page.locator('ytcp-time-of-day-picker tp-yt-paper-listbox').last()
+            .waitFor({ state: 'visible', timeout: 10000 });
 
-          // Прокрутка к нужному слоту (15 мин = 1 пункт)
-          await scrollTimeList();
-          await wheelScrollList(timeListbox);
-          await page.waitForTimeout(capDelay(400));
-
-          let result = await clickMatchingItem();
-          if (result === true) {
+          const result = await findAndClickInList();
+          if (result.ok) {
+            console.log(`✅ Стандартный слот выбран: ${result.matched}`);
             await applyMinuteFuzz(timeInput);
             return;
           }
 
-          // Пошаговая прокрутка — iron-list подгружает пункты по мере скролла
-          for (let step = 0; step < 12; step++) {
-            await page.evaluate(() => {
-              const listboxes = Array.from(document.querySelectorAll('ytcp-time-of-day-picker tp-yt-paper-listbox'));
-              const listbox = listboxes[listboxes.length - 1];
-              if (!listbox) return;
-              const scrollEl = listbox.querySelector('#items') || listbox.querySelector('iron-list') || listbox;
-              scrollEl.scrollTop += 144;
-              scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
-            });
-            await page.waitForTimeout(120);
-            result = await clickMatchingItem();
-            if (result === true) {
+          // Колесо мыши — доп. прокрутка
+          const timeListbox = page.locator('ytcp-time-of-day-picker tp-yt-paper-listbox').last();
+          const box = await timeListbox.boundingBox().catch(() => null);
+          if (box) {
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+            const slotIndex = targetH * 4 + Math.floor(targetM / 15);
+            for (let i = 0; i < Math.ceil(slotIndex / 3); i++) {
+              await page.mouse.wheel(0, 300);
+              await page.waitForTimeout(100);
+            }
+            const retry = await findAndClickInList();
+            if (retry.ok) {
+              console.log(`✅ Стандартный слот выбран (после wheel): ${retry.matched}`);
               await applyMinuteFuzz(timeInput);
               return;
             }
           }
 
-          // Фолбэк: ищем по всем видимым пунктам через Playwright locator
-          const timeOption = timeListbox.locator('tp-yt-paper-item').filter({
-            hasText: new RegExp(`^\\s*(${timeLabels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*$`),
-          }).first();
-
-          if (await timeOption.count()) {
-            await timeOption.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
-            await humanClick(page, timeOption);
-            console.log(`✅ Стандартный слот выбран через locator: ${timeLabels[0]}`);
-            await applyMinuteFuzz(timeInput);
-            return;
-          }
-
-          console.log(`⚠️ Попытка ${attempt}/5: ${result.reason || 'пункт не найден'}${result.visible ? `, видно: ${result.visible.join(', ')}` : ''}`);
+          console.log(`⚠️ Попытка ${attempt}/5: ${result.reason}${result.visible?.length ? `, видно: ${result.visible.join(', ')}` : ''}`);
         } catch (err) {
           console.log(`⚠️ Попытка ${attempt}/5 выбора времени: ${err.message}`);
         }
 
         await page.keyboard.press('Escape').catch(() => {});
-        await page.waitForTimeout(capDelay(300));
+        await page.waitForTimeout(capDelay(400));
       }
 
       await page.screenshot({ path: 'time-list-error.png', fullPage: true }).catch(() => {});
-      throw new Error(`Не удалось выбрать время "${timeLabels.join(' / ')}" кликом. См. time-list-error.png`);
+      throw new Error(`Не удалось выбрать ${String(targetH).padStart(2, '0')}:${String(targetM).padStart(2, '0')} в списке. См. time-list-error.png`);
     }
 
     const monthsEn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
