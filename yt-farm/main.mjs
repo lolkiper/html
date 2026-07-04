@@ -3,7 +3,14 @@ import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
+import { spawn } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
+
+/**
+ * main.mjs — единственная точка входа фермы.
+ * Worker: node main.mjs <slot> <dolphin_profile_id>
+ * Панель: spawn(process.execPath, [main.mjs, slot, profileId])
+ */
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -69,17 +76,13 @@ if (!CONFIG.DOLPHIN_API_URL || !CONFIG.DOLPHIN_TOKEN) {
   process.exit(1);
 }
 
-const CURRENT_SLOT = process.argv[2] ? parseInt(process.argv[2]) : 1;
-const directProfileId = process.argv[3];
-
-const HISTORY_FILE = path.join(baseDir, `history_profile_${directProfileId}.json`);
-const HISTORY_LOCK_FILE = path.join(baseDir, `history_profile_${directProfileId}.lock`);
-const CHANNEL_STATE_FILE = path.join(baseDir, 'channel-state.json');
-const CHANNEL_STATE_LOCK_FILE = path.join(baseDir, 'channel-state.lock');
 const SCHEDULE_SETTINGS = CONFIG.SCHEDULE_SETTINGS || {};
 const ANTIDETECT = CONFIG.ANTIDETECT || {};
 const VIDEOS_PER_CHANNEL = SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL ?? 16;
 const BATCH_SIZE = SCHEDULE_SETTINGS.BATCH_SIZE ?? 10;
+
+const CHANNEL_STATE_FILE = path.join(baseDir, 'channel-state.json');
+const CHANNEL_STATE_LOCK_FILE = path.join(baseDir, 'channel-state.lock');
 
 const LOCK_STALE_MS = SCHEDULE_SETTINGS.LOCK_STALE_MS ?? 5 * 60 * 1000;
 const LOCK_RETRY_MS = SCHEDULE_SETTINGS.LOCK_RETRY_MS ?? 250;
@@ -452,31 +455,42 @@ function shuffle(array) {
   return array;
 }
 
-function loadHistoryUnsafe() {
-  if (!fs.existsSync(HISTORY_FILE)) return { uploaded: [] };
-  try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8')); }
+function getHistoryPaths(profileId) {
+  return {
+    historyFile: path.join(baseDir, `history_profile_${profileId}.json`),
+    lockFile: path.join(baseDir, `history_profile_${profileId}.lock`),
+  };
+}
+
+function loadHistoryUnsafe(historyFile) {
+  if (!fs.existsSync(historyFile)) return { uploaded: [] };
+  try { return JSON.parse(fs.readFileSync(historyFile, 'utf-8')); }
   catch (e) { return { uploaded: [] }; }
 }
 
-function loadHistory() {
-  return withFileLock(HISTORY_LOCK_FILE, 'history.lock', () => loadHistoryUnsafe());
+function loadHistory(profileId) {
+  const { historyFile, lockFile } = getHistoryPaths(profileId);
+  return withFileLock(lockFile, 'history.lock', () => loadHistoryUnsafe(historyFile));
 }
 
-function saveToHistory(file, title, channelNum, scheduledTime) {
-  withFileLock(HISTORY_LOCK_FILE, 'history.lock', () => {
-    const history = loadHistoryUnsafe();
+function saveToHistory(profileId, file, title, channelNum, scheduledTime) {
+  const { historyFile, lockFile } = getHistoryPaths(profileId);
+  withFileLock(lockFile, 'history.lock', () => {
+    const history = loadHistoryUnsafe(historyFile);
     history.uploaded.push({
-      file: file,
-      title: title,
+      file,
+      title,
       channel: channelNum,
       scheduledFor: scheduledTime,
-      date: new Date().toLocaleString()
+      date: new Date().toLocaleString(),
     });
-    atomicWriteJson(HISTORY_FILE, history);
+    atomicWriteJson(historyFile, history);
   });
 }
 
-async function startFarm() {
+export async function runFarm(slot, profileId) {
+  const CURRENT_SLOT = slot;
+  const directProfileId = profileId;
   let finalVideosDir = CONFIG.VIDEOS_DIR;
   if (!path.isAbsolute(finalVideosDir)) {
     finalVideosDir = path.join(baseDir, finalVideosDir);
@@ -513,7 +527,7 @@ async function startFarm() {
   console.log(`\n📺 ================= ОБРАБОТКА КАНАЛА №${channelNumber} =================`);
 
   const allTitles = CONFIG.BASE_TITLES || [];
-  const history = loadHistory();
+  const history = loadHistory(directProfileId);
   let availableVideos = [];
 
   const { discovered } = { discovered: syncChannelsFromMapping(CONFIG.PROFILE_MAPPING) };
@@ -613,7 +627,7 @@ async function startFarm() {
 
         success = true;
         totalUploadedInSession++;
-        saveToHistory(videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
+        saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
         console.log(`💾 Успешно запланировано! Файл ${videoToUpload.file} закреплен за временем ${videoTimeSlot}`);
       } catch (error) {
         if (error.message === 'BAN_DETECTED') { isBanned = true; break; }
@@ -687,7 +701,7 @@ async function startFarm() {
     }
   }
 
-  const finalHistory = loadHistory();
+  const finalHistory = loadHistory(directProfileId);
   const currentChannelUploads = finalHistory.uploaded.filter(item => item.channel === channelNumber).length;
 
   console.log(JSON.stringify({
@@ -708,4 +722,21 @@ async function startFarm() {
   console.log(`🏁 [КАНАЛ №${channelNumber}] Сессия закрыта. Запланировано за этот круг: ${totalUploadedInSession} видео.`);
 }
 
-startFarm().catch(console.error);
+/** Запуск worker-процесса (для UI-панели вместо upload-farm.mjs) */
+export function spawnFarmWorker(slot, profileId) {
+  const mainScript = path.join(APP_DIR, 'main.mjs');
+  return spawn(process.execPath, [mainScript, String(slot), profileId], {
+    cwd: APP_DIR,
+    stdio: 'inherit',
+    shell: false,
+  });
+}
+
+export { APP_DIR, CONFIG };
+
+// Worker-режим: node main.mjs <slot> <profileId>
+if (process.argv[2] && process.argv[3]) {
+  const slot = parseInt(process.argv[2], 10);
+  const profileId = process.argv[3];
+  runFarm(slot, profileId).catch(console.error);
+}
