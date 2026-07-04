@@ -112,9 +112,11 @@ function atomicWriteJson(filePath, data) {
 }
 
 function pauseBetweenUploads() {
-  const minMs = capDelay(ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 45000);
-  const maxMs = capDelay(ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 120000);
-  const waitMs = randomBetween(minMs, maxMs);
+  const rawMin = Number(ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 1000);
+  const rawMax = Number(ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 1000);
+  const lo = Math.min(rawMin, rawMax);
+  const hi = Math.max(rawMin, rawMax);
+  const waitMs = capDelay(randomBetween(lo, hi));
   console.log(`[Anti-detect] Пауза ${Math.round(waitMs / 1000)}с перед следующим видео...`);
   return new Promise((r) => setTimeout(r, waitMs));
 }
@@ -457,6 +459,7 @@ function saveToHistory(profileId, file, title, channelNum, scheduledTime) {
 export async function runFarm(slot, profileId) {
   const CURRENT_SLOT = slot;
   const directProfileId = profileId;
+  console.log(`[Farm] Анти-детект: паузы 2–10с→1с, >10с→макс 5с (обновлённый main.mjs)`);
   let finalVideosDir = CONFIG.VIDEOS_DIR;
   if (!path.isAbsolute(finalVideosDir)) {
     finalVideosDir = path.join(baseDir, finalVideosDir);
