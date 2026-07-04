@@ -1,5 +1,4 @@
 import { uploadVideo } from './youtube-studio.mjs';
-import { ChannelStateStore } from './schedule-manager.mjs';
 import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
@@ -14,14 +13,267 @@ if (!fs.existsSync(configPath)) {
 }
 
 const CONFIG = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-const CURRENT_SLOT = process.argv[2] ? parseInt(process.argv[2]) : 1; 
-const directProfileId = process.argv[3];                               
+const CURRENT_SLOT = process.argv[2] ? parseInt(process.argv[2]) : 1;
+const directProfileId = process.argv[3];
 
 const HISTORY_FILE = path.join(baseDir, `history_profile_${directProfileId}.json`);
+const CHANNEL_STATE_FILE = path.join(baseDir, 'channel-state.json');
 const SCHEDULE_SETTINGS = CONFIG.SCHEDULE_SETTINGS || {};
 const VIDEOS_PER_CHANNEL = SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL ?? 16;
 const BATCH_SIZE = SCHEDULE_SETTINGS.BATCH_SIZE ?? 10;
-const channelState = new ChannelStateStore(baseDir);
+
+// =============================================================================
+// РАСПИСАНИЕ КАНАЛОВ (per-channel state в channel-state.json)
+// =============================================================================
+
+const SCHEDULE_DEFAULTS = {
+  STEP_HOURS: 6,
+  NEW_CHANNEL_START_HOUR: 7,
+  LOW_SCHEDULE_THRESHOLD: 10,
+  VIDEOS_PER_CHANNEL: 16,
+  SCHEDULE_EXTENSION_BUFFER: 16,
+};
+
+function mergeScheduleSettings(settings = {}) {
+  return { ...SCHEDULE_DEFAULTS, ...settings };
+}
+
+function parseScheduleTime(str) {
+  const [datePart, timePart] = str.split(' ');
+  const [day, month, year] = datePart.split('.').map(Number);
+  const [hours, minutes] = timePart.split(':').map(Number);
+  return new Date(year, month - 1, day, hours, minutes, 0, 0);
+}
+
+function formatScheduleTime(date) {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${day}.${month}.${year} ${hours}:${minutes}`;
+}
+
+function addScheduleHours(date, hours) {
+  const result = new Date(date.getTime());
+  result.setHours(result.getHours() + hours);
+  return result;
+}
+
+function getTomorrowAt(hour) {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(hour, 0, 0, 0);
+  return d;
+}
+
+function generateInitialSchedule(slotCount, settings) {
+  const merged = mergeScheduleSettings(settings);
+  const start = getTomorrowAt(merged.NEW_CHANNEL_START_HOUR);
+  const schedule = [];
+  let current = new Date(start);
+  for (let i = 0; i < slotCount; i++) {
+    schedule.push(formatScheduleTime(current));
+    current = addScheduleHours(current, merged.STEP_HOURS);
+  }
+  return schedule;
+}
+
+function extendSchedule(existingSchedule, slotsToAdd, settings) {
+  const merged = mergeScheduleSettings(settings);
+  if (!existingSchedule.length) return generateInitialSchedule(slotsToAdd, merged);
+  const extended = [...existingSchedule];
+  let last = parseScheduleTime(extended[extended.length - 1]);
+  for (let i = 0; i < slotsToAdd; i++) {
+    last = addScheduleHours(last, merged.STEP_HOURS);
+    extended.push(formatScheduleTime(last));
+  }
+  return extended;
+}
+
+function loadChannelState() {
+  if (!fs.existsSync(CHANNEL_STATE_FILE)) return { version: 1, channels: {} };
+  try {
+    return JSON.parse(fs.readFileSync(CHANNEL_STATE_FILE, 'utf-8'));
+  } catch {
+    return { version: 1, channels: {} };
+  }
+}
+
+function saveChannelState(state) {
+  const tmpPath = `${CHANNEL_STATE_FILE}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, CHANNEL_STATE_FILE);
+}
+
+function getChannelFromState(channelNumber) {
+  const state = loadChannelState();
+  return state.channels[String(channelNumber)] || null;
+}
+
+function syncChannelsFromMapping(profileMapping) {
+  const state = loadChannelState();
+  let changed = false;
+  const discovered = { new: [], existing: [] };
+
+  for (const [profileId, channelData] of Object.entries(profileMapping || {})) {
+    const channelNumber = channelData?.[0];
+    if (!channelNumber) continue;
+    const key = String(channelNumber);
+
+    if (!state.channels[key]) {
+      state.channels[key] = {
+        channelNumber,
+        profileId,
+        initialized: false,
+        schedule: [],
+        createdAt: new Date().toISOString(),
+      };
+      discovered.new.push({ channelNumber, profileId });
+      changed = true;
+    } else {
+      discovered.existing.push({ channelNumber, profileId });
+      if (state.channels[key].profileId !== profileId) {
+        state.channels[key].profileId = profileId;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) saveChannelState(state);
+  return { state, discovered };
+}
+
+function migrateScheduleFromHistory(channelNumber, history, settings) {
+  const merged = mergeScheduleSettings(settings);
+  const state = loadChannelState();
+  const key = String(channelNumber);
+  const channel = state.channels[key];
+  if (!channel) return null;
+
+  const uploads = (history.uploaded || [])
+    .filter((item) => item.channel === channelNumber && item.scheduledFor)
+    .sort((a, b) => parseScheduleTime(a.scheduledFor) - parseScheduleTime(b.scheduledFor));
+
+  if (!uploads.length) return null;
+  if (channel.initialized && channel.schedule.length) return channel.schedule;
+
+  const schedule = uploads.map((u) => u.scheduledFor);
+  const uploadedCount = uploads.length;
+  const remaining = merged.VIDEOS_PER_CHANNEL - uploadedCount;
+
+  channel.schedule = remaining > 0
+    ? extendSchedule(schedule, Math.max(remaining, merged.LOW_SCHEDULE_THRESHOLD), merged)
+    : schedule;
+  channel.initialized = true;
+  channel.initializedAt = channel.initializedAt || new Date().toISOString();
+  channel.migratedFromHistory = true;
+  state.channels[key] = channel;
+  saveChannelState(state);
+
+  console.log(`[Schedule] Канал №${channelNumber}: миграция из history (${uploadedCount} слотов, всего ${channel.schedule.length})`);
+  return channel.schedule;
+}
+
+function migrateScheduleFromLegacyConfig(channelNumber, legacySchedule, settings) {
+  if (!legacySchedule?.length) return null;
+  const state = loadChannelState();
+  const key = String(channelNumber);
+  const channel = state.channels[key];
+  if (!channel || channel.initialized) return channel?.schedule || null;
+
+  channel.schedule = [...legacySchedule];
+  channel.initialized = true;
+  channel.initializedAt = new Date().toISOString();
+  channel.migratedFromLegacyConfig = true;
+  state.channels[key] = channel;
+  saveChannelState(state);
+
+  console.log(`[Schedule] Канал №${channelNumber}: миграция из CONFIG.SCHEDULE (${legacySchedule.length} слотов)`);
+  return channel.schedule;
+}
+
+function initializeChannelSchedule(channelNumber, settings) {
+  const merged = mergeScheduleSettings(settings);
+  const state = loadChannelState();
+  const key = String(channelNumber);
+  const channel = state.channels[key];
+  if (!channel) throw new Error(`Канал №${channelNumber} не найден в channel-state.json`);
+
+  if (channel.initialized && channel.schedule.length) return channel.schedule;
+
+  channel.schedule = generateInitialSchedule(merged.VIDEOS_PER_CHANNEL, merged);
+  channel.initialized = true;
+  channel.initializedAt = new Date().toISOString();
+  state.channels[key] = channel;
+  saveChannelState(state);
+
+  console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, шаг ${merged.STEP_HOURS}ч)`);
+  return channel.schedule;
+}
+
+function ensureChannelScheduleCapacity(channelNumber, uploadedCount, settings) {
+  const merged = mergeScheduleSettings(settings);
+  const state = loadChannelState();
+  const key = String(channelNumber);
+  const channel = state.channels[key];
+
+  if (!channel?.initialized) return initializeChannelSchedule(channelNumber, merged);
+
+  const remainingSlots = channel.schedule.length - uploadedCount;
+  if (remainingSlots < merged.LOW_SCHEDULE_THRESHOLD) {
+    const videosStillNeeded = Math.max(0, merged.VIDEOS_PER_CHANNEL - uploadedCount);
+    const targetRemaining = Math.max(videosStillNeeded, merged.LOW_SCHEDULE_THRESHOLD, merged.SCHEDULE_EXTENSION_BUFFER);
+    const slotsToAdd = targetRemaining - remainingSlots;
+
+    if (slotsToAdd > 0) {
+      const before = channel.schedule.length;
+      const lastSlot = channel.schedule[channel.schedule.length - 1];
+      channel.schedule = extendSchedule(channel.schedule, slotsToAdd, merged);
+      channel.lastExtendedAt = new Date().toISOString();
+      state.channels[key] = channel;
+      saveChannelState(state);
+      console.log(`[Schedule] Канал №${channelNumber}: продлено ${before} → ${channel.schedule.length} (последний был ${lastSlot}, новый ${channel.schedule[channel.schedule.length - 1]})`);
+    }
+  }
+
+  return channel.schedule;
+}
+
+function getChannelBatchSlots(channelNumber, uploadedCount, batchSize) {
+  const channel = getChannelFromState(channelNumber);
+  if (!channel?.schedule?.length) return [];
+  return channel.schedule.slice(uploadedCount, uploadedCount + batchSize);
+}
+
+function prepareChannelSchedule(channelNumber, profileId, history, settings, legacySchedule) {
+  const merged = mergeScheduleSettings(settings);
+  syncChannelsFromMapping({ [profileId]: [channelNumber] });
+
+  const channel = getChannelFromState(channelNumber);
+  const isInitialized = Boolean(channel?.initialized && channel.schedule?.length);
+
+  let schedule =
+    migrateScheduleFromHistory(channelNumber, history, merged) ||
+    migrateScheduleFromLegacyConfig(channelNumber, legacySchedule, merged);
+
+  if (!schedule) {
+    schedule = isInitialized ? channel.schedule : initializeChannelSchedule(channelNumber, merged);
+  }
+
+  const uploadedCount = (history.uploaded || []).filter((item) => item.channel === channelNumber).length;
+  schedule = ensureChannelScheduleCapacity(channelNumber, uploadedCount, merged);
+
+  return {
+    schedule,
+    uploadedCount,
+    batchSlots: (batchSize) => getChannelBatchSlots(channelNumber, uploadedCount, batchSize),
+  };
+}
+
+// =============================================================================
+// ФЕРМА
+// =============================================================================
 
 function shuffle(array) {
   for (let i = array.length - 1; i > 0; i--) {
@@ -33,24 +285,23 @@ function shuffle(array) {
 
 function loadHistory() {
   if (!fs.existsSync(HISTORY_FILE)) return { uploaded: [] };
-  try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8')); } 
+  try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8')); }
   catch (e) { return { uploaded: [] }; }
 }
 
 function saveToHistory(file, title, channelNum, scheduledTime) {
   const history = loadHistory();
   history.uploaded.push({
-    file: file, 
-    title: title, 
-    channel: channelNum, 
-    scheduledFor: scheduledTime, // Фиксируем время расписания в историю
+    file: file,
+    title: title,
+    channel: channelNum,
+    scheduledFor: scheduledTime,
     date: new Date().toLocaleString()
   });
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2), 'utf-8');
 }
 
 async function startFarm() {
-  // 🔥 АВТОМАТИЧЕСКОЕ ИСПРАВЛЕНИЕ ДВОЙНЫХ ПУТЕЙ (Защита от ошибки "Файл не найден")
   let finalVideosDir = CONFIG.VIDEOS_DIR;
   if (!path.isAbsolute(finalVideosDir)) {
     finalVideosDir = path.join(baseDir, finalVideosDir);
@@ -64,27 +315,24 @@ async function startFarm() {
     return;
   }
 
-// 🔥 ПРОВЕРКА: Ищем канал в маппинге конфига по ID профиля Dolphin
   const channelData = CONFIG.PROFILE_MAPPING?.[directProfileId];
-  
+
   if (!channelData || !channelData[0]) {
     console.error(`\n❌ [ОШИБКА] Профиль Dolphin ID: ${directProfileId} не привязан ни к одному каналу в config.json! Пропускаю этот поток.`);
-    
-    // Команда UI панели, чтобы она увидела ошибку конфигурации, а слот освободился для других каналов
+
     console.log(JSON.stringify({
-      DATA_TYPE: "STATS_UPDATE", 
-      channelNum: "???", 
+      DATA_TYPE: "STATS_UPDATE",
+      channelNum: "???",
       profileId: directProfileId,
-      subs: "Ошибка", 
-      views: "Ошибка", 
-      uploaded: 0, 
+      subs: "Ошибка",
+      views: "Ошибка",
+      uploaded: 0,
       status: "ОШИБКА КОНФИГУРАЦИИ"
     }));
-    
-    return; // Экстренно завершаем выполнение startFarm() для этого канала. Система пойдет дальше.
+
+    return;
   }
 
-  // Если всё хорошо — присваиваем реальный номер канала
   const channelNumber = channelData[0];
 
   console.log(`\n📺 ================= ОБРАБОТКА КАНАЛА №${channelNumber} =================`);
@@ -93,17 +341,16 @@ async function startFarm() {
   const history = loadHistory();
   let availableVideos = [];
 
-  // Синхронизируем все каналы из конфига и готовим per-channel расписание
-  const { discovered } = channelState.syncFromProfileMapping(CONFIG.PROFILE_MAPPING);
+  const { discovered } = syncChannelsFromMapping(CONFIG.PROFILE_MAPPING);
   const isNewChannel = discovered.new.some((c) => c.channelNumber === channelNumber);
 
-  const schedulePrep = channelState.prepareChannelSchedule({
+  const schedulePrep = prepareChannelSchedule(
     channelNumber,
-    profileId: directProfileId,
+    directProfileId,
     history,
-    settings: SCHEDULE_SETTINGS,
-    legacySchedule: CONFIG.SCHEDULE,
-  });
+    SCHEDULE_SETTINGS,
+    CONFIG.SCHEDULE
+  );
 
   if (isNewChannel) {
     console.log(`🆕 Канал №${channelNumber} — первый запуск, расписание с завтра 07:00`);
@@ -112,17 +359,12 @@ async function startFarm() {
     console.log(`📋 Канал №${channelNumber} — известный, свободных слотов: ${remaining}, всего в графике: ${schedulePrep.schedule.length}`);
   }
 
-  // 🔥 ДИНАМИЧЕСКИЙ РАСЧЕТ ДИАПАЗОНА НА ОСНОВЕ НОМЕРА КАНАЛА
   const startVideoNum = (channelNumber - 1) * VIDEOS_PER_CHANNEL + 1;
 
-  // Собираем пулл видео, предназначенных конкретно для этого канала
   for (let i = 0; i < VIDEOS_PER_CHANNEL; i++) {
     const currentVideoIndex = startVideoNum + i;
     const filename = `part${currentVideoIndex}.mov`;
-    
-    // Берем рандомное название из твоего списка 160 строк
     const title = allTitles[Math.floor(Math.random() * allTitles.length)] || `Shorts Video ${currentVideoIndex}`;
-    
     const alreadyUploaded = history.uploaded.some(item => item.file === filename);
     if (!alreadyUploaded) {
       availableVideos.push({ file: filename, title: title, channel: channelNumber });
@@ -138,12 +380,10 @@ async function startFarm() {
     return;
   }
 
-  // 1. БАТЧИНГ: Перемешиваем и отрезаем пачку
   shuffle(availableVideos);
   const currentBatch = availableVideos.slice(0, BATCH_SIZE);
   console.log(`🎯 Слот ${CURRENT_SLOT} собрал пачку из ${currentBatch.length} видео для этого пакетного захода.`);
 
-  // Per-channel слоты: начинаем с индекса = уже загружено, не с нуля
   const batchTimeSlots = schedulePrep.batchSlots(currentBatch.length);
   if (batchTimeSlots.length < currentBatch.length) {
     console.error(`❌ Не хватает тайм-слотов в расписании канала №${channelNumber} (нужно ${currentBatch.length}, есть ${batchTimeSlots.length})`);
@@ -158,7 +398,7 @@ async function startFarm() {
     const response = await axios.get(`${CONFIG.DOLPHIN_API_URL}/v1.0/browser_profiles/${directProfileId}/start?automation=1`, {
       headers: { 'Authorization': `Bearer ${CONFIG.DOLPHIN_TOKEN}` }
     });
-    
+
     if (response.data && response.data.automation) {
       const { port, wsEndpoint } = response.data.automation;
       if (!port || !wsEndpoint) throw new Error("Dolphin не отдал порт или wsEndpoint.");
@@ -168,18 +408,15 @@ async function startFarm() {
     } else { throw new Error("Dolphin не вернул блок автоматизации."); }
   } catch (err) {
     console.error(`❌ Слот ${CURRENT_SLOT} не смог подключиться к Dolphin:`, err.message);
-    return; 
+    return;
   }
 
   const page = context.pages()[0] || await context.newPage();
-  page.setDefaultTimeout(60000); 
+  page.setDefaultTimeout(60000);
 
   let isBanned = false; let browserClosed = false;
   let totalUploadedInSession = 0;
 
-  // =========================================================================
-  // 🔥 2. ПАКЕТНЫЙ ЦИКЛ ЗАЛИВКИ (Один старт Dolphin — до 10 публикаций)
-  // =========================================================================
   for (let i = 0; i < currentBatch.length; i++) {
     const videoToUpload = currentBatch[i];
     const videoTimeSlot = batchTimeSlots[i];
@@ -192,14 +429,13 @@ async function startFarm() {
     console.log(`\n🎬 [Видео ${i + 1}/${currentBatch.length}] Начинаю процесс для: ${videoToUpload.file}`);
     console.log(`📅 Целевой тайм-слот публикации: ${videoTimeSlot}`);
 
-    let attempts = 3; 
+    let attempts = 3;
     let success = false;
 
     while (attempts > 0 && !success) {
       try {
-        // Вызываем обновленную функцию из youtube-studio.mjs передавая четвертым аргументом тайм-слот
         await uploadVideo(page, videoToUpload, finalVideosDir, videoTimeSlot);
-        
+
         success = true;
         totalUploadedInSession++;
         saveToHistory(videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
@@ -207,43 +443,38 @@ async function startFarm() {
       } catch (error) {
         if (error.message === 'BAN_DETECTED') { isBanned = true; break; }
         if (error.message.includes('closed') || error.message.includes('browser has been closed')) { browserClosed = true; break; }
-        
+
         attempts--;
         console.error(`⚠️ Ошибка загрузки файла ${videoToUpload.file}. Попыток осталось: ${attempts}. Ошибка: ${error.message}`);
         if (attempts > 0 && !browserClosed) {
-          // Возвращаем страницу в корень загрузки перед повторной попыткой
           await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded' }).catch(() => {});
           await new Promise(r => setTimeout(r, 5000));
         }
       }
     }
 
-    // Защита от сдвигов таймлайна: Если поймали бан или критический вылет браузера — рубим весь пачечный цикл
     if (isBanned || browserClosed) {
       console.log(`🛑 Пакетный цикл экстренно прерван из-за критического статуса сессии.`);
       break;
     }
 
-    // Если попытки на один файл закончились неудачей (например плохой прокси)
     if (!success) {
       console.log(`🔴 Файл ${videoToUpload.file} не удалось выложить за 3 попытки. Защита от сдвигов: прерываем сессию, сохраняя время ${videoTimeSlot} для следующего перезапуска.`);
       break;
     }
   }
 
-  // Настройка статуса по итогам прохода пачки
   let finalChannelStatus = "АКТИВЕН";
   if (isBanned) finalChannelStatus = "BAN_DETECTED";
   if (browserClosed) finalChannelStatus = "ВЫЛЕТ БРАУЗЕРА";
 
-  // 🔥 ОБНОВЛЕННЫЙ И НАДЕЖНЫЙ СБОР СТАТИСТИКИ С ГЛАВНОГО ДАШБОРДА (Вызывается 1 раз в конце всей сессии)
   let subscribersCount = "0"; let viewsCount = "0";
   if (!isBanned && !browserClosed) {
     console.log(`\n📊 [КАНАЛ №${channelNumber}] Захожу на главную https://studio.youtube.com/ для финального сбора статистики...`);
     try {
       await page.goto('https://studio.youtube.com/', { waitUntil: 'networkidle' }).catch(() => {});
       await new Promise(r => setTimeout(r, 6000));
-      
+
       const dashboardText = await page.evaluate(() => {
         const cards = Array.from(document.querySelectorAll('*'));
         for (const card of cards) {
@@ -280,7 +511,6 @@ async function startFarm() {
   const finalHistory = loadHistory();
   const currentChannelUploads = finalHistory.uploaded.filter(item => item.channel === channelNumber).length;
 
-  // Отправляем финальный агрегированный отчет на UI панель управления фермы
   console.log(JSON.stringify({
     DATA_TYPE: "STATS_UPDATE", channelNum: channelNumber, profileId: directProfileId,
     subs: browserClosed ? "Ошибка" : (subscribersCount || "0"), views: browserClosed ? "Ошибка" : (viewsCount || "0"),
@@ -291,12 +521,11 @@ async function startFarm() {
     await page.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
   }
-  
-  // Отдаем команду Dolphin на закрытие профиля
+
   await axios.get(`${CONFIG.DOLPHIN_API_URL}/v1.0/browser_profiles/${directProfileId}/stop`, {
     headers: { 'Authorization': `Bearer ${CONFIG.DOLPHIN_TOKEN}` }
   }).catch(() => {});
-  
+
   console.log(`🏁 [КАНАЛ №${channelNumber}] Сессия закрыта. Запланировано за этот круг: ${totalUploadedInSession} видео.`);
 }
 
