@@ -9,8 +9,19 @@ function randomBetween(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
+/** 2–10с → 1с, >10с → макс 5с */
+function capDelay(ms) {
+  if (ms > 10000) return 5000;
+  if (ms >= 2000) return 1000;
+  return ms;
+}
+
 function humanDelay(minMs = 300, maxMs = 900) {
-  return new Promise((r) => setTimeout(r, randomBetween(minMs, maxMs)));
+  return new Promise((r) => setTimeout(r, capDelay(randomBetween(minMs, maxMs))));
+}
+
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, capDelay(ms)));
 }
 
 async function humanMouseMove(page, targetX, targetY) {
@@ -113,7 +124,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
   if (checkText.toLowerCase().includes('something went wrong')) {
     console.log('⚠️ Ютуб выдал ошибку интерфейса. Перезагружаю страницу...');
     await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-    await new Promise(r => setTimeout(r, 4000));
+    await new Promise(r => setTimeout(r, capDelay(4000)));
   }
 
   if (page.url().includes('disabled') || page.url().includes('banned')) {
@@ -126,11 +137,9 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
   } catch (e) {
     console.log(`⚠️ Окно загрузки не определилось автоматом. Включаю резервный кликер по кнопке "Создать"...`);
     try {
-      const createBtn = await page.waitForSelector('#create-icon, button:has-text("Создать"), button:has-text("Create"), button:has-text("Crear")', { timeout: 15000 });
-      await humanClick(page, createBtn);
+      await humanClick(page, '#create-icon, button:has-text("Создать"), button:has-text("Create"), button:has-text("Crear")');
       await humanDelay(1200, 2200);
-      const uploadOption = await page.waitForSelector('#upload-item, ytcp-text-menu-item:has-text("Добавить видео"), ytcp-text-menu-item:has-text("Upload videos"), ytcp-text-menu-item:has-text("Subir vídeos")', { timeout: 10000 });
-      await humanClick(page, uploadOption);
+      await humanClick(page, '#upload-item, ytcp-text-menu-item:has-text("Добавить видео"), ytcp-text-menu-item:has-text("Upload videos"), ytcp-text-menu-item:has-text("Subir vídeos")');
       
       await page.waitForSelector('input[type="file"]', { state: 'attached', timeout: 10000 });
     } catch (manualError) {
@@ -194,7 +203,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       }
     }
     if (!titleField) {
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, capDelay(1000)));
     }
   }
 
@@ -227,7 +236,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       try {
         await kidsRadio.waitFor({ state: 'visible', timeout: 10000 });
         await kidsRadio.scrollIntoViewIfNeeded().catch(() => {});
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(capDelay(500));
 
         // ФИКС: обычный click() у tp-yt-paper-radio-button часто виснет в
         // Timeout, а не падает с "элемент не найден" — Playwright ждёт,
@@ -237,7 +246,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         // и кликает напрямую по центру элемента.
         await kidsRadio.click({ force: true, timeout: 8000 }).catch(() => humanClick(page, kidsRadio));
         console.log("✅ Успешно отмечено: 'Нет, это видео не для детей'");
-        await page.waitForTimeout(1500);
+        await page.waitForTimeout(capDelay(1500));
         kidsSelected = true;
       } catch (kidsErr) {
         console.log(`⚠️ Предупреждение: Кнопка "Не для детей" не поддалась (${kidsErr.message}), пробуем текст...`);
@@ -253,7 +262,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
           // ФИКС: тот же force: true — та же причина зависания на клике
           await backupTextClick.click({ force: true, timeout: 8000 }).catch(() => humanClick(page, backupTextClick));
           console.log("✅ Сработал запасной клик по тексту 'Не для детей'");
-          await page.waitForTimeout(1500);
+          await page.waitForTimeout(capDelay(1500));
           kidsSelected = true;
         } catch (err) {
           console.log(`⚠️ Резервный текстовый клик тоже не сработал (${err.message}). Пробую прямой клик через JS...`);
@@ -282,7 +291,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
 
         if (kidsSelected) {
           console.log("✅ Аудитория выбрана прямым JS-кликом (обход Playwright actionability)");
-          await page.waitForTimeout(1500);
+          await page.waitForTimeout(capDelay(1500));
         } else {
           console.log(`❌ Не удалось выбрать аудиторию ни одним из трёх способов. Пробую идти дальше...`);
         }
@@ -294,7 +303,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     await humanDelay(1600, 3200);
   }
 
-  await page.waitForTimeout(randomBetween(2200, 4200));
+  await page.waitForTimeout(capDelay(randomBetween(2200, 4200)));
 
   // =========================================================================
   // 🔥 НАЧАЛО ШАГА №4: ЗАЩИЩЕННОЕ ПЛАНИРОВАНИЕ (ФИКС ПО РЕКОМЕНДАЦИЯМ)
@@ -336,7 +345,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         'tp-yt-iron-dropdown tp-yt-paper-listbox tp-yt-paper-item, tp-yt-paper-listbox tp-yt-paper-item'
       ).first();
 
-      const deadline = Date.now() + 4000;
+      const deadline = Date.now() + capDelay(4000);
       while (Date.now() < deadline) {
         if (await suggestion.isVisible({ timeout: 300 }).catch(() => false)) {
           await humanClick(page, suggestion);
@@ -423,14 +432,14 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         // клику по календарю (гонка анимации закрытия — частая причина того,
         // что следующий клик "проваливается в пустоту").
         await tzListbox.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {});
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(capDelay(500));
       } catch (tzErr) {
         await page.screenshot({ path: 'timezone-error.png', fullPage: true }).catch(() => {});
         console.log(`⚠️ Не удалось выставить часовой пояс автоматически: ${tzErr.message}. Проверьте timezone-opened.html/timezone-error.png и пришлите мне — подберу точные селекторы. Продолжаю с текущим (возможно неверным) часовым поясом аккаунта.`);
         // Если попап всё же был открыт, но выбор не удался — закрываем его,
         // чтобы не мешать вводу даты/времени дальше.
         await page.keyboard.press('Escape').catch(() => {});
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(capDelay(500));
       }
 
       // === 2. ВВОД ДАТЫ ===
@@ -490,7 +499,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         console.log(`❌ Не удалось выбрать день в календаре автоматически. См. calendar-opened.html/png — по ним подберу точный селектор.`);
       }
       await page.keyboard.press('Escape').catch(() => {});
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(capDelay(800));
 
       // === 3. ВВОД ВРЕМЕНИ ===
       // ФИКС: это НЕ свободный autocomplete, куда можно печатать что угодно —
@@ -543,7 +552,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         await page.keyboard.press('Control+A').catch(() => {});
         await page.keyboard.press('Backspace').catch(() => {});
         await page.keyboard.type(timePart, { delay: randomBetween(60, 110) });
-        await page.waitForTimeout(700);
+        await page.waitForTimeout(capDelay(700));
         const timeConfirmedViaList = await confirmTypedValue();
         console.log(`⚠️ Время установлено печатью: ${timePart} (через ${timeConfirmedViaList ? 'клик по подсказке' : 'Enter — ненадёжно'})`);
       }
@@ -551,7 +560,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
 
       // Даем Ютубу время провалидировать дату/время и обновить состояние кнопки
       console.log(`[Робот] Ожидаю валидации формы серверами YouTube...`);
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(capDelay(3000));
 
     } catch (scheduleUiError) {
       // Скриншот ошибки: Если что-то упало внутри try
@@ -562,8 +571,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
   } else {
     console.log(`[Робот] Время публикации не передано. Выбираю публичный доступ...`);
     await page.waitForSelector('[name="PUBLIC"], #public-radio-button', { timeout: 15000 });
-    const radio = await page.$('[name="PUBLIC"], #public-radio-button');
-    await humanClick(page, radio);
+    await humanClick(page, '[name="PUBLIC"], #public-radio-button');
   }
 
   // =========================================================================
@@ -600,7 +608,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     const closeButton = await page.$('#close-button, ytcp-button[label="Закрыть"], ytcp-home-button, ytcp-button[label="Close"], ytcp-button[label="Cerrar"]');
     if (closeButton && await closeButton.isVisible()) {
       console.log(`[Робот] Обнаружено окно успешного завершения! Закрываю.`);
-      await humanClick(page, closeButton).catch(() => closeButton.click());
+      await humanClick(page, '#close-button, ytcp-button[label="Закрыть"], ytcp-home-button, ytcp-button[label="Close"], ytcp-button[label="Cerrar"]').catch(() => closeButton.click());
       isFullyUploaded = true;
       break;
     }
@@ -628,8 +636,8 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         break;
       }
     }
-    await new Promise(r => setTimeout(r, 1000));
+    await sleepMs(1000);
   }
   console.log(`🚀 [Робот] Видео успешно и полностью село на сервера YouTube!`);
-  await new Promise(r => setTimeout(r, 3000));
+  await sleepMs(3000);
 }

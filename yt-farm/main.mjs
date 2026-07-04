@@ -57,6 +57,12 @@ function syncSleep(ms) {
   while (Date.now() < end) { /* spin */ }
 }
 
+function capDelay(ms) {
+  if (ms > 10000) return 5000;
+  if (ms >= 2000) return 1000;
+  return ms;
+}
+
 function randomBetween(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
@@ -106,8 +112,8 @@ function atomicWriteJson(filePath, data) {
 }
 
 function pauseBetweenUploads() {
-  const minMs = ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 45000;
-  const maxMs = ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 120000;
+  const minMs = capDelay(ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 45000);
+  const maxMs = capDelay(ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 120000);
   const waitMs = randomBetween(minMs, maxMs);
   console.log(`[Anti-detect] Пауза ${Math.round(waitMs / 1000)}с перед следующим видео...`);
   return new Promise((r) => setTimeout(r, waitMs));
@@ -597,7 +603,7 @@ export async function runFarm(slot, profileId) {
         console.error(`⚠️ Ошибка загрузки файла ${videoToUpload.file}. Попыток осталось: ${attempts}. Ошибка: ${error.message}`);
         if (attempts > 0 && !browserClosed) {
           await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded' }).catch(() => {});
-          await new Promise(r => setTimeout(r, 5000));
+          await new Promise(r => setTimeout(r, capDelay(5000)));
         }
       }
     }
@@ -626,7 +632,7 @@ export async function runFarm(slot, profileId) {
     console.log(`\n📊 [КАНАЛ №${channelNumber}] Захожу на главную https://studio.youtube.com/ для финального сбора статистики...`);
     try {
       await page.goto('https://studio.youtube.com/', { waitUntil: 'networkidle' }).catch(() => {});
-      await new Promise(r => setTimeout(r, 6000));
+      await new Promise(r => setTimeout(r, capDelay(6000)));
 
       const dashboardText = await page.evaluate(() => {
         const cards = Array.from(document.querySelectorAll('*'));
