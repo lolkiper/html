@@ -1,5 +1,5 @@
 {
-  "appId": "com.ytfarm.onboard",
+  "appId": "com.ytzahod.onboard",
   "productName": "YouTube-Onboard-Pro",
   "directories": {
     "output": "dist-onboard"
@@ -11,7 +11,7 @@
   "extraResources": [
     {
       "from": ".",
-      "to": "yt-farm",
+      "to": "yt-zahod",
       "filter": [
         "account-onboard.mjs",
         "dolphin-api.mjs",

@@ -11,7 +11,7 @@ function getDirs() {
   return {
     panelDir: __dirname,
     farmDir: isPackaged
-      ? path.join(process.resourcesPath, 'yt-farm')
+      ? path.join(process.resourcesPath, 'yt-zahod')
       : path.join(__dirname, '..'),
     baseDir: isPackaged
       ? path.dirname(process.execPath)
@@ -27,7 +27,7 @@ function getPaths() {
     RESULTS_FILE: path.join(baseDir, 'onboard-results.json'),
     EXAMPLE_CONFIG: path.join(farmDir, 'onboard-config.example.json'),
     EXAMPLE_ACCOUNTS: path.join(farmDir, 'accounts.example.txt'),
-    YT_FARM_DIR: farmDir,
+    YT_ZAHOD_DIR: farmDir,
     baseDir,
   };
 }
@@ -142,7 +142,7 @@ ipcMain.handle('start-onboard', async () => {
   }
 
   const p = getPaths();
-  const script = path.join(p.YT_FARM_DIR, 'account-onboard.mjs');
+  const script = path.join(p.YT_ZAHOD_DIR, 'account-onboard.mjs');
   if (!fs.existsSync(script)) {
     throw new Error(`Не найден ${script}`);
   }

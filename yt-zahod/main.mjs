@@ -504,8 +504,8 @@ export async function runFarm(slot, profileId) {
   if (!path.isAbsolute(finalVideosDir)) {
     finalVideosDir = path.join(baseDir, finalVideosDir);
   }
-  if (!fs.existsSync(finalVideosDir) && finalVideosDir.includes('yt-farm\\yt-farm')) {
-    finalVideosDir = finalVideosDir.replace('yt-farm\\yt-farm', 'yt-farm');
+  if (!fs.existsSync(finalVideosDir) && finalVideosDir.includes('yt-zahod\\yt-zahod')) {
+    finalVideosDir = finalVideosDir.replace('yt-zahod\\yt-zahod', 'yt-zahod');
   }
 
   if (!fs.existsSync(finalVideosDir)) {

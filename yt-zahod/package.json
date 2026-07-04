@@ -1,11 +1,11 @@
 {
-  "name": "yt-farm",
+  "name": "yt-zahod",
   "version": "1.0.0",
   "description": "YouTube Onboard Panel — Dolphin profiles, login, 2FA, English",
   "type": "module",
   "private": true,
   "main": "onboard-panel/main.mjs",
-  "author": "yt-farm",
+  "author": "yt-zahod",
   "scripts": {
     "farm": "node main.mjs",
     "start": "node main.mjs",
