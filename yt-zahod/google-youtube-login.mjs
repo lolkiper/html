@@ -41,32 +41,114 @@ async function pressNext(page) {
   if (!clicked) await page.keyboard.press('Enter').catch(() => {});
 }
 
+async function clickFirstInContexts(contexts, selectors) {
+  for (const ctx of contexts) {
+    for (const sel of selectors) {
+      const loc = ctx.locator(sel).first();
+      if (await loc.count().catch(() => 0)) {
+        await loc.click({ timeout: 8000 }).catch(() => {});
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function dismissCookieConsent(page) {
+  const acceptSelectors = [
+    '#L2AGLb',
+    'button#L2AGLb',
+    'button[aria-label*="Accept all"]',
+    'button[aria-label*="Alle akzeptieren"]',
+    'button:has-text("Accept all")',
+    'button:has-text("Alle akzeptieren")',
+    'button:has-text("Принять все")',
+    'button:has-text("Aceptar todo")',
+    'button:has-text("Tout accepter")',
+    'button:has-text("Accetta tutto")',
+    'button:has-text("Zaakceptuj wszystko")',
+    'form[action*="consent"] button:has-text("Accept")',
+    'form[action*="consent"] button:has-text("akzeptieren")',
+    'tp-yt-paper-button:has-text("Accept all")',
+    'tp-yt-paper-button:has-text("Alle akzeptieren")',
+    'ytd-button-renderer:has-text("Accept all")',
+    'ytd-button-renderer:has-text("Alle akzeptieren")',
+    '[role="dialog"] button:has-text("Accept")',
+    '[role="dialog"] button:has-text("akzeptieren")',
+  ];
+  const rejectSelectors = [
+    'button:has-text("Reject all")',
+    'button:has-text("Alle ablehnen")',
+    'button:has-text("Отклонить все")',
+    'button[aria-label*="Reject all"]',
+    'button[aria-label*="Alle ablehnen"]',
+  ];
+
+  const contexts = () => [page, ...page.frames().filter((f) => f !== page.mainFrame())];
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (await clickFirstInContexts(contexts(), acceptSelectors)) {
+      console.log('[Login] Закрыл окно cookies / согласия');
+      await sleep(2000);
+      return true;
+    }
+    if (await clickFirstInContexts(contexts(), rejectSelectors)) {
+      console.log('[Login] Закрыл окно cookies (Reject all)');
+      await sleep(2000);
+      return true;
+    }
+    await sleep(1000);
+  }
+
+  return false;
+}
+
 export async function loginGoogleOnYouTube(page, { email, password, totpSecret, totpWebsite }) {
-  console.log(`[Login] Открываю YouTube для входа: ${email}`);
-  await page.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 90000 });
+  console.log(`[Login] Открываю Google вход для YouTube: ${email}`);
+
+  await page.goto(
+    'https://accounts.google.com/signin/v2/identifier?service=youtube&continue=https://www.youtube.com/&hl=en',
+    { waitUntil: 'domcontentloaded', timeout: 90000 }
+  );
   await sleep(1500);
+  await dismissCookieConsent(page);
 
-  const signInClicked = await clickFirst(page, [
-    'a[href*="ServiceLogin"]',
-    'yt-button-shape a[href*="accounts.google"]',
-    'a:has-text("Sign in")',
-    'a:has-text("Войти")',
-    'a:has-text("Iniciar sesión")',
-    'tp-yt-paper-button:has-text("Sign in")',
-    'tp-yt-paper-button:has-text("Войти")',
-  ]);
+  const onGoogleLogin = await page.locator('#identifierId, input[type="email"]').first()
+    .isVisible({ timeout: 5000 }).catch(() => false);
 
-  if (!signInClicked) {
-    await page.goto('https://accounts.google.com/signin/v2/identifier?service=youtube', {
-      waitUntil: 'domcontentloaded',
-      timeout: 90000,
-    });
+  if (!onGoogleLogin) {
+    console.log('[Login] Не на странице входа — пробую YouTube...');
+    await page.goto('https://www.youtube.com/?hl=en', { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await sleep(1500);
+    await dismissCookieConsent(page);
+
+    const signInClicked = await clickFirst(page, [
+      'a[href*="ServiceLogin"]',
+      'yt-button-shape a[href*="accounts.google"]',
+      'a:has-text("Sign in")',
+      'a:has-text("Войти")',
+      'a:has-text("Anmelden")',
+      'a:has-text("Iniciar sesión")',
+      'tp-yt-paper-button:has-text("Sign in")',
+      'tp-yt-paper-button:has-text("Войти")',
+      'tp-yt-paper-button:has-text("Anmelden")',
+    ]);
+
+    if (!signInClicked) {
+      await page.goto(
+        'https://accounts.google.com/signin/v2/identifier?service=youtube&continue=https://www.youtube.com/&hl=en',
+        { waitUntil: 'domcontentloaded', timeout: 90000 }
+      );
+      await sleep(1500);
+      await dismissCookieConsent(page);
+    }
   }
 
   await page.waitForSelector('input[type="email"], #identifierId', { timeout: 60000 });
   await fillFirst(page, ['#identifierId', 'input[type="email"]'], email);
   await pressNext(page);
   await sleep(2000);
+  await dismissCookieConsent(page);
 
   await page.waitForSelector('input[type="password"], input[name="Passwd"]', { timeout: 60000 });
   await fillFirst(page, ['input[name="Passwd"]', 'input[type="password"]'], password);
@@ -103,8 +185,10 @@ export async function loginGoogleOnYouTube(page, { email, password, totpSecret, 
     throw new Error('Google запросил дополнительную проверку (капча/телефон) — нужен ручной вход');
   }
 
-  await page.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 90000 });
-  await sleep(2000);
+  await page.goto('https://www.youtube.com/?hl=en', { waitUntil: 'domcontentloaded', timeout: 90000 });
+  await sleep(1500);
+  await dismissCookieConsent(page);
+  await sleep(1000);
   console.log(`[Login] Вход выполнен: ${email}`);
 }
 
