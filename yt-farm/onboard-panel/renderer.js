@@ -28,7 +28,7 @@ function appendLog(line) {
 function setStatus(status) {
   const running = status === 'running';
   els.statusBadge.textContent = running ? 'Работает' : 'Готов';
-  els.statusBadge.className = `badge ${running ? 'running' : 'idle'}`;
+  els.statusBadge.className = `status-badge ${running ? 'running' : 'idle'}`;
   els.btnStart.disabled = running;
   els.btnStop.disabled = !running;
 }
@@ -68,7 +68,7 @@ async function refreshResults() {
       <td>${escapeHtml(a.error || '')}</td>
     </tr>`;
   }).join('');
-  els.resultsBody.innerHTML = rows || '<tr><td colspan="4">Пока нет результатов</td></tr>';
+  els.resultsBody.innerHTML = rows || '<tr><td colspan="4" class="empty-row">Пока нет результатов</td></tr>';
 }
 
 function escapeHtml(s) {
@@ -90,6 +90,9 @@ async function init() {
 
   const running = await window.onboardPanel.isRunning();
   setStatus(running ? 'running' : 'idle');
+
+  appendLog('[SYSTEM] Панель инициализирована');
+  appendLog('[READY] Ожидание нажатия кнопки START...');
 
   window.onboardPanel.onLog(appendLog);
   window.onboardPanel.onStatus(setStatus);
