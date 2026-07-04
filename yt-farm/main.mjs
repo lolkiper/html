@@ -67,11 +67,11 @@ const LOCK_MAX_WAIT_MS = SCHEDULE_SETTINGS.LOCK_MAX_WAIT_MS ?? 120000;
 
 // =============================================================================
 // MUTEX: эксклюзивные lock-файлы (channel-state.lock / history_profile_*.lock)
+// Асинхронное ожидание — не блокирует event loop (Playwright/CDP/Axios).
 // =============================================================================
 
-function syncSleep(ms) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) { /* spin */ }
+function asyncSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function capDelay(ms) {
@@ -84,7 +84,7 @@ function randomBetween(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
-function acquireFileLock(lockPath, label) {
+async function acquireFileLock(lockPath, label) {
   const started = Date.now();
   while (Date.now() - started < LOCK_MAX_WAIT_MS) {
     try {
@@ -99,7 +99,7 @@ function acquireFileLock(lockPath, label) {
           continue;
         }
       } catch { /* lock исчез */ }
-      syncSleep(LOCK_RETRY_MS);
+      await asyncSleep(LOCK_RETRY_MS);
     }
   }
   throw new Error(`Таймаут ожидания ${label} (${lockPath})`);
@@ -113,10 +113,10 @@ function releaseFileLock(lockPath) {
   } catch { /* уже снят */ }
 }
 
-function withFileLock(lockPath, label, fn) {
-  acquireFileLock(lockPath, label);
+async function withFileLock(lockPath, label, fn) {
+  await acquireFileLock(lockPath, label);
   try {
-    return fn();
+    return await fn();
   } finally {
     releaseFileLock(lockPath);
   }
@@ -266,29 +266,29 @@ function saveChannelStateUnsafe(state) {
   atomicWriteJson(CHANNEL_STATE_FILE, state);
 }
 
-function withChannelStateLock(fn) {
+async function withChannelStateLock(fn) {
   return withFileLock(CHANNEL_STATE_LOCK_FILE, 'channel-state.lock', fn);
 }
 
-function loadChannelState() {
+async function loadChannelState() {
   return withChannelStateLock(() => loadChannelStateUnsafe());
 }
 
-function mutateChannelState(mutator) {
-  return withChannelStateLock(() => {
+async function mutateChannelState(mutator) {
+  return withChannelStateLock(async () => {
     const state = loadChannelStateUnsafe();
-    const result = mutator(state);
+    const result = await mutator(state);
     saveChannelStateUnsafe(state);
     return result;
   });
 }
 
-function getChannelFromState(channelNumber) {
-  const state = loadChannelState();
+async function getChannelFromState(channelNumber) {
+  const state = await loadChannelState();
   return state.channels[String(channelNumber)] || null;
 }
 
-function syncChannelsFromMapping(profileMapping) {
+async function syncChannelsFromMapping(profileMapping) {
   return mutateChannelState((state) => {
     const discovered = { new: [], existing: [] };
 
@@ -419,29 +419,29 @@ function ensureChannelScheduleCapacity(channelNumber, uploadedCount, settings) {
   });
 }
 
-function getChannelBatchSlots(channelNumber, uploadedCount, batchSize) {
-  const channel = getChannelFromState(channelNumber);
+async function getChannelBatchSlots(channelNumber, uploadedCount, batchSize) {
+  const channel = await getChannelFromState(channelNumber);
   if (!channel?.schedule?.length) return [];
   return channel.schedule.slice(uploadedCount, uploadedCount + batchSize);
 }
 
-function prepareChannelSchedule(channelNumber, profileId, history, settings, legacySchedule) {
+async function prepareChannelSchedule(channelNumber, profileId, history, settings, legacySchedule) {
   const merged = mergeScheduleSettings(settings);
-  syncChannelsFromMapping({ [profileId]: [channelNumber] });
+  await syncChannelsFromMapping({ [profileId]: [channelNumber] });
 
-  const channel = getChannelFromState(channelNumber);
+  const channel = await getChannelFromState(channelNumber);
   const isInitialized = Boolean(channel?.initialized && channel.schedule?.length);
 
   let schedule =
-    migrateScheduleFromHistory(channelNumber, history, merged) ||
-    migrateScheduleFromLegacyConfig(channelNumber, legacySchedule, merged);
+    (await migrateScheduleFromHistory(channelNumber, history, merged)) ||
+    (await migrateScheduleFromLegacyConfig(channelNumber, legacySchedule, merged));
 
   if (!schedule) {
-    schedule = isInitialized ? channel.schedule : initializeChannelSchedule(channelNumber, merged);
+    schedule = isInitialized ? channel.schedule : await initializeChannelSchedule(channelNumber, merged);
   }
 
   const uploadedCount = (history.uploaded || []).filter((item) => item.channel === channelNumber).length;
-  schedule = ensureChannelScheduleCapacity(channelNumber, uploadedCount, merged);
+  schedule = await ensureChannelScheduleCapacity(channelNumber, uploadedCount, merged);
 
   return {
     schedule,
@@ -475,14 +475,14 @@ function loadHistoryUnsafe(historyFile) {
   catch (e) { return { uploaded: [] }; }
 }
 
-function loadHistory(profileId) {
+async function loadHistory(profileId) {
   const { historyFile, lockFile } = getHistoryPaths(profileId);
   return withFileLock(lockFile, 'history.lock', () => loadHistoryUnsafe(historyFile));
 }
 
-function saveToHistory(profileId, file, title, channelNum, scheduledTime) {
+async function saveToHistory(profileId, file, title, channelNum, scheduledTime) {
   const { historyFile, lockFile } = getHistoryPaths(profileId);
-  withFileLock(lockFile, 'history.lock', () => {
+  await withFileLock(lockFile, 'history.lock', () => {
     const history = loadHistoryUnsafe(historyFile);
     history.uploaded.push({
       file,
@@ -538,13 +538,13 @@ export async function runFarm(slot, profileId) {
   console.log(`\n📺 ================= ОБРАБОТКА КАНАЛА №${channelNumber} =================`);
 
   const allTitles = CONFIG.BASE_TITLES || [];
-  const history = loadHistory(directProfileId);
+  const history = await loadHistory(directProfileId);
   let availableVideos = [];
 
-  const discovered = syncChannelsFromMapping(CONFIG.PROFILE_MAPPING);
+  const discovered = await syncChannelsFromMapping(CONFIG.PROFILE_MAPPING);
   const isNewChannel = discovered.new.some((c) => c.channelNumber === channelNumber);
 
-  const schedulePrep = prepareChannelSchedule(
+  const schedulePrep = await prepareChannelSchedule(
     channelNumber,
     directProfileId,
     history,
@@ -585,7 +585,7 @@ export async function runFarm(slot, profileId) {
   const currentBatch = availableVideos.slice(0, BATCH_SIZE);
   console.log(`🎯 Слот ${CURRENT_SLOT} собрал пачку из ${currentBatch.length} видео для этого пакетного захода.`);
 
-  const batchTimeSlots = schedulePrep.batchSlots(currentBatch.length);
+  const batchTimeSlots = await schedulePrep.batchSlots(currentBatch.length);
   if (batchTimeSlots.length < currentBatch.length) {
     console.error(`❌ Не хватает тайм-слотов в расписании канала №${channelNumber} (нужно ${currentBatch.length}, есть ${batchTimeSlots.length})`);
     workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: мало слотов в расписании`);
@@ -641,7 +641,7 @@ export async function runFarm(slot, profileId) {
 
         success = true;
         totalUploadedInSession++;
-        saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
+        await saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
         console.log(`💾 Успешно запланировано! Файл ${videoToUpload.file} закреплен за временем ${videoTimeSlot}`);
       } catch (error) {
         if (error.message === 'BAN_DETECTED') { isBanned = true; break; }
@@ -715,7 +715,7 @@ export async function runFarm(slot, profileId) {
     }
   }
 
-  const finalHistory = loadHistory(directProfileId);
+  const finalHistory = await loadHistory(directProfileId);
   const currentChannelUploads = finalHistory.uploaded.filter(item => item.channel === channelNumber).length;
 
   console.log(JSON.stringify({
