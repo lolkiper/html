@@ -149,7 +149,15 @@ export class DolphinClient {
     };
   }
 
-  async createProfile({ name, proxy, platform = 'windows', browserVersion = '140' }) {
+  async createProfile(options = {}) {
+    const {
+      name,
+      proxy,
+      platform = 'windows',
+      browserVersion = '140',
+      mainWebsite = '',
+    } = options;
+
     const [userAgent, webglInfo] = await Promise.all([
       this.fetchUserAgent(platform, browserVersion),
       this.fetchWebglInfo(platform),
