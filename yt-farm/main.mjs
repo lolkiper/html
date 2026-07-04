@@ -13,33 +13,71 @@ import { fileURLToPath, pathToFileURL } from 'url';
  */
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
+let CONFIG_SOURCE = 'unknown';
+
+async function loadDotenvFiles() {
+  const candidates = [
+    path.join(APP_DIR, '.env'),
+    path.join(process.cwd(), '.env'),
+  ];
+  try {
+    const dotenv = await import('dotenv');
+    for (const envPath of candidates) {
+      if (fs.existsSync(envPath)) {
+        dotenv.config({ path: envPath, override: false });
+      }
+    }
+  } catch {
+    // dotenv опционален
+  }
+}
+
+function mergeEnvCredentials(raw) {
+  return {
+    ...raw,
+    DOLPHIN_API_URL: raw.DOLPHIN_API_URL || process.env.DOLPHIN_API_URL || '',
+    DOLPHIN_TOKEN: raw.DOLPHIN_TOKEN || process.env.DOLPHIN_TOKEN || '',
+  };
+}
 
 async function loadRawConfig() {
-  const envPath = path.join(APP_DIR, '.env');
-  if (fs.existsSync(envPath)) {
-    try {
-      const dotenv = await import('dotenv');
-      dotenv.config({ path: envPath });
-    } catch {
-      // dotenv опционален (для config.json не обязателен)
-    }
-  }
+  await loadDotenvFiles();
 
   const jsPath = path.join(APP_DIR, 'config.js');
   const jsonPath = path.join(APP_DIR, 'config.json');
 
   if (fs.existsSync(jsPath)) {
+    CONFIG_SOURCE = jsPath;
     const mod = await import(pathToFileURL(jsPath).href);
     if (!mod.CONFIG) throw new Error('config.js должен содержать: export const CONFIG = { ... }');
-    return mod.CONFIG;
+    return mergeEnvCredentials(mod.CONFIG);
   }
 
   if (fs.existsSync(jsonPath)) {
-    return JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+    CONFIG_SOURCE = jsonPath;
+    return mergeEnvCredentials(JSON.parse(fs.readFileSync(jsonPath, 'utf-8')));
   }
 
   throw new Error(
     `❌ Не найден config.js или config.json\n   Папка скрипта: ${APP_DIR}`
+  );
+}
+
+function assertDolphinConfig(config) {
+  const missing = [];
+  if (!config.DOLPHIN_API_URL) missing.push('DOLPHIN_API_URL');
+  if (!config.DOLPHIN_TOKEN) missing.push('DOLPHIN_TOKEN');
+  if (!missing.length) return;
+
+  const envInApp = fs.existsSync(path.join(APP_DIR, '.env'));
+  const envInCwd = fs.existsSync(path.join(process.cwd(), '.env'));
+
+  throw new Error(
+    `❌ Не заданы ${missing.join(' / ')}\n` +
+    `   Конфиг: ${CONFIG_SOURCE}\n` +
+    `   .env в папке скрипта: ${envInApp ? 'есть' : 'нет'} (${APP_DIR})\n` +
+    `   .env в cwd: ${envInCwd ? 'есть' : 'нет'} (${process.cwd()})\n` +
+    `   → Добавь в config.json или создай .env рядом с main.mjs`
   );
 }
 
@@ -70,11 +108,6 @@ const RAW_CONFIG = await loadRawConfig();
 assertRuntimeFiles();
 const CONFIG = normalizeConfig(RAW_CONFIG);
 const baseDir = APP_DIR;
-
-if (!CONFIG.DOLPHIN_API_URL || !CONFIG.DOLPHIN_TOKEN) {
-  console.error('❌ Не заданы DOLPHIN_API_URL / DOLPHIN_TOKEN (config.json или .env)');
-  process.exit(1);
-}
 
 const SCHEDULE_SETTINGS = CONFIG.SCHEDULE_SETTINGS || {};
 const ANTIDETECT = CONFIG.ANTIDETECT || {};
@@ -489,6 +522,13 @@ function saveToHistory(profileId, file, title, channelNum, scheduledTime) {
 }
 
 export async function runFarm(slot, profileId) {
+  try {
+    assertDolphinConfig(CONFIG);
+  } catch (err) {
+    console.error(err.message);
+    return;
+  }
+
   const CURRENT_SLOT = slot;
   const directProfileId = profileId;
   let finalVideosDir = CONFIG.VIDEOS_DIR;
@@ -738,5 +778,8 @@ export { APP_DIR, CONFIG };
 if (process.argv[2] && process.argv[3]) {
   const slot = parseInt(process.argv[2], 10);
   const profileId = process.argv[3];
-  runFarm(slot, profileId).catch(console.error);
+  runFarm(slot, profileId).catch((err) => {
+    console.error(`⚠️ Ошибка: ${err.message}`);
+    process.exit(1);
+  });
 }
