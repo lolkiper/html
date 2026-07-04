@@ -1,5 +1,8 @@
 import axios from 'axios';
 
+const DOLPHIN_API_VERSION = '2026-07-04c';
+export { DOLPHIN_API_VERSION };
+
 const DEFAULT_CLOUD = 'https://dolphin-anty-api.com';
 
 export function normalizeToken(token) {
@@ -155,7 +158,6 @@ export class DolphinClient {
       proxy,
       platform = 'windows',
       browserVersion = '140',
-      mainWebsite = '',
     } = options;
 
     const [userAgent, webglInfo] = await Promise.all([
@@ -168,7 +170,7 @@ export class DolphinClient {
       name: name || `YT-${Date.now()}`,
       platform,
       browserType: 'anty',
-      mainWebsite: mainWebsite ?? '',
+      mainWebsite: '',
       useragent: {
         mode: 'manual',
         value: userAgent,
