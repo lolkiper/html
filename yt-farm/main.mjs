@@ -214,8 +214,8 @@ function advanceScheduleSlot(date, hours) {
   }
 
   result.setHours(nextHour, 0, 0, 0);
-  result.setSeconds(0, 0);
-  return snapToQuarterHour(result);
+  result.setMinutes(0, 0, 0);
+  return result;
 }
 
 function addScheduleStep(date, settings) {
@@ -232,7 +232,8 @@ function getTomorrowAt(hour) {
 function generateInitialSchedule(slotCount, settings) {
   const hours = normalizeScheduleHours(settings);
   const schedule = [];
-  let current = snapToQuarterHour(getTomorrowAt(hours[0]));
+  let current = getTomorrowAt(hours[0]);
+  current.setMinutes(0, 0, 0);
   for (let i = 0; i < slotCount; i++) {
     schedule.push(formatScheduleTime(current));
     if (i < slotCount - 1) current = addScheduleStep(current, settings);

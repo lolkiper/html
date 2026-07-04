@@ -47,22 +47,6 @@ function buildTimeLabels(hour, minute) {
   return [...new Set([time24, time24Short, time12, time12Padded])];
 }
 
-function parseTimeListItem(text) {
-  const norm = (text || '').replace(/\u202f/g, ' ').replace(/\s+/g, ' ').trim();
-  let m = norm.match(/^(\d{1,2}):(\d{2})$/);
-  if (m) return { h: parseInt(m[1], 10), m: parseInt(m[2], 10) };
-  m = norm.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (m) {
-    let h = parseInt(m[1], 10);
-    const min = parseInt(m[2], 10);
-    const p = m[3].toUpperCase();
-    if (p === 'PM' && h !== 12) h += 12;
-    if (p === 'AM' && h === 12) h = 0;
-    return { h, m: min };
-  }
-  return null;
-}
-
 async function humanMouseMove(page, targetX, targetY) {
   const start = await page.evaluate(() => ({
     x: window.__farmMouseX ?? (80 + Math.floor(Math.random() * 320)),
@@ -353,40 +337,30 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     const [datePart, timePartRaw] = scheduledTime.split(' ');
     const [day, month, year] = datePart.split('.');
 
-    // Время в config — стандартные слоты 24ч (07:00, 13:15). В Studio кликаем
-    // стандарт, затем fuzz минут (1–10) прямо в поле → 07:08, 13:18...
+    // Время в config — стандарт :00 (07:00, 13:00). Кликаем ровно :00, fuzz → 07:08
     const [rawH, rawM] = timePartRaw.split(':').map(Number);
+    const targetH = rawH;
+    const targetM = 0;
 
-    // 1) Клик по стандартному слоту в списке (07:00, 07:15...)
-    // 2) Удалить последнюю цифру в поле и вставить random 1–10 → 07:08, 07:18...
     async function applyMinuteFuzz(timeInput) {
-      const { rand, minute: fuzzMinute } = computeMinuteFuzz(rawM);
-      const finalTime = `${String(rawH).padStart(2, '0')}:${String(fuzzMinute).padStart(2, '0')}`;
+      const { rand, minute: fuzzMinute } = computeMinuteFuzz(0);
+      const finalTime = `${String(targetH).padStart(2, '0')}:${String(fuzzMinute).padStart(2, '0')}`;
 
       await timeInput.focus();
       await humanDelay(150, 300);
-      await page.keyboard.press('End');
-
-      if (rand === 10) {
-        await page.keyboard.press('Backspace');
-        await page.keyboard.press('Backspace');
-        await page.keyboard.type(String(fuzzMinute).padStart(2, '0'), { delay: randomBetween(40, 90) });
-      } else {
-        await page.keyboard.press('Backspace');
-        await page.keyboard.type(String(rand), { delay: randomBetween(40, 90) });
-      }
-
+      await page.keyboard.press('Control+A');
+      await page.keyboard.type(finalTime, { delay: randomBetween(40, 90) });
       await page.keyboard.press('Tab').catch(() => page.keyboard.press('Enter').catch(() => {}));
-      console.log(`✅ Минуты fuzz: стандарт :${String(rawM).padStart(2, '0')} → rand ${rand} → ${finalTime}`);
+      console.log(`✅ Минуты fuzz: :00 → rand ${rand} → ${finalTime}`);
       return finalTime;
     }
 
     async function selectTimeByClick(timeInput) {
-      const targetH = rawH;
-      const targetM = rawM;
-      console.log(`[Робот] Кликаю стандарт в списке: ${String(targetH).padStart(2, '0')}:${String(targetM).padStart(2, '0')} (24ч/12ч)`);
+      console.log(`[Робот] Кликаю в списке ровно ${String(targetH).padStart(2, '0')}:00`);
 
-      const findAndClickInList = async () => page.evaluate(({ targetH: th, targetM: tm }) => {
+      const slotIndex = targetH * 4;
+
+      const findAndClickInList = async () => page.evaluate(({ targetH: th, slotIdx }) => {
         const listboxes = Array.from(document.querySelectorAll('ytcp-time-of-day-picker tp-yt-paper-listbox'));
         const listbox = listboxes[listboxes.length - 1];
         if (!listbox) return { ok: false, reason: 'listbox not found' };
@@ -412,10 +386,15 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
           || listbox.querySelector('iron-list')
           || listbox;
 
-        const tryClickVisible = () => {
+        const sample = listbox.querySelector('tp-yt-paper-item');
+        const itemHeight = sample?.getBoundingClientRect().height || 36;
+        scrollEl.scrollTop = Math.max(0, slotIdx * itemHeight - 40);
+        scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
+
+        const tryClickExact = () => {
           for (const item of listbox.querySelectorAll('tp-yt-paper-item')) {
             const parsed = parseItem(item.innerText || item.textContent);
-            if (parsed && parsed.h === th && parsed.m === tm) {
+            if (parsed && parsed.h === th && parsed.m === 0) {
               item.scrollIntoView({ block: 'center', behavior: 'instant' });
               item.click();
               return (item.innerText || item.textContent || '').trim();
@@ -424,23 +403,21 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
           return null;
         };
 
-        let matched = tryClickVisible();
+        let matched = tryClickExact();
         if (matched) return { ok: true, matched };
 
-        const step = 120;
-        const maxScroll = scrollEl.scrollHeight || 4000;
-        for (let top = 0; top <= maxScroll; top += step) {
+        for (let top = 0; top <= (scrollEl.scrollHeight || 4000); top += itemHeight) {
           scrollEl.scrollTop = top;
           scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
-          matched = tryClickVisible();
+          matched = tryClickExact();
           if (matched) return { ok: true, matched };
         }
 
         const visible = Array.from(listbox.querySelectorAll('tp-yt-paper-item'))
-          .slice(0, 6)
+          .slice(0, 8)
           .map((i) => (i.innerText || i.textContent || '').trim());
-        return { ok: false, reason: 'not found after scroll', visible };
-      }, { targetH, targetM });
+        return { ok: false, reason: ':00 not found', visible };
+      }, { targetH, slotIdx: slotIndex });
 
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
@@ -458,24 +435,6 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
             return;
           }
 
-          // Колесо мыши — доп. прокрутка
-          const timeListbox = page.locator('ytcp-time-of-day-picker tp-yt-paper-listbox').last();
-          const box = await timeListbox.boundingBox().catch(() => null);
-          if (box) {
-            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-            const slotIndex = targetH * 4 + Math.floor(targetM / 15);
-            for (let i = 0; i < Math.ceil(slotIndex / 3); i++) {
-              await page.mouse.wheel(0, 300);
-              await page.waitForTimeout(100);
-            }
-            const retry = await findAndClickInList();
-            if (retry.ok) {
-              console.log(`✅ Стандартный слот выбран (после wheel): ${retry.matched}`);
-              await applyMinuteFuzz(timeInput);
-              return;
-            }
-          }
-
           console.log(`⚠️ Попытка ${attempt}/5: ${result.reason}${result.visible?.length ? `, видно: ${result.visible.join(', ')}` : ''}`);
         } catch (err) {
           console.log(`⚠️ Попытка ${attempt}/5 выбора времени: ${err.message}`);
@@ -486,7 +445,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       }
 
       await page.screenshot({ path: 'time-list-error.png', fullPage: true }).catch(() => {});
-      throw new Error(`Не удалось выбрать ${String(targetH).padStart(2, '0')}:${String(targetM).padStart(2, '0')} в списке. См. time-list-error.png`);
+      throw new Error(`Не удалось выбрать ${String(targetH).padStart(2, '0')}:00 в списке. См. time-list-error.png`);
     }
 
     const monthsEn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
