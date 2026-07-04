@@ -1,18 +1,16 @@
 import { uploadVideo } from './youtube-studio.mjs';
+import { CONFIG } from './config-loader.mjs';
 import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 
 const baseDir = process.cwd();
-const configPath = path.join(baseDir, 'config.json');
 
-if (!fs.existsSync(configPath)) {
-  console.error(`❌ Критическая ошибка: Файл конфигурации не найден по пути: ${configPath}`);
+if (!CONFIG.DOLPHIN_API_URL || !CONFIG.DOLPHIN_TOKEN) {
+  console.error('❌ В config.js не заданы DOLPHIN_API_URL / DOLPHIN_TOKEN (проверь .env)');
   process.exit(1);
 }
-
-const CONFIG = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 const CURRENT_SLOT = process.argv[2] ? parseInt(process.argv[2]) : 1;
 const directProfileId = process.argv[3];
 

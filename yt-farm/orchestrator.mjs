@@ -1,19 +1,11 @@
 import { spawn } from 'child_process';
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { CONFIG } from './config-loader.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const baseDir = process.cwd();
-const configPath = path.join(baseDir, 'config.json');
-
-if (!fs.existsSync(configPath)) {
-  console.error(`❌ config.json не найден: ${configPath}`);
-  process.exit(1);
-}
-
-const CONFIG = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-const MAX_PARALLEL = CONFIG.MAX_PARALLEL_SLOTS ?? 1;
+const MAX_PARALLEL = CONFIG.MAX_PARALLEL_SLOTS;
 const farmScript = path.join(__dirname, 'upload-farm.mjs');
 
 function runChannel(slot, profileId) {
@@ -53,8 +45,7 @@ async function main() {
     return;
   }
 
-  console.log(`\n🔄 Оркестратор: ${profileIds.length} каналов в конфиге`);
-  console.log('ℹ️  Синхронизация channel-state и расписание — внутри upload-farm.mjs при старте каждого канала.');
+  console.log(`\n🔄 Оркестратор: ${profileIds.length} каналов, параллельность: ${MAX_PARALLEL}`);
 
   const exitCodes = await runPool(profileIds, async (profileId, idx) => {
     const channelNum = mapping[profileId]?.[0] ?? '?';
