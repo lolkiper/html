@@ -1,0 +1,22 @@
+# YouTube accounts file — one account per line
+# Format:  email:password:totp_secret
+#     or:  email:password:totp_secret:proxy_string
+#
+# The TOTP secret is the Base32 seed from your authenticator app.
+# If you have no 2FA on an account, leave the field empty:
+#   email:password:
+#
+# Proxy embedded in account line overrides proxies.txt.
+# Supported proxy formats:
+#   socks5://user:pass@host:port
+#   http://host:port
+#   host:port:user:pass
+
+# Example without proxy (proxy from proxies.txt will be used):
+example1@gmail.com:MyPassword123:JBSWY3DPEHPK3PXP
+
+# Example without 2FA:
+example2@gmail.com:AnotherPass456:
+
+# Example with proxy embedded directly:
+example3@gmail.com:Pass789!:ABCDEFGHIJKLMNOP:socks5://user:pass@192.168.1.1:1080

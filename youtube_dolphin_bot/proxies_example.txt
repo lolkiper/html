@@ -1,0 +1,14 @@
+# Proxies file — one proxy per line
+# Proxies are assigned to accounts round-robin.
+#
+# Supported formats:
+#   socks5://user:pass@host:port
+#   http://user:pass@host:port
+#   http://host:port
+#   host:port:user:pass
+#   host:port
+
+socks5://proxyuser:proxypass@111.222.333.44:1080
+http://proxyuser2:proxypass2@111.222.333.55:8080
+222.333.444.55:3128:login:password
+333.444.555.66:8080
