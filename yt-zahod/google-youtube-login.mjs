@@ -55,6 +55,14 @@ async function clickFirstInContexts(contexts, selectors) {
 }
 
 async function dismissCookieConsent(page) {
+  const buttonPatterns = [
+    /alle akzeptieren/i,
+    /accept all/i,
+    /принять все/i,
+    /reject all/i,
+    /alle ablehnen/i,
+  ];
+
   const acceptSelectors = [
     '#L2AGLb',
     'button#L2AGLb',
@@ -86,7 +94,19 @@ async function dismissCookieConsent(page) {
 
   const contexts = () => [page, ...page.frames().filter((f) => f !== page.mainFrame())];
 
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    for (const ctx of contexts()) {
+      for (const pattern of buttonPatterns) {
+        const btn = ctx.getByRole('button', { name: pattern }).first();
+        if (await btn.count().catch(() => 0)) {
+          await btn.click({ timeout: 8000, force: true }).catch(() => {});
+          console.log('[Login] Закрыл окно cookies / согласия');
+          await sleep(2000);
+          return true;
+        }
+      }
+    }
+
     if (await clickFirstInContexts(contexts(), acceptSelectors)) {
       console.log('[Login] Закрыл окно cookies / согласия');
       await sleep(2000);
