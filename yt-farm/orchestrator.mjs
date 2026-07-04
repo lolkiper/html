@@ -1,7 +1,30 @@
 import { spawn } from 'child_process';
+import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { CONFIG as RAW_CONFIG } from './config.js';
+import { fileURLToPath, pathToFileURL } from 'url';
+
+const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+async function loadRawConfig() {
+  const envPath = path.join(APP_DIR, '.env');
+  if (fs.existsSync(envPath)) {
+    try {
+      const dotenv = await import('dotenv');
+      dotenv.config({ path: envPath });
+    } catch { /* optional */ }
+  }
+
+  const jsPath = path.join(APP_DIR, 'config.js');
+  const jsonPath = path.join(APP_DIR, 'config.json');
+
+  if (fs.existsSync(jsPath)) {
+    return (await import(pathToFileURL(jsPath).href)).CONFIG;
+  }
+  if (fs.existsSync(jsonPath)) {
+    return JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  }
+  throw new Error(`❌ Нет config.js / config.json в ${APP_DIR}`);
+}
 
 function normalizeConfig(raw) {
   const schedule = raw.SCHEDULE_SETTINGS || {};
@@ -16,17 +39,20 @@ function normalizeConfig(raw) {
   };
 }
 
+const RAW_CONFIG = await loadRawConfig();
 const CONFIG = normalizeConfig(RAW_CONFIG);
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const baseDir = process.cwd();
 const MAX_PARALLEL = CONFIG.MAX_PARALLEL_SLOTS;
-const farmScript = path.join(__dirname, 'upload-farm.mjs');
+const farmScript = path.join(APP_DIR, 'upload-farm.mjs');
+
+if (!fs.existsSync(farmScript)) {
+  console.error(`❌ Не найден upload-farm.mjs в ${APP_DIR}`);
+  process.exit(1);
+}
 
 function runChannel(slot, profileId) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [farmScript, String(slot), profileId], {
-      cwd: baseDir,
+      cwd: APP_DIR,
       stdio: 'inherit',
       shell: false,
     });

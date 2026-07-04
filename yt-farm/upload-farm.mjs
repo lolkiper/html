@@ -1,9 +1,40 @@
 import { uploadVideo } from './youtube-studio.mjs';
-import { CONFIG as RAW_CONFIG } from './config.js';
 import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
+import { fileURLToPath, pathToFileURL } from 'url';
+
+const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+async function loadRawConfig() {
+  const envPath = path.join(APP_DIR, '.env');
+  if (fs.existsSync(envPath)) {
+    try {
+      const dotenv = await import('dotenv');
+      dotenv.config({ path: envPath });
+    } catch {
+      // dotenv опционален (для config.json не обязателен)
+    }
+  }
+
+  const jsPath = path.join(APP_DIR, 'config.js');
+  const jsonPath = path.join(APP_DIR, 'config.json');
+
+  if (fs.existsSync(jsPath)) {
+    const mod = await import(pathToFileURL(jsPath).href);
+    if (!mod.CONFIG) throw new Error('config.js должен содержать: export const CONFIG = { ... }');
+    return mod.CONFIG;
+  }
+
+  if (fs.existsSync(jsonPath)) {
+    return JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  }
+
+  throw new Error(
+    `❌ Не найден config.js или config.json\n   Папка скрипта: ${APP_DIR}`
+  );
+}
 
 function normalizeConfig(raw) {
   const schedule = raw.SCHEDULE_SETTINGS || {};
@@ -18,13 +49,26 @@ function normalizeConfig(raw) {
   };
 }
 
+function assertRuntimeFiles() {
+  const required = ['youtube-studio.mjs'];
+  const missing = required.filter((f) => !fs.existsSync(path.join(APP_DIR, f)));
+  if (missing.length) {
+    throw new Error(
+      `❌ В папке ${APP_DIR} не хватает файлов:\n   ${missing.join('\n   ')}`
+    );
+  }
+}
+
+const RAW_CONFIG = await loadRawConfig();
+assertRuntimeFiles();
 const CONFIG = normalizeConfig(RAW_CONFIG);
-const baseDir = process.cwd();
+const baseDir = APP_DIR;
 
 if (!CONFIG.DOLPHIN_API_URL || !CONFIG.DOLPHIN_TOKEN) {
-  console.error('❌ В config.js не заданы DOLPHIN_API_URL / DOLPHIN_TOKEN (проверь .env)');
+  console.error('❌ Не заданы DOLPHIN_API_URL / DOLPHIN_TOKEN (config.json или .env)');
   process.exit(1);
 }
+
 const CURRENT_SLOT = process.argv[2] ? parseInt(process.argv[2]) : 1;
 const directProfileId = process.argv[3];
 
@@ -68,7 +112,7 @@ function acquireFileLock(lockPath, label) {
           fs.unlinkSync(lockPath);
           continue;
         }
-      } catch { /* lock исчез — пробуем снова */ }
+      } catch { /* lock исчез */ }
       syncSleep(LOCK_RETRY_MS);
     }
   }
@@ -148,8 +192,7 @@ function addScheduleHours(date, hours) {
 
 function snapToQuarterHour(date) {
   const result = new Date(date.getTime());
-  const minutes = result.getMinutes();
-  result.setMinutes(Math.round(minutes / 15) * 15);
+  result.setMinutes(Math.round(result.getMinutes() / 15) * 15);
   result.setSeconds(0, 0);
   return result;
 }
@@ -167,8 +210,7 @@ function applySlotJitter(date, settings) {
 
 function addScheduleStep(date, settings) {
   const merged = mergeScheduleSettings(settings);
-  const base = addScheduleHours(date, merged.STEP_HOURS);
-  return applySlotJitter(base, merged);
+  return applySlotJitter(addScheduleHours(date, merged.STEP_HOURS), merged);
 }
 
 function getTomorrowAt(hour) {
@@ -220,10 +262,6 @@ function withChannelStateLock(fn) {
 
 function loadChannelState() {
   return withChannelStateLock(() => loadChannelStateUnsafe());
-}
-
-function saveChannelState(state) {
-  withChannelStateLock(() => saveChannelStateUnsafe(state));
 }
 
 function mutateChannelState(mutator) {
@@ -455,7 +493,7 @@ async function startFarm() {
   const channelData = CONFIG.PROFILE_MAPPING?.[directProfileId];
 
   if (!channelData || !channelData[0]) {
-    console.error(`\n❌ [ОШИБКА] Профиль Dolphin ID: ${directProfileId} не привязан ни к одному каналу в config.json! Пропускаю этот поток.`);
+    console.error(`\n❌ [ОШИБКА] Профиль Dolphin ID: ${directProfileId} не привязан ни к одному каналу в конфиге! Пропускаю этот поток.`);
 
     console.log(JSON.stringify({
       DATA_TYPE: "STATS_UPDATE",
