@@ -1,7 +1,22 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { CONFIG } from './config-loader.mjs';
+import { CONFIG as RAW_CONFIG } from './config.js';
+
+function normalizeConfig(raw) {
+  const schedule = raw.SCHEDULE_SETTINGS || {};
+  return {
+    ...raw,
+    MAX_PARALLEL_SLOTS: raw.MAX_PARALLEL_SLOTS ?? raw.CONCURRENCY_LIMIT ?? 1,
+    SCHEDULE_SETTINGS: {
+      ...schedule,
+      VIDEOS_PER_CHANNEL: schedule.VIDEOS_PER_CHANNEL ?? raw.VIDEOS_PER_CHANNEL ?? 16,
+    },
+    ANTIDETECT: raw.ANTIDETECT || {},
+  };
+}
+
+const CONFIG = normalizeConfig(RAW_CONFIG);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const baseDir = process.cwd();
