@@ -17,10 +17,82 @@ const CURRENT_SLOT = process.argv[2] ? parseInt(process.argv[2]) : 1;
 const directProfileId = process.argv[3];
 
 const HISTORY_FILE = path.join(baseDir, `history_profile_${directProfileId}.json`);
+const HISTORY_LOCK_FILE = path.join(baseDir, `history_profile_${directProfileId}.lock`);
 const CHANNEL_STATE_FILE = path.join(baseDir, 'channel-state.json');
+const CHANNEL_STATE_LOCK_FILE = path.join(baseDir, 'channel-state.lock');
 const SCHEDULE_SETTINGS = CONFIG.SCHEDULE_SETTINGS || {};
+const ANTIDETECT = CONFIG.ANTIDETECT || {};
 const VIDEOS_PER_CHANNEL = SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL ?? 16;
 const BATCH_SIZE = SCHEDULE_SETTINGS.BATCH_SIZE ?? 10;
+
+const LOCK_STALE_MS = SCHEDULE_SETTINGS.LOCK_STALE_MS ?? 5 * 60 * 1000;
+const LOCK_RETRY_MS = SCHEDULE_SETTINGS.LOCK_RETRY_MS ?? 250;
+const LOCK_MAX_WAIT_MS = SCHEDULE_SETTINGS.LOCK_MAX_WAIT_MS ?? 120000;
+
+// =============================================================================
+// MUTEX: эксклюзивные lock-файлы (channel-state.lock / history_profile_*.lock)
+// =============================================================================
+
+function syncSleep(ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { /* spin */ }
+}
+
+function randomBetween(min, max) {
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function acquireFileLock(lockPath, label) {
+  const started = Date.now();
+  while (Date.now() - started < LOCK_MAX_WAIT_MS) {
+    try {
+      fs.writeFileSync(lockPath, `${process.pid}\n${Date.now()}`, { flag: 'wx' });
+      return;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      try {
+        const stat = fs.statSync(lockPath);
+        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+      } catch { /* lock исчез — пробуем снова */ }
+      syncSleep(LOCK_RETRY_MS);
+    }
+  }
+  throw new Error(`Таймаут ожидания ${label} (${lockPath})`);
+}
+
+function releaseFileLock(lockPath) {
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf-8');
+    const lockPid = parseInt(raw.split('\n')[0], 10);
+    if (lockPid === process.pid) fs.unlinkSync(lockPath);
+  } catch { /* уже снят */ }
+}
+
+function withFileLock(lockPath, label, fn) {
+  acquireFileLock(lockPath, label);
+  try {
+    return fn();
+  } finally {
+    releaseFileLock(lockPath);
+  }
+}
+
+function atomicWriteJson(filePath, data) {
+  const tmpPath = `${filePath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, filePath);
+}
+
+function pauseBetweenUploads() {
+  const minMs = ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 45000;
+  const maxMs = ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 120000;
+  const waitMs = randomBetween(minMs, maxMs);
+  console.log(`[Anti-detect] Пауза ${Math.round(waitMs / 1000)}с перед следующим видео...`);
+  return new Promise((r) => setTimeout(r, waitMs));
+}
 
 // =============================================================================
 // РАСПИСАНИЕ КАНАЛОВ (per-channel state в channel-state.json)
@@ -32,6 +104,8 @@ const SCHEDULE_DEFAULTS = {
   LOW_SCHEDULE_THRESHOLD: 10,
   VIDEOS_PER_CHANNEL: 16,
   SCHEDULE_EXTENSION_BUFFER: 16,
+  JITTER_MIN_MINUTES: 10,
+  JITTER_MAX_MINUTES: 15,
 };
 
 function mergeScheduleSettings(settings = {}) {
@@ -60,6 +134,31 @@ function addScheduleHours(date, hours) {
   return result;
 }
 
+function snapToQuarterHour(date) {
+  const result = new Date(date.getTime());
+  const minutes = result.getMinutes();
+  result.setMinutes(Math.round(minutes / 15) * 15);
+  result.setSeconds(0, 0);
+  return result;
+}
+
+function randomJitterMinutes(settings) {
+  const merged = mergeScheduleSettings(settings);
+  return randomBetween(merged.JITTER_MIN_MINUTES, merged.JITTER_MAX_MINUTES);
+}
+
+function applySlotJitter(date, settings) {
+  const result = new Date(date.getTime());
+  result.setMinutes(result.getMinutes() + randomJitterMinutes(settings));
+  return snapToQuarterHour(result);
+}
+
+function addScheduleStep(date, settings) {
+  const merged = mergeScheduleSettings(settings);
+  const base = addScheduleHours(date, merged.STEP_HOURS);
+  return applySlotJitter(base, merged);
+}
+
 function getTomorrowAt(hour) {
   const d = new Date();
   d.setDate(d.getDate() + 1);
@@ -69,12 +168,11 @@ function getTomorrowAt(hour) {
 
 function generateInitialSchedule(slotCount, settings) {
   const merged = mergeScheduleSettings(settings);
-  const start = getTomorrowAt(merged.NEW_CHANNEL_START_HOUR);
   const schedule = [];
-  let current = new Date(start);
+  let current = applySlotJitter(getTomorrowAt(merged.NEW_CHANNEL_START_HOUR), merged);
   for (let i = 0; i < slotCount; i++) {
     schedule.push(formatScheduleTime(current));
-    current = addScheduleHours(current, merged.STEP_HOURS);
+    if (i < slotCount - 1) current = addScheduleStep(current, merged);
   }
   return schedule;
 }
@@ -85,13 +183,13 @@ function extendSchedule(existingSchedule, slotsToAdd, settings) {
   const extended = [...existingSchedule];
   let last = parseScheduleTime(extended[extended.length - 1]);
   for (let i = 0; i < slotsToAdd; i++) {
-    last = addScheduleHours(last, merged.STEP_HOURS);
+    last = addScheduleStep(last, merged);
     extended.push(formatScheduleTime(last));
   }
   return extended;
 }
 
-function loadChannelState() {
+function loadChannelStateUnsafe() {
   if (!fs.existsSync(CHANNEL_STATE_FILE)) return { version: 1, channels: {} };
   try {
     return JSON.parse(fs.readFileSync(CHANNEL_STATE_FILE, 'utf-8'));
@@ -100,10 +198,29 @@ function loadChannelState() {
   }
 }
 
+function saveChannelStateUnsafe(state) {
+  atomicWriteJson(CHANNEL_STATE_FILE, state);
+}
+
+function withChannelStateLock(fn) {
+  return withFileLock(CHANNEL_STATE_LOCK_FILE, 'channel-state.lock', fn);
+}
+
+function loadChannelState() {
+  return withChannelStateLock(() => loadChannelStateUnsafe());
+}
+
 function saveChannelState(state) {
-  const tmpPath = `${CHANNEL_STATE_FILE}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, CHANNEL_STATE_FILE);
+  withChannelStateLock(() => saveChannelStateUnsafe(state));
+}
+
+function mutateChannelState(mutator) {
+  return withChannelStateLock(() => {
+    const state = loadChannelStateUnsafe();
+    const result = mutator(state);
+    saveChannelStateUnsafe(state);
+    return result;
+  });
 }
 
 function getChannelFromState(channelNumber) {
@@ -112,132 +229,134 @@ function getChannelFromState(channelNumber) {
 }
 
 function syncChannelsFromMapping(profileMapping) {
-  const state = loadChannelState();
-  let changed = false;
-  const discovered = { new: [], existing: [] };
+  return mutateChannelState((state) => {
+    const discovered = { new: [], existing: [] };
 
-  for (const [profileId, channelData] of Object.entries(profileMapping || {})) {
-    const channelNumber = channelData?.[0];
-    if (!channelNumber) continue;
-    const key = String(channelNumber);
+    for (const [profileId, channelData] of Object.entries(profileMapping || {})) {
+      const channelNumber = channelData?.[0];
+      if (!channelNumber) continue;
+      const key = String(channelNumber);
 
-    if (!state.channels[key]) {
-      state.channels[key] = {
-        channelNumber,
-        profileId,
-        initialized: false,
-        schedule: [],
-        createdAt: new Date().toISOString(),
-      };
-      discovered.new.push({ channelNumber, profileId });
-      changed = true;
-    } else {
-      discovered.existing.push({ channelNumber, profileId });
-      if (state.channels[key].profileId !== profileId) {
-        state.channels[key].profileId = profileId;
-        changed = true;
+      if (!state.channels[key]) {
+        state.channels[key] = {
+          channelNumber,
+          profileId,
+          initialized: false,
+          schedule: [],
+          createdAt: new Date().toISOString(),
+        };
+        discovered.new.push({ channelNumber, profileId });
+      } else {
+        discovered.existing.push({ channelNumber, profileId });
+        if (state.channels[key].profileId !== profileId) {
+          state.channels[key].profileId = profileId;
+        }
       }
     }
-  }
 
-  if (changed) saveChannelState(state);
-  return { state, discovered };
+    return discovered;
+  });
 }
 
 function migrateScheduleFromHistory(channelNumber, history, settings) {
   const merged = mergeScheduleSettings(settings);
-  const state = loadChannelState();
-  const key = String(channelNumber);
-  const channel = state.channels[key];
-  if (!channel) return null;
 
-  const uploads = (history.uploaded || [])
-    .filter((item) => item.channel === channelNumber && item.scheduledFor)
-    .sort((a, b) => parseScheduleTime(a.scheduledFor) - parseScheduleTime(b.scheduledFor));
+  return mutateChannelState((state) => {
+    const key = String(channelNumber);
+    const channel = state.channels[key];
+    if (!channel) return null;
 
-  if (!uploads.length) return null;
-  if (channel.initialized && channel.schedule.length) return channel.schedule;
+    const uploads = (history.uploaded || [])
+      .filter((item) => item.channel === channelNumber && item.scheduledFor)
+      .sort((a, b) => parseScheduleTime(a.scheduledFor) - parseScheduleTime(b.scheduledFor));
 
-  const schedule = uploads.map((u) => u.scheduledFor);
-  const uploadedCount = uploads.length;
-  const remaining = merged.VIDEOS_PER_CHANNEL - uploadedCount;
+    if (!uploads.length) return null;
+    if (channel.initialized && channel.schedule.length) return channel.schedule;
 
-  channel.schedule = remaining > 0
-    ? extendSchedule(schedule, Math.max(remaining, merged.LOW_SCHEDULE_THRESHOLD), merged)
-    : schedule;
-  channel.initialized = true;
-  channel.initializedAt = channel.initializedAt || new Date().toISOString();
-  channel.migratedFromHistory = true;
-  state.channels[key] = channel;
-  saveChannelState(state);
+    const schedule = uploads.map((u) => u.scheduledFor);
+    const uploadedCount = uploads.length;
+    const remaining = merged.VIDEOS_PER_CHANNEL - uploadedCount;
 
-  console.log(`[Schedule] Канал №${channelNumber}: миграция из history (${uploadedCount} слотов, всего ${channel.schedule.length})`);
-  return channel.schedule;
+    channel.schedule = remaining > 0
+      ? extendSchedule(schedule, Math.max(remaining, merged.LOW_SCHEDULE_THRESHOLD), merged)
+      : schedule;
+    channel.initialized = true;
+    channel.initializedAt = channel.initializedAt || new Date().toISOString();
+    channel.migratedFromHistory = true;
+
+    console.log(`[Schedule] Канал №${channelNumber}: миграция из history (${uploadedCount} слотов, всего ${channel.schedule.length})`);
+    return channel.schedule;
+  });
 }
 
 function migrateScheduleFromLegacyConfig(channelNumber, legacySchedule, settings) {
   if (!legacySchedule?.length) return null;
-  const state = loadChannelState();
-  const key = String(channelNumber);
-  const channel = state.channels[key];
-  if (!channel || channel.initialized) return channel?.schedule || null;
 
-  channel.schedule = [...legacySchedule];
-  channel.initialized = true;
-  channel.initializedAt = new Date().toISOString();
-  channel.migratedFromLegacyConfig = true;
-  state.channels[key] = channel;
-  saveChannelState(state);
+  return mutateChannelState((state) => {
+    const key = String(channelNumber);
+    const channel = state.channels[key];
+    if (!channel || channel.initialized) return channel?.schedule || null;
 
-  console.log(`[Schedule] Канал №${channelNumber}: миграция из CONFIG.SCHEDULE (${legacySchedule.length} слотов)`);
-  return channel.schedule;
+    channel.schedule = [...legacySchedule];
+    channel.initialized = true;
+    channel.initializedAt = new Date().toISOString();
+    channel.migratedFromLegacyConfig = true;
+
+    console.log(`[Schedule] Канал №${channelNumber}: миграция из CONFIG.SCHEDULE (${legacySchedule.length} слотов)`);
+    return channel.schedule;
+  });
 }
 
 function initializeChannelSchedule(channelNumber, settings) {
   const merged = mergeScheduleSettings(settings);
-  const state = loadChannelState();
-  const key = String(channelNumber);
-  const channel = state.channels[key];
-  if (!channel) throw new Error(`Канал №${channelNumber} не найден в channel-state.json`);
 
-  if (channel.initialized && channel.schedule.length) return channel.schedule;
+  return mutateChannelState((state) => {
+    const key = String(channelNumber);
+    const channel = state.channels[key];
+    if (!channel) throw new Error(`Канал №${channelNumber} не найден в channel-state.json`);
+    if (channel.initialized && channel.schedule.length) return channel.schedule;
 
-  channel.schedule = generateInitialSchedule(merged.VIDEOS_PER_CHANNEL, merged);
-  channel.initialized = true;
-  channel.initializedAt = new Date().toISOString();
-  state.channels[key] = channel;
-  saveChannelState(state);
+    channel.schedule = generateInitialSchedule(merged.VIDEOS_PER_CHANNEL, merged);
+    channel.initialized = true;
+    channel.initializedAt = new Date().toISOString();
 
-  console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, шаг ${merged.STEP_HOURS}ч)`);
-  return channel.schedule;
+    console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, шаг ${merged.STEP_HOURS}ч + jitter)`);
+    return channel.schedule;
+  });
 }
 
 function ensureChannelScheduleCapacity(channelNumber, uploadedCount, settings) {
   const merged = mergeScheduleSettings(settings);
-  const state = loadChannelState();
-  const key = String(channelNumber);
-  const channel = state.channels[key];
 
-  if (!channel?.initialized) return initializeChannelSchedule(channelNumber, merged);
+  return mutateChannelState((state) => {
+    const key = String(channelNumber);
+    const channel = state.channels[key];
+    if (!channel) throw new Error(`Канал №${channelNumber} не найден в channel-state.json`);
 
-  const remainingSlots = channel.schedule.length - uploadedCount;
-  if (remainingSlots < merged.LOW_SCHEDULE_THRESHOLD) {
-    const videosStillNeeded = Math.max(0, merged.VIDEOS_PER_CHANNEL - uploadedCount);
-    const targetRemaining = Math.max(videosStillNeeded, merged.LOW_SCHEDULE_THRESHOLD, merged.SCHEDULE_EXTENSION_BUFFER);
-    const slotsToAdd = targetRemaining - remainingSlots;
-
-    if (slotsToAdd > 0) {
-      const before = channel.schedule.length;
-      const lastSlot = channel.schedule[channel.schedule.length - 1];
-      channel.schedule = extendSchedule(channel.schedule, slotsToAdd, merged);
-      channel.lastExtendedAt = new Date().toISOString();
-      state.channels[key] = channel;
-      saveChannelState(state);
-      console.log(`[Schedule] Канал №${channelNumber}: продлено ${before} → ${channel.schedule.length} (последний был ${lastSlot}, новый ${channel.schedule[channel.schedule.length - 1]})`);
+    if (!channel.initialized) {
+      channel.schedule = generateInitialSchedule(merged.VIDEOS_PER_CHANNEL, merged);
+      channel.initialized = true;
+      channel.initializedAt = new Date().toISOString();
+      return channel.schedule;
     }
-  }
 
-  return channel.schedule;
+    const remainingSlots = channel.schedule.length - uploadedCount;
+    if (remainingSlots < merged.LOW_SCHEDULE_THRESHOLD) {
+      const videosStillNeeded = Math.max(0, merged.VIDEOS_PER_CHANNEL - uploadedCount);
+      const targetRemaining = Math.max(videosStillNeeded, merged.LOW_SCHEDULE_THRESHOLD, merged.SCHEDULE_EXTENSION_BUFFER);
+      const slotsToAdd = targetRemaining - remainingSlots;
+
+      if (slotsToAdd > 0) {
+        const before = channel.schedule.length;
+        const lastSlot = channel.schedule[channel.schedule.length - 1];
+        channel.schedule = extendSchedule(channel.schedule, slotsToAdd, merged);
+        channel.lastExtendedAt = new Date().toISOString();
+        console.log(`[Schedule] Канал №${channelNumber}: продлено ${before} → ${channel.schedule.length} (последний был ${lastSlot}, новый ${channel.schedule[channel.schedule.length - 1]})`);
+      }
+    }
+
+    return channel.schedule;
+  });
 }
 
 function getChannelBatchSlots(channelNumber, uploadedCount, batchSize) {
@@ -283,22 +402,28 @@ function shuffle(array) {
   return array;
 }
 
-function loadHistory() {
+function loadHistoryUnsafe() {
   if (!fs.existsSync(HISTORY_FILE)) return { uploaded: [] };
   try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8')); }
   catch (e) { return { uploaded: [] }; }
 }
 
+function loadHistory() {
+  return withFileLock(HISTORY_LOCK_FILE, 'history.lock', () => loadHistoryUnsafe());
+}
+
 function saveToHistory(file, title, channelNum, scheduledTime) {
-  const history = loadHistory();
-  history.uploaded.push({
-    file: file,
-    title: title,
-    channel: channelNum,
-    scheduledFor: scheduledTime,
-    date: new Date().toLocaleString()
+  withFileLock(HISTORY_LOCK_FILE, 'history.lock', () => {
+    const history = loadHistoryUnsafe();
+    history.uploaded.push({
+      file: file,
+      title: title,
+      channel: channelNum,
+      scheduledFor: scheduledTime,
+      date: new Date().toLocaleString()
+    });
+    atomicWriteJson(HISTORY_FILE, history);
   });
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2), 'utf-8');
 }
 
 async function startFarm() {
@@ -341,7 +466,7 @@ async function startFarm() {
   const history = loadHistory();
   let availableVideos = [];
 
-  const { discovered } = syncChannelsFromMapping(CONFIG.PROFILE_MAPPING);
+  const { discovered } = { discovered: syncChannelsFromMapping(CONFIG.PROFILE_MAPPING) };
   const isNewChannel = discovered.new.some((c) => c.channelNumber === channelNumber);
 
   const schedulePrep = prepareChannelSchedule(
@@ -461,6 +586,10 @@ async function startFarm() {
     if (!success) {
       console.log(`🔴 Файл ${videoToUpload.file} не удалось выложить за 3 попытки. Защита от сдвигов: прерываем сессию, сохраняя время ${videoTimeSlot} для следующего перезапуска.`);
       break;
+    }
+
+    if (i < currentBatch.length - 1 && !isBanned && !browserClosed) {
+      await pauseBetweenUploads();
     }
   }
 

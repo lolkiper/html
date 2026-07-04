@@ -1,6 +1,79 @@
 import path from 'path';
 import fs from 'fs';
 
+// =============================================================================
+// АНТИ-ДЕТЕКТ: человеческие паузы и движение курсора
+// =============================================================================
+
+function randomBetween(min, max) {
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function humanDelay(minMs = 300, maxMs = 900) {
+  return new Promise((r) => setTimeout(r, randomBetween(minMs, maxMs)));
+}
+
+async function humanMouseMove(page, targetX, targetY) {
+  const start = await page.evaluate(() => ({
+    x: window.__farmMouseX ?? (80 + Math.floor(Math.random() * 320)),
+    y: window.__farmMouseY ?? (80 + Math.floor(Math.random() * 220)),
+  })).catch(() => ({ x: 200, y: 200 }));
+
+  const steps = randomBetween(10, 22);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const ease = t * t * (3 - 2 * t);
+    const x = start.x + (targetX - start.x) * ease + randomBetween(-3, 3);
+    const y = start.y + (targetY - start.y) * ease + randomBetween(-3, 3);
+    await page.mouse.move(x, y);
+    await page.waitForTimeout(randomBetween(8, 28));
+  }
+
+  await page.evaluate(({ x, y }) => {
+    window.__farmMouseX = x;
+    window.__farmMouseY = y;
+  }, { x: targetX, y: targetY }).catch(() => {});
+}
+
+async function humanClick(page, target, options = {}) {
+  if (target && typeof target.scrollIntoViewIfNeeded !== 'function') {
+    const box = await target.boundingBox().catch(() => null);
+    if (box) {
+      const x = box.x + box.width * (0.28 + Math.random() * 0.44);
+      const y = box.y + box.height * (0.28 + Math.random() * 0.44);
+      await humanMouseMove(page, x, y);
+      await page.waitForTimeout(randomBetween(60, 220));
+      await page.mouse.click(x, y, { delay: randomBetween(45, 160) });
+      return;
+    }
+    await target.click({ delay: randomBetween(50, 140), ...options });
+    return;
+  }
+
+  const locator = typeof target === 'string' ? page.locator(target).first() : target;
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await humanDelay(120, 400);
+
+  const box = await locator.boundingBox().catch(() => null);
+  if (!box) {
+    await locator.click({ delay: randomBetween(50, 140), ...options });
+    return;
+  }
+
+  const x = box.x + box.width * (0.28 + Math.random() * 0.44);
+  const y = box.y + box.height * (0.28 + Math.random() * 0.44);
+  await humanMouseMove(page, x, y);
+  await page.waitForTimeout(randomBetween(60, 220));
+  await page.mouse.click(x, y, { delay: randomBetween(45, 160) });
+}
+
+async function humanType(page, text, delayRange = [55, 130]) {
+  for (const char of text) {
+    await page.keyboard.type(char, { delay: randomBetween(delayRange[0], delayRange[1]) });
+    if (Math.random() < 0.04) await page.waitForTimeout(randomBetween(180, 520));
+  }
+}
+
 /**
  * Функция загрузки и планирования Shorts на YouTube (С чистыми CSS-селекторами)
  * @param {object} page - Объект страницы Playwright
@@ -40,10 +113,10 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     console.log(`⚠️ Окно загрузки не определилось автоматом. Включаю резервный кликер по кнопке "Создать"...`);
     try {
       const createBtn = await page.waitForSelector('#create-icon, button:has-text("Создать"), button:has-text("Create"), button:has-text("Crear")', { timeout: 15000 });
-      await createBtn.click();
-      await new Promise(r => setTimeout(r, 1500)); 
+      await humanClick(page, createBtn);
+      await humanDelay(1200, 2200);
       const uploadOption = await page.waitForSelector('#upload-item, ytcp-text-menu-item:has-text("Добавить видео"), ytcp-text-menu-item:has-text("Upload videos"), ytcp-text-menu-item:has-text("Subir vídeos")', { timeout: 10000 });
-      await uploadOption.click();
+      await humanClick(page, uploadOption);
       
       await page.waitForSelector('input[type="file"]', { state: 'attached', timeout: 10000 });
     } catch (manualError) {
@@ -114,12 +187,12 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
   if (!titleField) {
     throw new Error('Не удалось найти поле ввода названия видео.');
   }
-  await new Promise(r => setTimeout(r, 2000)); 
-  
+  await humanDelay(1500, 2800);
+
   await titleField.focus();
   await page.keyboard.press('Control+A').catch(() => {});
   await page.keyboard.press('Backspace').catch(() => {});
-  await titleField.fill(videoToUpload.title);
+  await humanType(page, videoToUpload.title);
   console.log(`[Робот] Перехожу к пошаговому прохождению вкладок...`);
   
   for (let i = 0; i < 3; i++) {
@@ -148,7 +221,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         // лежит слой material-ripple, который перехватывает pointer-события
         // и никогда не "стабилизируется". force: true отключает эту проверку
         // и кликает напрямую по центру элемента.
-        await kidsRadio.click({ force: true, timeout: 8000 });
+        await kidsRadio.click({ force: true, timeout: 8000 }).catch(() => humanClick(page, kidsRadio));
         console.log("✅ Успешно отмечено: 'Нет, это видео не для детей'");
         await page.waitForTimeout(1500);
         kidsSelected = true;
@@ -164,7 +237,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         try {
           await backupTextClick.scrollIntoViewIfNeeded().catch(() => {});
           // ФИКС: тот же force: true — та же причина зависания на клике
-          await backupTextClick.click({ force: true, timeout: 8000 });
+          await backupTextClick.click({ force: true, timeout: 8000 }).catch(() => humanClick(page, backupTextClick));
           console.log("✅ Сработал запасной клик по тексту 'Не для детей'");
           await page.waitForTimeout(1500);
           kidsSelected = true;
@@ -203,11 +276,11 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     }
     
     await page.waitForSelector('#next-button', { timeout: 15000 });
-    await page.click('#next-button');
-    await new Promise(r => setTimeout(r, 2000));
+    await humanClick(page, '#next-button');
+    await humanDelay(1600, 3200);
   }
 
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(randomBetween(2200, 4200));
 
   // =========================================================================
   // 🔥 НАЧАЛО ШАГА №4: ЗАЩИЩЕННОЕ ПЛАНИРОВАНИЕ (ФИКС ПО РЕКОМЕНДАЦИЯМ)
@@ -252,7 +325,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       const deadline = Date.now() + 4000;
       while (Date.now() < deadline) {
         if (await suggestion.isVisible({ timeout: 300 }).catch(() => false)) {
-          await suggestion.click();
+          await humanClick(page, suggestion);
           return true;
         }
         await page.waitForTimeout(200);
@@ -279,8 +352,8 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
 
       await scheduleExpandButton.waitFor({ state: 'attached', timeout: 15000 });
       await scheduleExpandButton.scrollIntoViewIfNeeded().catch(() => {});
-      await scheduleExpandButton.click({ force: true, timeout: 5000 });
-      await page.waitForTimeout(1500);
+      await humanClick(page, scheduleExpandButton);
+      await humanDelay(1200, 2200);
 
       // Раскрытие могло не сработать (например, секция уже была открыта другим
       // способом) — на всякий случай кликаем ещё раз по самому контейнеру, если
@@ -289,8 +362,8 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       const pickerVisible = await datetimePickerProbe.isVisible({ timeout: 3000 }).catch(() => false);
       if (!pickerVisible) {
         console.log(`⚠️ Пикер даты/времени не появился после первого клика, пробую ещё раз...`);
-        await page.locator('#second-container').first().click({ force: true }).catch(() => {});
-        await page.waitForTimeout(1500);
+        await page.locator('#second-container').first().click({ force: true }).catch(() => humanClick(page, '#second-container'));
+        await humanDelay(1200, 2000);
       }
 
       // === 1.5 УСТАНОВКА ЧАСОВОГО ПОЯСА GMT+03:00 ===
@@ -311,8 +384,8 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         ).first();
         await tzButton.waitFor({ state: 'visible', timeout: 10000 });
         await tzButton.scrollIntoViewIfNeeded().catch(() => {});
-        await tzButton.click();
-        await page.waitForTimeout(1000);
+        await humanClick(page, tzButton);
+        await humanDelay(800, 1500);
 
         // Список часовых поясов: ytcp-text-menu > tp-yt-paper-listbox#paper-list.
         // Селектор жёстко привязан к ytcp-text-menu (а не общий tp-yt-paper-listbox),
@@ -329,7 +402,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
 
         await tzOption.waitFor({ state: 'attached', timeout: 5000 });
         await tzOption.scrollIntoViewIfNeeded().catch(() => {});
-        await tzOption.click();
+        await humanClick(page, tzOption);
         console.log(`✅ Часовой пояс установлен: GMT+03:00`);
 
         // Ждём, пока попап реально закроется, чтобы он не мешал следующему
@@ -354,8 +427,8 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       const dateTrigger = page.locator('ytcp-visibility-scheduler ytcp-datetime-picker #datepicker-trigger').first();
       await dateTrigger.waitFor({ state: 'visible', timeout: 10000 });
       await dateTrigger.scrollIntoViewIfNeeded().catch(() => {});
-      await dateTrigger.click({ force: true });
-      await page.waitForTimeout(1000);
+      await humanClick(page, dateTrigger);
+      await humanDelay(800, 1500);
 
       // Пытаемся выбрать день кликом по нужной ячейке.
       // ФИКС: реальная разметка календаря — это НЕ кнопки и НЕ [role="gridcell"],
@@ -391,7 +464,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
           .first();
         await dayCell.waitFor({ state: 'visible', timeout: 5000 });
         await dayCell.scrollIntoViewIfNeeded().catch(() => {});
-        await dayCell.click({ force: true });
+        await humanClick(page, dayCell);
         dayClicked = true;
       } catch (dayErr) {
         console.log(`⚠️ Не смог кликнуть день ${targetDay} месяца ${targetMonthLabel}: ${dayErr.message}`);
@@ -415,8 +488,8 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       const timeInput = page.locator('ytcp-visibility-scheduler ytcp-datetime-picker #time-of-day-container input').first();
       await timeInput.waitFor({ state: 'visible', timeout: 10000 });
       await timeInput.scrollIntoViewIfNeeded().catch(() => {});
-      await timeInput.click();
-      await page.waitForTimeout(600);
+      await humanClick(page, timeInput);
+      await humanDelay(500, 1100);
 
       // ФИКС #1: реальная структура (подтверждена time-list-opened.html) —
       // <ytcp-time-of-day-picker><tp-yt-paper-dialog><tp-yt-paper-listbox>.
@@ -447,7 +520,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         // сам докрутит внутренний скролл списка до элемента.
         await timeOption.waitFor({ state: 'attached', timeout: 5000 });
         await timeOption.scrollIntoViewIfNeeded().catch(() => {});
-        await timeOption.click();
+        await humanClick(page, timeOption);
         timeClicked = true;
         console.log(`✅ Время установлено кликом по пункту списка: ${timePart}`);
       } catch (timeErr) {
@@ -455,7 +528,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         console.log(`⚠️ Не нашёл пункт "${timePart}" в выпадающем списке времени: ${timeErr.message}. См. time-list-opened.html/png и time-list-error.png. Пробую резервный способ — печать текста + подтверждение.`);
         await page.keyboard.press('Control+A').catch(() => {});
         await page.keyboard.press('Backspace').catch(() => {});
-        await page.keyboard.type(timePart, { delay: 80 });
+        await page.keyboard.type(timePart, { delay: randomBetween(60, 110) });
         await page.waitForTimeout(700);
         const timeConfirmedViaList = await confirmTypedValue();
         console.log(`⚠️ Время установлено печатью: ${timePart} (через ${timeConfirmedViaList ? 'клик по подсказке' : 'Enter — ненадёжно'})`);
@@ -476,7 +549,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     console.log(`[Робот] Время публикации не передано. Выбираю публичный доступ...`);
     await page.waitForSelector('[name="PUBLIC"], #public-radio-button', { timeout: 15000 });
     const radio = await page.$('[name="PUBLIC"], #public-radio-button');
-    await radio.click();
+    await humanClick(page, radio);
   }
 
   // =========================================================================
@@ -502,7 +575,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     throw new Error('Кнопка финализации заблокирована! Скорее всего, YouTube не принял формат даты или времени.');
   }
   
-  await doneBtn.click({ force: true });
+  await humanClick(page, doneBtn);
   console.log(`⏳ [Робот] Кнопка нажата успешно! Мониторю прогресс загрузки...`);
   
   let isFullyUploaded = false;
@@ -513,7 +586,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     const closeButton = await page.$('#close-button, ytcp-button[label="Закрыть"], ytcp-home-button, ytcp-button[label="Close"], ytcp-button[label="Cerrar"]');
     if (closeButton && await closeButton.isVisible()) {
       console.log(`[Робот] Обнаружено окно успешного завершения! Закрываю.`);
-      await closeButton.click().catch(() => {});
+      await humanClick(page, closeButton).catch(() => closeButton.click());
       isFullyUploaded = true;
       break;
     }
