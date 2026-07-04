@@ -131,12 +131,15 @@ const SCHEDULE_DEFAULTS = {
   LOW_SCHEDULE_THRESHOLD: 10,
   VIDEOS_PER_CHANNEL: 16,
   SCHEDULE_EXTENSION_BUFFER: 16,
-  JITTER_MIN_MINUTES: 10,
-  JITTER_MAX_MINUTES: 15,
+  JITTER_OPTIONS: [0, 5, 10],
 };
 
 function mergeScheduleSettings(settings = {}) {
-  return { ...SCHEDULE_DEFAULTS, ...settings };
+  const merged = { ...SCHEDULE_DEFAULTS, ...settings };
+  if (!Array.isArray(merged.JITTER_OPTIONS) || !merged.JITTER_OPTIONS.length) {
+    merged.JITTER_OPTIONS = [0, 5, 10];
+  }
+  return merged;
 }
 
 function parseScheduleTime(str) {
@@ -170,7 +173,8 @@ function snapToQuarterHour(date) {
 
 function randomJitterMinutes(settings) {
   const merged = mergeScheduleSettings(settings);
-  return randomBetween(merged.JITTER_MIN_MINUTES, merged.JITTER_MAX_MINUTES);
+  const options = merged.JITTER_OPTIONS;
+  return options[Math.floor(Math.random() * options.length)];
 }
 
 function applySlotJitter(date, settings) {
@@ -341,7 +345,7 @@ function initializeChannelSchedule(channelNumber, settings) {
     channel.initialized = true;
     channel.initializedAt = new Date().toISOString();
 
-    console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, шаг ${merged.STEP_HOURS}ч + jitter)`);
+    console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, шаг ${merged.STEP_HOURS}ч + jitter ${merged.JITTER_OPTIONS.join('/') }мин)`);
     return channel.schedule;
   });
 }
