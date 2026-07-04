@@ -25,6 +25,27 @@ function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, capDelay(ms)));
 }
 
+/** Случайно 1–10: заменяет последнюю цифру минут стандартного слота (00/15/30/45). */
+function computeMinuteFuzz(standardMinute) {
+  const rand = randomBetween(1, 10);
+  const prefix = String(standardMinute).padStart(2, '0').slice(0, -1);
+  const fuzzMinute = rand === 10
+    ? parseInt(prefix, 10) * 10 + 10
+    : parseInt(prefix + String(rand), 10);
+  return { rand, minute: Math.min(fuzzMinute, 59) };
+}
+
+function buildTimeLabels(hour, minute) {
+  const time24 = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  const time24Short = `${hour}:${String(minute).padStart(2, '0')}`;
+  const period = hour >= 12 ? 'PM' : 'AM';
+  let hour12 = hour % 12;
+  if (hour12 === 0) hour12 = 12;
+  const time12 = `${hour12}:${String(minute).padStart(2, '0')} ${period}`;
+  const time12Padded = `${String(hour12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${period}`;
+  return [...new Set([time24, time24Short, time12, time12Padded])];
+}
+
 async function humanMouseMove(page, targetX, targetY) {
   const start = await page.evaluate(() => ({
     x: window.__farmMouseX ?? (80 + Math.floor(Math.random() * 320)),
@@ -315,21 +336,35 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     const [datePart, timePartRaw] = scheduledTime.split(' ');
     const [day, month, year] = datePart.split('.');
 
-    // Время в config — 24ч ("07:00", "13:00"). В Studio может быть 24ч (07:00)
-    // или 12ч (7:00 AM) — ищем оба варианта при клике по списку.
+    // Время в config — стандартные слоты 24ч (07:00, 13:15). В Studio кликаем
+    // стандарт, затем fuzz минут (1–10) прямо в поле → 07:08, 13:18...
     const [rawH, rawM] = timePartRaw.split(':').map(Number);
-    const time24 = `${String(rawH).padStart(2, '0')}:${String(rawM).padStart(2, '0')}`;
-    const time24Short = `${rawH}:${String(rawM).padStart(2, '0')}`;
+    const timeLabels = buildTimeLabels(rawH, rawM);
 
-    const period = rawH >= 12 ? 'PM' : 'AM';
-    let hour12 = rawH % 12;
-    if (hour12 === 0) hour12 = 12;
-    const time12 = `${hour12}:${String(rawM).padStart(2, '0')} ${period}`;
-    const time12Padded = `${String(hour12).padStart(2, '0')}:${String(rawM).padStart(2, '0')} ${period}`;
+    // 1) Клик по стандартному слоту в списке (07:00, 07:15...)
+    // 2) Удалить последнюю цифру в поле и вставить random 1–10 → 07:08, 07:18...
+    async function applyMinuteFuzz(timeInput) {
+      const { rand, minute: fuzzMinute } = computeMinuteFuzz(rawM);
+      const finalTime = `${String(rawH).padStart(2, '0')}:${String(fuzzMinute).padStart(2, '0')}`;
 
-    const timeLabels = [...new Set([time24, time24Short, time12, time12Padded])];
+      await timeInput.focus();
+      await humanDelay(150, 300);
+      await page.keyboard.press('End');
 
-    // Выбор времени — только кликом. Список виртуальный: нужно прокрутить до пункта.
+      if (rand === 10) {
+        await page.keyboard.press('Backspace');
+        await page.keyboard.press('Backspace');
+        await page.keyboard.type(String(fuzzMinute).padStart(2, '0'), { delay: randomBetween(40, 90) });
+      } else {
+        await page.keyboard.press('Backspace');
+        await page.keyboard.type(String(rand), { delay: randomBetween(40, 90) });
+      }
+
+      await page.keyboard.press('Tab').catch(() => page.keyboard.press('Enter').catch(() => {}));
+      console.log(`✅ Минуты fuzz: стандарт :${String(rawM).padStart(2, '0')} → rand ${rand} → ${finalTime}`);
+      return finalTime;
+    }
+
     async function selectTimeByClick(timeInput) {
       const slotIndex = rawH * 4 + Math.floor(rawM / 15);
 
@@ -393,7 +428,7 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         }, timeLabels);
 
         if (clicked.ok) {
-          console.log(`✅ Время установлено кликом: ${clicked.matched}`);
+          console.log(`✅ Стандартный слот выбран кликом: ${clicked.matched}`);
           return true;
         }
         return clicked;
@@ -414,7 +449,10 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
           await page.waitForTimeout(capDelay(400));
 
           let result = await clickMatchingItem();
-          if (result === true) return;
+          if (result === true) {
+            await applyMinuteFuzz(timeInput);
+            return;
+          }
 
           // Пошаговая прокрутка — iron-list подгружает пункты по мере скролла
           for (let step = 0; step < 12; step++) {
@@ -423,12 +461,15 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
               const listbox = listboxes[listboxes.length - 1];
               if (!listbox) return;
               const scrollEl = listbox.querySelector('#items') || listbox.querySelector('iron-list') || listbox;
-              scrollEl.scrollTop += 144; // ~4 пункта по 36px
+              scrollEl.scrollTop += 144;
               scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
             });
             await page.waitForTimeout(120);
             result = await clickMatchingItem();
-            if (result === true) return;
+            if (result === true) {
+              await applyMinuteFuzz(timeInput);
+              return;
+            }
           }
 
           // Фолбэк: ищем по всем видимым пунктам через Playwright locator
@@ -439,7 +480,8 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
           if (await timeOption.count()) {
             await timeOption.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' }));
             await humanClick(page, timeOption);
-            console.log(`✅ Время установлено кликом через locator: ${timeLabels[0]}`);
+            console.log(`✅ Стандартный слот выбран через locator: ${timeLabels[0]}`);
+            await applyMinuteFuzz(timeInput);
             return;
           }
 

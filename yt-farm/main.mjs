@@ -131,15 +131,10 @@ const SCHEDULE_DEFAULTS = {
   LOW_SCHEDULE_THRESHOLD: 10,
   VIDEOS_PER_CHANNEL: 16,
   SCHEDULE_EXTENSION_BUFFER: 16,
-  JITTER_OPTIONS: [0, 5, 10],
 };
 
 function mergeScheduleSettings(settings = {}) {
-  const merged = { ...SCHEDULE_DEFAULTS, ...settings };
-  if (!Array.isArray(merged.JITTER_OPTIONS) || !merged.JITTER_OPTIONS.length) {
-    merged.JITTER_OPTIONS = [0, 5, 10];
-  }
-  return merged;
+  return { ...SCHEDULE_DEFAULTS, ...settings };
 }
 
 function parseScheduleTime(str) {
@@ -171,21 +166,9 @@ function snapToQuarterHour(date) {
   return result;
 }
 
-function randomJitterMinutes(settings) {
-  const merged = mergeScheduleSettings(settings);
-  const options = merged.JITTER_OPTIONS;
-  return options[Math.floor(Math.random() * options.length)];
-}
-
-function applySlotJitter(date, settings) {
-  const result = new Date(date.getTime());
-  result.setMinutes(result.getMinutes() + randomJitterMinutes(settings));
-  return snapToQuarterHour(result);
-}
-
 function addScheduleStep(date, settings) {
   const merged = mergeScheduleSettings(settings);
-  return applySlotJitter(addScheduleHours(date, merged.STEP_HOURS), merged);
+  return snapToQuarterHour(addScheduleHours(date, merged.STEP_HOURS));
 }
 
 function getTomorrowAt(hour) {
@@ -198,7 +181,7 @@ function getTomorrowAt(hour) {
 function generateInitialSchedule(slotCount, settings) {
   const merged = mergeScheduleSettings(settings);
   const schedule = [];
-  let current = applySlotJitter(getTomorrowAt(merged.NEW_CHANNEL_START_HOUR), merged);
+  let current = snapToQuarterHour(getTomorrowAt(merged.NEW_CHANNEL_START_HOUR));
   for (let i = 0; i < slotCount; i++) {
     schedule.push(formatScheduleTime(current));
     if (i < slotCount - 1) current = addScheduleStep(current, merged);
@@ -345,7 +328,7 @@ function initializeChannelSchedule(channelNumber, settings) {
     channel.initialized = true;
     channel.initializedAt = new Date().toISOString();
 
-    console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, шаг ${merged.STEP_HOURS}ч + jitter ${merged.JITTER_OPTIONS.join('/') }мин)`);
+    console.log(`[Schedule] Канал №${channelNumber}: новое расписание с ${channel.schedule[0]} (${channel.schedule.length} слотов, шаг ${merged.STEP_HOURS}ч, минуты fuzz в Studio)`);
     return channel.schedule;
   });
 }

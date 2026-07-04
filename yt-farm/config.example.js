@@ -28,7 +28,6 @@ export const CONFIG = {
     STEP_HOURS: 6,
     NEW_CHANNEL_START_HOUR: 7,
     LOW_SCHEDULE_THRESHOLD: 10,
-    JITTER_OPTIONS: [0, 5, 10],
   },
 
   ANTIDETECT: {
