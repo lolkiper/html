@@ -14,7 +14,24 @@ import { fileURLToPath } from 'url';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const baseDir = process.cwd();
+const WORKER_LOG_FILE = path.join(baseDir, 'farm-worker.log');
 const configPath = path.join(baseDir, 'config.json');
+
+function workerLog(message) {
+  const line = `[${new Date().toISOString()}] ${message}`;
+  console.log(line);
+  try {
+    fs.appendFileSync(WORKER_LOG_FILE, `${line}\n`, 'utf-8');
+  } catch { /* ignore */ }
+}
+
+function workerLogError(message) {
+  const line = `[${new Date().toISOString()}] ${message}`;
+  console.error(line);
+  try {
+    fs.appendFileSync(WORKER_LOG_FILE, `${line}\n`, 'utf-8');
+  } catch { /* ignore */ }
+}
 
 if (!fs.existsSync(configPath)) {
   console.error(`❌ Критическая ошибка: Файл конфигурации не найден по пути: ${configPath}`);
@@ -447,6 +464,7 @@ export async function runFarm(slot, profileId) {
   const CURRENT_SLOT = slot;
   const directProfileId = profileId;
   console.log(`[Farm] Анти-детект: паузы 2–10с→1с, >10с→макс 5с (обновлённый main.mjs)`);
+  workerLog(`▶️ Слот ${CURRENT_SLOT} старт, профиль ${directProfileId}, cwd=${baseDir}`);
   let finalVideosDir = CONFIG.VIDEOS_DIR;
   if (!path.isAbsolute(finalVideosDir)) {
     finalVideosDir = path.join(baseDir, finalVideosDir);
@@ -457,7 +475,7 @@ export async function runFarm(slot, profileId) {
 
   if (!fs.existsSync(finalVideosDir)) {
     console.error(`❌ Папка с video не найдена по пути: ${finalVideosDir}`);
-    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: нет папки videos`);
+    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: нет папки videos (${finalVideosDir})`);
     return;
   }
 
@@ -476,7 +494,7 @@ export async function runFarm(slot, profileId) {
       status: "ОШИБКА КОНФИГУРАЦИИ"
     }));
 
-    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: ошибка конфигурации`);
+    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: ошибка конфигурации`);
     return;
   }
 
@@ -524,7 +542,7 @@ export async function runFarm(slot, profileId) {
       DATA_TYPE: "STATS_UPDATE", channelNum: channelNumber, profileId: directProfileId,
       subs: "Готово", views: "100%", uploaded: VIDEOS_PER_CHANNEL, status: "АКТИВЕН"
     }));
-    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: все видео уже в history`);
+    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: все видео уже в history`);
     return;
   }
 
@@ -535,7 +553,7 @@ export async function runFarm(slot, profileId) {
   const batchTimeSlots = schedulePrep.batchSlots(currentBatch.length);
   if (batchTimeSlots.length < currentBatch.length) {
     console.error(`❌ Не хватает тайм-слотов в расписании канала №${channelNumber} (нужно ${currentBatch.length}, есть ${batchTimeSlots.length})`);
-    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: мало слотов в расписании`);
+    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: мало слотов в расписании`);
     return;
   }
 
@@ -557,7 +575,7 @@ export async function runFarm(slot, profileId) {
     } else { throw new Error("Dolphin не вернул блок автоматизации."); }
   } catch (err) {
     console.error(`❌ Слот ${CURRENT_SLOT} не смог подключиться к Dolphin:`, err.message);
-    console.log(`🏁 Слот ${CURRENT_SLOT} завершён: ошибка Dolphin`);
+    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: ошибка Dolphin (${err.message})`);
     return;
   }
 
@@ -681,6 +699,7 @@ export async function runFarm(slot, profileId) {
   }).catch(() => {});
 
   console.log(`🏁 [КАНАЛ №${channelNumber}] Сессия закрыта. Запланировано за этот круг: ${totalUploadedInSession} видео.`);
+  workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: загружено ${totalUploadedInSession} видео, канал №${channelNumber}`);
 }
 
 /** Запуск worker-процесса (для UI-панели вместо upload-farm.mjs) */
@@ -690,12 +709,19 @@ export function spawnFarmWorker(slot, profileId) {
   if (process.versions?.electron) {
     env.ELECTRON_RUN_AS_NODE = '1';
   }
-  return spawn(process.execPath, [mainScript, String(slot), profileId], {
+  const child = spawn(process.execPath, [mainScript, String(slot), profileId], {
     cwd: baseDir,
     stdio: 'inherit',
     shell: false,
     env,
   });
+  child.on('error', (err) => {
+    workerLogError(`❌ Spawn слота ${slot} не удался: ${err.message}`);
+  });
+  child.on('exit', (code, signal) => {
+    workerLog(`💤 Spawn слота ${slot} завершился (code=${code}, signal=${signal || 'none'})`);
+  });
+  return child;
 }
 
 export { baseDir, CONFIG };
@@ -704,13 +730,12 @@ export { baseDir, CONFIG };
 if (process.argv[2] && process.argv[3]) {
   const slot = parseInt(process.argv[2], 10);
   const profileId = process.argv[3];
-  console.log(`\n🚀 [Worker] Старт слота ${slot}, профиль ${profileId}`);
-  console.log(`📁 [Worker] cwd=${baseDir}`);
+  workerLog(`🚀 Worker старт слота ${slot}, профиль ${profileId}`);
   runFarm(slot, profileId)
-    .then(() => console.log(`\n💤 [Worker] Слот ${slot} завершён`))
+    .then(() => workerLog(`💤 Worker слот ${slot} завершён OK`))
     .catch((err) => {
-      console.error(`\n❌ [Worker] Слот ${slot} упал: ${err.message}`);
-      if (err.stack) console.error(err.stack);
+      workerLogError(`❌ Worker слот ${slot} упал: ${err.message}`);
+      if (err.stack) workerLogError(err.stack);
       process.exit(1);
     });
 }
