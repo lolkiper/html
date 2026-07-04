@@ -4,139 +4,21 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { spawn } from 'child_process';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
 
 /**
  * main.mjs — единственная точка входа фермы.
  * Worker: node main.mjs <slot> <dolphin_profile_id>
- * Панель: spawn(process.execPath, [main.mjs, slot, profileId])
+ * Панель: spawn(process.execPath, [main.mjs, slot, profileId], { cwd: process.cwd() })
  */
 
-const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
-let CONFIG_SOURCE = 'unknown';
-let LOADED_ENV_FILE = null;
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const baseDir = process.cwd();
+const configPath = path.join(baseDir, 'config.json');
 
-function readTextFile(filePath) {
-  const buf = fs.readFileSync(filePath);
-  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
-    return buf.slice(3).toString('utf-8');
-  }
-  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
-    return buf.toString('utf16le');
-  }
-  return buf.toString('utf-8');
-}
-
-function pickCredential(...values) {
-  for (const value of values) {
-    if (value != null && String(value).trim()) return String(value).trim();
-  }
-  return '';
-}
-
-/** Парсит .env без npm-пакета dotenv — критично для Electron dist */
-function parseEnvFile(envPath) {
-  if (!fs.existsSync(envPath)) return 0;
-  const content = readTextFile(envPath);
-  let loaded = 0;
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq <= 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let val = trimmed.slice(eq + 1).trim();
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1);
-    }
-    if (!process.env[key]) {
-      process.env[key] = val;
-      loaded++;
-    }
-  }
-  if (loaded > 0) LOADED_ENV_FILE = envPath;
-  return loaded;
-}
-
-function loadDotenvFiles() {
-  const candidates = [
-    path.join(APP_DIR, '.env'),
-    path.join(process.cwd(), '.env'),
-    path.join(APP_DIR, '..', '.env'),
-  ];
-  let total = 0;
-  for (const envPath of candidates) {
-    total += parseEnvFile(envPath);
-  }
-  return total;
-}
-
-function mergeEnvCredentials(raw) {
-  return {
-    ...raw,
-    DOLPHIN_API_URL: pickCredential(raw.DOLPHIN_API_URL, process.env.DOLPHIN_API_URL),
-    DOLPHIN_TOKEN: pickCredential(raw.DOLPHIN_TOKEN, process.env.DOLPHIN_TOKEN),
-  };
-}
-
-async function loadRawConfig() {
-  loadDotenvFiles();
-
-  const jsPath = path.join(APP_DIR, 'config.js');
-  const jsonPath = path.join(APP_DIR, 'config.json');
-
-  if (fs.existsSync(jsPath)) {
-    CONFIG_SOURCE = jsPath;
-    const mod = await import(pathToFileURL(jsPath).href);
-    if (!mod.CONFIG) throw new Error('config.js должен содержать: export const CONFIG = { ... }');
-    return mergeEnvCredentials(mod.CONFIG);
-  }
-
-  if (fs.existsSync(jsonPath)) {
-    CONFIG_SOURCE = jsonPath;
-    return mergeEnvCredentials(JSON.parse(readTextFile(jsonPath)));
-  }
-
-  throw new Error(
-    `❌ Не найден config.js или config.json\n   Папка скрипта: ${APP_DIR}`
-  );
-}
-
-function listEnvKeys(envPath) {
-  if (!fs.existsSync(envPath)) return [];
-  return readTextFile(envPath)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#') && line.includes('='))
-    .map((line) => line.split('=')[0].trim());
-}
-
-function assertDolphinConfig(config) {
-  const missing = [];
-  if (!config.DOLPHIN_API_URL) missing.push('DOLPHIN_API_URL');
-  if (!config.DOLPHIN_TOKEN) missing.push('DOLPHIN_TOKEN');
-  if (!missing.length) return;
-
-  const envInApp = path.join(APP_DIR, '.env');
-  const envInCwd = path.join(process.cwd(), '.env');
-  const keysInApp = listEnvKeys(envInApp);
-
-  throw new Error(
-    `❌ Не заданы ${missing.join(' / ')}\n` +
-    `   Конфиг: ${CONFIG_SOURCE}\n` +
-    `   Папка main.mjs: ${APP_DIR}\n` +
-    `   cwd процесса: ${process.cwd()}\n` +
-    `   .env рядом с main.mjs: ${fs.existsSync(envInApp) ? 'есть' : 'нет'}\n` +
-    `   .env в cwd: ${fs.existsSync(envInCwd) ? 'есть' : 'нет'}\n` +
-    (LOADED_ENV_FILE ? `   Загружен .env: ${LOADED_ENV_FILE}\n` : '') +
-    (keysInApp.length ? `   Ключи в .env: ${keysInApp.join(', ')}\n` : '   .env пуст или без KEY=VALUE строк\n') +
-    `   → Проверь .env:\n` +
-    `     DOLPHIN_API_URL=http://localhost:3001\n` +
-    `     DOLPHIN_TOKEN=твой_токен`
-  );
+if (!fs.existsSync(configPath)) {
+  console.error(`❌ Критическая ошибка: Файл конфигурации не найден по пути: ${configPath}`);
+  process.exit(1);
 }
 
 function normalizeConfig(raw) {
@@ -152,20 +34,7 @@ function normalizeConfig(raw) {
   };
 }
 
-function assertRuntimeFiles() {
-  const required = ['youtube-studio.mjs'];
-  const missing = required.filter((f) => !fs.existsSync(path.join(APP_DIR, f)));
-  if (missing.length) {
-    throw new Error(
-      `❌ В папке ${APP_DIR} не хватает файлов:\n   ${missing.join('\n   ')}`
-    );
-  }
-}
-
-const RAW_CONFIG = await loadRawConfig();
-assertRuntimeFiles();
-const CONFIG = normalizeConfig(RAW_CONFIG);
-const baseDir = APP_DIR;
+const CONFIG = normalizeConfig(JSON.parse(fs.readFileSync(configPath, 'utf-8')));
 
 const SCHEDULE_SETTINGS = CONFIG.SCHEDULE_SETTINGS || {};
 const ANTIDETECT = CONFIG.ANTIDETECT || {};
@@ -580,13 +449,6 @@ function saveToHistory(profileId, file, title, channelNum, scheduledTime) {
 }
 
 export async function runFarm(slot, profileId) {
-  try {
-    assertDolphinConfig(CONFIG);
-  } catch (err) {
-    console.error(err.message);
-    return;
-  }
-
   const CURRENT_SLOT = slot;
   const directProfileId = profileId;
   let finalVideosDir = CONFIG.VIDEOS_DIR;
@@ -822,15 +684,15 @@ export async function runFarm(slot, profileId) {
 
 /** Запуск worker-процесса (для UI-панели вместо upload-farm.mjs) */
 export function spawnFarmWorker(slot, profileId) {
-  const mainScript = path.join(APP_DIR, 'main.mjs');
+  const mainScript = path.join(SCRIPT_DIR, 'main.mjs');
   return spawn(process.execPath, [mainScript, String(slot), profileId], {
-    cwd: APP_DIR,
+    cwd: baseDir,
     stdio: 'inherit',
     shell: false,
   });
 }
 
-export { APP_DIR, CONFIG };
+export { baseDir, CONFIG };
 
 // Worker-режим: node main.mjs <slot> <profileId>
 if (process.argv[2] && process.argv[3]) {
