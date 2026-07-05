@@ -1,0 +1,34 @@
+{
+  "appId": "com.ytzahod.stats",
+  "productName": "YouTube-Channel-Stats",
+  "directories": {
+    "output": "dist-stats"
+  },
+  "files": [
+    "stats-panel/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": ".",
+      "to": "yt-zahod",
+      "filter": [
+        "channel-stats.mjs",
+        "account-onboard.mjs",
+        "dolphin-api.mjs",
+        "google-youtube-login.mjs",
+        "totp-website.mjs",
+        "stats-config.example.json",
+        "channels.example.txt",
+        "accounts.example.txt"
+      ]
+    }
+  ],
+  "win": {
+    "target": [{ "target": "portable", "arch": ["x64"] }],
+    "artifactName": "YouTube-Channel-Stats.exe"
+  },
+  "portable": {
+    "artifactName": "YouTube-Channel-Stats.exe"
+  }
+}
