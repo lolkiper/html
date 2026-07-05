@@ -637,7 +637,8 @@ export async function runFarm(slot, profileId) {
 
     while (attempts > 0 && !success) {
       try {
-        await uploadVideo(page, videoToUpload, finalVideosDir, videoTimeSlot);
+        const studioDelayMs = Number(ANTIDETECT.AFTER_UPLOAD_STUDIO_DELAY_MS ?? 10000);
+        await uploadVideo(page, videoToUpload, finalVideosDir, videoTimeSlot, studioDelayMs);
 
         success = true;
         totalUploadedInSession++;

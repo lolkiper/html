@@ -25,6 +25,10 @@ function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, capDelay(ms)));
 }
 
+function sleepRaw(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /** Случайно 1–10: заменяет последнюю цифру минут стандартного слота (00/15/30/45). */
 function computeMinuteFuzz(standardMinute) {
   const rand = randomBetween(1, 10);
@@ -129,7 +133,7 @@ async function humanType(page, text, delayRange = [55, 130]) {
  * @param {string} videosDir - Корневая папка с видеороликами
  * @param {string|null} scheduledTime - Время планирования в формате "DD.MM.YYYY HH:MM" (если null — публикует сразу)
  */
-export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime = null) {
+export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime = null, studioDelayMs = 10000) {
   // Высчитываем точный абсолютный путь к видеофайлу на ПК
   const absoluteVideoPath = path.isAbsolute(videoToUpload.file) 
     ? videoToUpload.file 
@@ -727,5 +731,10 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     await sleepMs(500);
   }
   console.log(`🚀 [Робот] Видео успешно и полностью село на сервера YouTube!`);
-  await sleepMs(500);
+
+  if (studioDelayMs > 0) {
+    console.log(`[Робот] Перехожу в YouTube Studio, пауза ${studioDelayMs / 1000} сек...`);
+    await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await sleepRaw(studioDelayMs);
+  }
 }
