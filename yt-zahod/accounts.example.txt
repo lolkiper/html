@@ -1,0 +1,17 @@
+# accounts.txt — один аккаунт на строку
+# Формат:
+# email|password|totp_secret|proxy|profile_name
+#
+# proxy — поддерживаются форматы:
+#   http://host:port:login:pass
+#   host:port:login:pass:http
+#   login:pass@host:port
+# Если прокси нет — поставьте "-"
+# profile_name — имя профиля в Dolphin (опционально)
+#
+# 2FA: totp_secret → код через https://2fa.fb.tools/ (или TOTP_WEBSITE из onboard-config.json)
+#
+# Примеры:
+# user1@gmail.com|MyPassword123|JBSWY3DPEHPK3PXP|http://isp.decodo.com:10006:user:pass+with+symbols|Channel 1
+# user2@gmail.com|Pass456|ABCDEFGH1234567|1.2.3.4:8080:proxyuser:proxypass:http|Channel 2
+# user3@gmail.com|Pass789|ABCDEFGH1234567|-|Channel 3
