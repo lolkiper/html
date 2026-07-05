@@ -634,10 +634,10 @@ export async function runFarm(slot, profileId) {
 
     let attempts = 3;
     let success = false;
+    const studioDelayMs = Number(ANTIDETECT.AFTER_UPLOAD_STUDIO_DELAY_MS ?? 10000);
 
     while (attempts > 0 && !success) {
       try {
-        const studioDelayMs = Number(ANTIDETECT.AFTER_UPLOAD_STUDIO_DELAY_MS ?? 10000);
         await uploadVideo(page, videoToUpload, finalVideosDir, videoTimeSlot, studioDelayMs);
 
         success = true;
@@ -652,6 +652,10 @@ export async function runFarm(slot, profileId) {
         console.error(`⚠️ Ошибка загрузки файла ${videoToUpload.file}. Попыток осталось: ${attempts}. Ошибка: ${error.message}`);
         if (attempts > 0 && !browserClosed) {
           await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded' }).catch(() => {});
+          if (studioDelayMs > 0) {
+            console.log(`[Робот] Пауза ${studioDelayMs / 1000} сек в Studio перед повторной попыткой...`);
+            await new Promise(r => setTimeout(r, capDelay(studioDelayMs)));
+          }
           await pauseBetweenUploads();
         }
       }
