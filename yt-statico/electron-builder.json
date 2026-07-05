@@ -14,6 +14,7 @@
       "to": "yt-statico",
       "filter": [
         "channel-stats.mjs",
+        "playwright-env.mjs",
         "account-onboard.mjs",
         "dolphin-api.mjs",
         "google-youtube-login.mjs",
@@ -22,6 +23,11 @@
         "channels.example.txt",
         "accounts.example.txt"
       ]
+    },
+    {
+      "from": "playwright-browsers",
+      "to": "playwright-browsers",
+      "filter": ["**/*"]
     }
   ],
   "win": {

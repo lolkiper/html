@@ -10,6 +10,8 @@
     "stats": "node channel-stats.mjs",
     "start": "electron stats-panel/main.mjs",
     "panel": "electron stats-panel/main.mjs",
+    "install:browsers": "node scripts/bundle-playwright.mjs",
+    "prebuild": "node scripts/bundle-playwright.mjs",
     "build": "electron-builder --win portable --config electron-builder.json"
   },
   "dependencies": {

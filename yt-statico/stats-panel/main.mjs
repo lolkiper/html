@@ -187,6 +187,13 @@ ipcMain.handle('start-stats', async () => {
   if (process.versions?.electron) {
     env.ELECTRON_RUN_AS_NODE = '1';
   }
+
+  const browsersPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'playwright-browsers')
+    : path.join(__dirname, '..', 'playwright-browsers');
+  if (fs.existsSync(browsersPath)) {
+    env.PLAYWRIGHT_BROWSERS_PATH = browsersPath;
+  }
   const asarNodeModules = app.isPackaged
     ? path.join(process.resourcesPath, 'app.asar', 'node_modules')
     : path.join(__dirname, '..', 'node_modules');

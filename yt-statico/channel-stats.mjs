@@ -5,9 +5,26 @@ import { fileURLToPath } from 'url';
 import { DolphinClient, normalizeToken } from './dolphin-api.mjs';
 import { parseAccountsFile } from './account-onboard.mjs';
 import { loginGoogleOnYouTube } from './google-youtube-login.mjs';
+import { initPlaywrightBrowsers } from './playwright-env.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const baseDir = process.cwd();
+
+initPlaywrightBrowsers({ cwd: baseDir });
+
+async function launchChromium(headless) {
+  try {
+    return await chromium.launch({ headless, chromiumSandbox: false });
+  } catch (err) {
+    const msg = err?.message || String(err);
+    if (/Executable doesn't exist|playwright install/i.test(msg)) {
+      throw new Error(
+        'Браузер Playwright не найден в exe. Пересоберите на Windows: cd yt-statico && npm run install:browsers && npm run build'
+      );
+    }
+    throw err;
+  }
+}
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -480,7 +497,7 @@ async function runPublicStats(config, channels, accounts) {
   let fail = 0;
 
   try {
-    browser = await chromium.launch({ headless });
+    browser = await launchChromium(headless);
     console.log(`[Stats] Браузер Playwright запущен (headless=${headless})`);
 
     for (const channel of channels) {
