@@ -1,8 +1,8 @@
 {
-  "appId": "com.ytzahod.stats",
-  "productName": "YouTube-Channel-Stats",
+  "appId": "com.ytstatico.app",
+  "productName": "YT-Statico",
   "directories": {
-    "output": "dist-stats"
+    "output": "dist"
   },
   "files": [
     "stats-panel/**/*",
@@ -11,7 +11,7 @@
   "extraResources": [
     {
       "from": ".",
-      "to": "yt-zahod",
+      "to": "yt-statico",
       "filter": [
         "channel-stats.mjs",
         "account-onboard.mjs",
@@ -26,9 +26,9 @@
   ],
   "win": {
     "target": [{ "target": "portable", "arch": ["x64"] }],
-    "artifactName": "YouTube-Channel-Stats.exe"
+    "artifactName": "YT-Statico.exe"
   },
   "portable": {
-    "artifactName": "YouTube-Channel-Stats.exe"
+    "artifactName": "YT-Statico.exe"
   }
 }

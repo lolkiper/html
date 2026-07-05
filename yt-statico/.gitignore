@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-*/
+*.log
+stats-config.json
+channels.txt
+accounts.txt
+channel-stats-results.json
+onboard-results.json
+onboard-config.json

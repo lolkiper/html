@@ -1,7 +1,7 @@
 {
   "name": "yt-zahod",
   "version": "1.0.0",
-  "description": "YouTube Onboard + Channel Stats — Dolphin profiles, login, statistics",
+  "description": "YouTube Onboard Panel — Dolphin profiles, login, 2FA, English",
   "type": "module",
   "private": true,
   "main": "onboard-panel/main.mjs",
@@ -11,11 +11,8 @@
     "start": "node main.mjs",
     "onboard": "node account-onboard.mjs",
     "onboard-panel": "electron onboard-panel/main.mjs",
-    "stats": "node channel-stats.mjs",
-    "stats-panel": "electron stats-panel/main.mjs",
     "test-dolphin": "node test-dolphin-api.mjs",
-    "build:onboard": "electron-builder --win portable --config electron-builder.onboard.json",
-    "build:stats": "electron-builder --win portable --config electron-builder.stats.json"
+    "build:onboard": "electron-builder --win portable --config electron-builder.onboard.json"
   },
   "dependencies": {
     "axios": "^1.7.0",

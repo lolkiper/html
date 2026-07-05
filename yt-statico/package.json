@@ -1,0 +1,23 @@
+{
+  "name": "yt-statico",
+  "version": "1.0.0",
+  "description": "YT-Statico — статистика YouTube каналов без Dolphin",
+  "type": "module",
+  "private": true,
+  "main": "stats-panel/main.mjs",
+  "author": "yt-statico",
+  "scripts": {
+    "stats": "node channel-stats.mjs",
+    "start": "electron stats-panel/main.mjs",
+    "panel": "electron stats-panel/main.mjs",
+    "build": "electron-builder --win portable --config electron-builder.json"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

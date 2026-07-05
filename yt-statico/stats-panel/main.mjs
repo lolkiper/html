@@ -10,8 +10,8 @@ function getDirs() {
   const isPackaged = app.isPackaged;
   return {
     panelDir: __dirname,
-    farmDir: isPackaged
-      ? path.join(process.resourcesPath, 'yt-zahod')
+    scriptsDir: isPackaged
+      ? path.join(process.resourcesPath, 'yt-statico')
       : path.join(__dirname, '..'),
     baseDir: isPackaged
       ? path.dirname(process.execPath)
@@ -20,7 +20,7 @@ function getDirs() {
 }
 
 function getPaths() {
-  const { farmDir, baseDir } = getDirs();
+  const { scriptsDir, baseDir } = getDirs();
   return {
     CONFIG_FILE: path.join(baseDir, 'stats-config.json'),
     ONBOARD_CONFIG_FILE: path.join(baseDir, 'onboard-config.json'),
@@ -28,9 +28,9 @@ function getPaths() {
     CHANNELS_FILE: path.join(baseDir, 'channels.txt'),
     RESULTS_FILE: path.join(baseDir, 'channel-stats-results.json'),
     ONBOARD_RESULTS_FILE: path.join(baseDir, 'onboard-results.json'),
-    EXAMPLE_CONFIG: path.join(farmDir, 'stats-config.example.json'),
-    EXAMPLE_CHANNELS: path.join(farmDir, 'channels.example.txt'),
-    YT_ZAHOD_DIR: farmDir,
+    EXAMPLE_CONFIG: path.join(scriptsDir, 'stats-config.example.json'),
+    EXAMPLE_CHANNELS: path.join(scriptsDir, 'channels.example.txt'),
+    SCRIPTS_DIR: scriptsDir,
     baseDir,
   };
 }
@@ -77,7 +77,7 @@ function createWindow() {
     height: 860,
     minWidth: 960,
     minHeight: 640,
-    title: 'YouTube Channel Stats',
+    title: 'YT-Statico',
     backgroundColor: '#0a0f1a',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -175,7 +175,7 @@ ipcMain.handle('start-stats', async () => {
   }
 
   const p = getPaths();
-  const script = path.join(p.YT_ZAHOD_DIR, 'channel-stats.mjs');
+  const script = path.join(p.SCRIPTS_DIR, 'channel-stats.mjs');
   if (!fs.existsSync(script)) {
     throw new Error(`Не найден ${script}`);
   }
