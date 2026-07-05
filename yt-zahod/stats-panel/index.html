@@ -263,6 +263,26 @@
 
         .empty-row { text-align: center; color: #64748b; font-style: italic; padding: 24px; }
 
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            margin: 12px 0;
+            font-size: 13px;
+        }
+
+        .checkbox-container input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+        .mode-hint {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+
+        .dolphin-fields.hidden { display: none; }
+
         @media (max-width: 900px) {
             .grid-2, .form-row, .action-zone { grid-template-columns: 1fr; }
             .stats-table { display: block; overflow-x: auto; }
@@ -273,13 +293,23 @@
 <div class="container">
     <div class="header">
         <h1>YouTube Channel Stats</h1>
-        <div class="sub-header">Статистика каналов · Dolphin · accounts.txt · channels.txt</div>
+        <div class="sub-header">Статистика каналов · channels.txt · без Dolphin или через профили</div>
         <div id="statusBadge" class="status-badge idle">Готов</div>
     </div>
 
     <div class="grid-2">
         <div class="card">
             <div class="card-title">Настройки</div>
+
+            <label class="checkbox-container">
+                <input type="checkbox" id="useDolphin">
+                Использовать Dolphin (профили из Onboard)
+            </label>
+            <div class="mode-hint" id="modeHint">
+                По умолчанию: публичный парсинг youtube.com/channel/ — Dolphin не нужен.
+            </div>
+
+            <div id="dolphinFields" class="dolphin-fields hidden">
             <div class="form-row">
                 <div class="form-group">
                     <label for="dolphinToken">Dolphin Token</label>
@@ -290,14 +320,22 @@
                     <input type="text" id="localApi" value="http://localhost:3001">
                 </div>
             </div>
+            <div class="form-group">
+                <label for="cloudApi">Cloud API URL</label>
+                <input type="text" id="cloudApi" value="https://dolphin-anty-api.com">
+            </div>
+            </div>
+
             <div class="form-row">
                 <div class="form-group">
-                    <label for="cloudApi">Cloud API URL</label>
-                    <input type="text" id="cloudApi" value="https://dolphin-anty-api.com">
+                    <label for="delayMs">Пауза между каналами (мс)</label>
+                    <input type="number" id="delayMs" value="3000" min="0" step="500">
                 </div>
                 <div class="form-group">
-                    <label for="delayMs">Пауза между каналами (мс)</label>
-                    <input type="number" id="delayMs" value="5000" min="0" step="500">
+                    <label class="checkbox-container" style="margin-top: 28px;">
+                        <input type="checkbox" id="headless" checked>
+                        Скрытый браузер (headless)
+                    </label>
                 </div>
             </div>
             <button type="button" class="btn-secondary" id="btnSaveConfig">Сохранить настройки</button>

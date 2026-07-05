@@ -1,6 +1,10 @@
 const $ = (id) => document.getElementById(id);
 
 const els = {
+  useDolphin: $('useDolphin'),
+  dolphinFields: $('dolphinFields'),
+  modeHint: $('modeHint'),
+  headless: $('headless'),
   dolphinToken: $('dolphinToken'),
   localApi: $('localApi'),
   cloudApi: $('cloudApi'),
@@ -45,30 +49,42 @@ function statusClass(status) {
   return 'status-err';
 }
 
+function updateModeUi() {
+  const dolphin = els.useDolphin.checked;
+  els.dolphinFields.classList.toggle('hidden', !dolphin);
+  els.modeHint.textContent = dolphin
+    ? 'Dolphin: нужны accounts.txt, onboard-results.json, запущенный Dolphin Anty.'
+    : 'Публичный режим: только channels.txt. Открывает youtube.com/channel/ без входа. accounts.txt — опционально (для привязки номера к email).';
+}
+
 function readConfigFromForm() {
   const cloudApi = els.cloudApi.value.trim().replace(/\/$/, '');
   return {
+    USE_DOLPHIN: els.useDolphin.checked,
     DOLPHIN_TOKEN: els.dolphinToken.value.trim().replace(/^Bearer\s+/i, ''),
     DOLPHIN_LOCAL_API_URL: els.localApi.value.trim(),
     DOLPHIN_CLOUD_API_URL: /dolphin-anty-api\.cc$/i.test(cloudApi)
       ? 'https://dolphin-anty-api.com'
       : cloudApi,
-    DELAY_BETWEEN_CHANNELS_MS: Number(els.delayMs.value) || 5000,
+    DELAY_BETWEEN_CHANNELS_MS: Number(els.delayMs.value) || 3000,
     ACCOUNTS_FILE: 'accounts.txt',
     CHANNELS_FILE: 'channels.txt',
     STATS_RESULTS_FILE: 'channel-stats-results.json',
     TOTP_WEBSITE: 'https://2fa.fb.tools/',
     PLATFORM: 'windows',
     BROWSER_VERSION: '140',
-    HEADLESS: false,
+    HEADLESS: els.headless.checked,
   };
 }
 
 function fillConfigForm(config) {
+  els.useDolphin.checked = config.USE_DOLPHIN === true || config.USE_DOLPHIN === 'true';
   els.dolphinToken.value = config.DOLPHIN_TOKEN || '';
   els.localApi.value = config.DOLPHIN_LOCAL_API_URL || config.DOLPHIN_API_URL || 'http://localhost:3001';
   els.cloudApi.value = config.DOLPHIN_CLOUD_API_URL || 'https://dolphin-anty-api.com';
-  els.delayMs.value = config.DELAY_BETWEEN_CHANNELS_MS ?? config.DELAY_BETWEEN_ACCOUNTS_MS ?? 5000;
+  els.delayMs.value = config.DELAY_BETWEEN_CHANNELS_MS ?? config.DELAY_BETWEEN_ACCOUNTS_MS ?? 3000;
+  els.headless.checked = config.HEADLESS !== false;
+  updateModeUi();
 }
 
 async function refreshStats() {
@@ -130,8 +146,10 @@ async function init() {
   setStatus(running ? 'running' : 'idle');
 
   appendLog('[SYSTEM] Панель статистики инициализирована');
-  appendLog('[INFO] Канал №1 = первая строка channels.txt = первый аккаунт accounts.txt');
+  appendLog('[INFO] По умолчанию — без Dolphin, только публичные страницы каналов');
   appendLog('[READY] Нажмите «Собрать статистику» для запуска');
+
+  els.useDolphin.addEventListener('change', updateModeUi);
 
   window.statsPanel.onLog(appendLog);
   window.statsPanel.onStatus(setStatus);

@@ -16,13 +16,43 @@ function sleep(ms) {
 function loadConfig() {
   const statsConfig = path.join(baseDir, 'stats-config.json');
   const onboardConfig = path.join(baseDir, 'onboard-config.json');
-  const configPath = fs.existsSync(statsConfig) ? statsConfig : onboardConfig;
 
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`Не найден stats-config.json или onboard-config.json в ${baseDir}`);
+  if (fs.existsSync(statsConfig)) {
+    return JSON.parse(fs.readFileSync(statsConfig, 'utf-8'));
+  }
+  if (fs.existsSync(onboardConfig)) {
+    return {
+      ...JSON.parse(fs.readFileSync(onboardConfig, 'utf-8')),
+      USE_DOLPHIN: false,
+      CHANNELS_FILE: 'channels.txt',
+      STATS_RESULTS_FILE: 'channel-stats-results.json',
+    };
   }
 
-  return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  return {
+    USE_DOLPHIN: false,
+    CHANNELS_FILE: 'channels.txt',
+    STATS_RESULTS_FILE: 'channel-stats-results.json',
+    ACCOUNTS_FILE: 'accounts.txt',
+    DELAY_BETWEEN_CHANNELS_MS: 3000,
+    HEADLESS: true,
+  };
+}
+
+function useDolphin(config) {
+  return config.USE_DOLPHIN === true || config.USE_DOLPHIN === 'true';
+}
+
+function buildPlaywrightProxy(proxy) {
+  if (!proxy?.host || !proxy?.port) return undefined;
+  const type = proxy.type || 'http';
+  const server = `${type}://${proxy.host}:${proxy.port}`;
+  const out = { server };
+  if (proxy.login) {
+    out.username = proxy.login;
+    out.password = proxy.password || '';
+  }
+  return out;
 }
 
 function getResultsFile(config) {
@@ -140,7 +170,7 @@ function detectBanFromUrl(url) {
   return /disabled|banned|suspended|terminated|notavailable|oops/i.test(value);
 }
 
-async function parseChannelPage(page, channelId) {
+async function parseChannelPage(page, channelId, { checkStudio = false } = {}) {
   const result = {
     channelId,
     channelUrl: `https://www.youtube.com/channel/${channelId}`,
@@ -261,19 +291,21 @@ async function parseChannelPage(page, channelId) {
     }).catch(() => '—');
   }
 
-  await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
-  await sleep(3000);
+  if (checkStudio) {
+    await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+    await sleep(3000);
 
-  const studioUrl = page.url();
-  if (detectBanFromUrl(studioUrl)) {
-    result.isBlocked = true;
-    result.blockReason = result.blockReason || 'Studio: канал заблокирован';
-  }
+    const studioUrl = page.url();
+    if (detectBanFromUrl(studioUrl)) {
+      result.isBlocked = true;
+      result.blockReason = result.blockReason || 'Studio: канал заблокирован';
+    }
 
-  const studioText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
-  if (detectBanFromText(studioText)) {
-    result.isBlocked = true;
-    result.blockReason = result.blockReason || 'Studio: нарушение / блокировка';
+    const studioText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
+    if (detectBanFromText(studioText)) {
+      result.isBlocked = true;
+      result.blockReason = result.blockReason || 'Studio: нарушение / блокировка';
+    }
   }
 
   if (!result.isBlocked && result.subscribers === '—' && result.totalViews === '—' && !lastVideo) {
@@ -330,7 +362,7 @@ async function processChannel(channel, account, profileId, config, dolphin) {
       });
     }
 
-    const stats = await parseChannelPage(page, channel.channelId);
+    const stats = await parseChannelPage(page, channel.channelId, { checkStudio: true });
 
     const entry = {
       ...baseEntry,
@@ -372,22 +404,110 @@ async function processChannel(channel, account, profileId, config, dolphin) {
   }
 }
 
-export async function runChannelStats(options = {}) {
-  const config = loadConfig();
+async function processChannelPublic(channel, account, config, browser) {
+  const startedAt = new Date().toISOString();
+  let context = null;
+
+  const baseEntry = {
+    channelNumber: channel.channelNumber,
+    channelId: channel.channelId,
+    channelUrl: `https://www.youtube.com/channel/${channel.channelId}`,
+    email: account?.email || '—',
+    profileId: null,
+    profileName: account?.profileName || '—',
+    startedAt,
+  };
+
+  try {
+    console.log(`\n📺 Канал №${channel.channelNumber}: ${channel.channelId}`);
+    if (account?.email) console.log(`   Аккаунт (справочно): ${account.email}`);
+
+    const proxy = buildPlaywrightProxy(account?.proxy);
+    context = await browser.newContext(proxy ? { proxy } : {});
+    const page = await context.newPage();
+    page.setDefaultTimeout(90000);
+
+    const stats = await parseChannelPage(page, channel.channelId, { checkStudio: false });
+
+    const entry = {
+      ...baseEntry,
+      ...stats,
+      status: stats.isBlocked ? 'BLOCKED' : 'OK',
+      finishedAt: new Date().toISOString(),
+      error: null,
+    };
+
+    saveStatsResult(config, entry);
+
+    console.log(`   ✅ Подписчики: ${entry.subscribers}`);
+    console.log(`   👁 Всего просмотров: ${entry.totalViews}`);
+    console.log(`   🎬 Последнее видео: ${entry.lastVideoTitle} (${entry.lastVideoViews}, ${entry.lastVideoDate})`);
+    console.log(`   🚦 Статус: ${entry.status}${entry.blockReason ? ` — ${entry.blockReason}` : ''}`);
+
+    return { ok: true, entry };
+  } catch (err) {
+    const entry = {
+      ...baseEntry,
+      status: 'ERROR',
+      isBlocked: false,
+      blockReason: null,
+      subscribers: '—',
+      totalViews: '—',
+      lastVideoTitle: '—',
+      lastVideoViews: '—',
+      lastVideoDate: '—',
+      channelName: '—',
+      error: err.message,
+      finishedAt: new Date().toISOString(),
+    };
+    saveStatsResult(config, entry);
+    console.error(`   ❌ Ошибка: ${err.message}`);
+    return { ok: false, error: err.message, entry };
+  } finally {
+    if (context) await context.close().catch(() => {});
+  }
+}
+
+async function runPublicStats(config, channels, accounts) {
+  console.log('[Stats] Режим БЕЗ Dolphin — публичный парсинг youtube.com/channel/');
+  console.log('[Stats] Dolphin Anty и onboard-results.json не нужны');
+
+  const delayMs = Number(config.DELAY_BETWEEN_CHANNELS_MS ?? 3000);
+  const headless = config.HEADLESS !== false;
+  let browser = null;
+  let processed = 0;
+  let ok = 0;
+  let fail = 0;
+
+  try {
+    browser = await chromium.launch({ headless });
+    console.log(`[Stats] Браузер Playwright запущен (headless=${headless})`);
+
+    for (const channel of channels) {
+      const account = accounts[channel.channelNumber - 1] || null;
+      const result = await processChannelPublic(channel, account, config, browser);
+      processed++;
+      if (result.ok) ok++;
+      else fail++;
+
+      if (processed < channels.length) {
+        console.log(`[Stats] Пауза ${delayMs / 1000}с перед следующим каналом...`);
+        await sleep(delayMs);
+      }
+    }
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+
+  console.log(`\n🏁 Итог: каналов ${processed}, успешно ${ok}, ошибок ${fail}`);
+  console.log(`📄 Результаты: ${getResultsFile(config)}`);
+}
+
+async function runDolphinStats(config, channels, accounts) {
   if (/dolphin-anty-api\.cc/i.test(config.DOLPHIN_CLOUD_API_URL || '')) {
     config.DOLPHIN_CLOUD_API_URL = 'https://dolphin-anty-api.com';
   }
   config.DOLPHIN_TOKEN = normalizeToken(config.DOLPHIN_TOKEN);
-
-  const accountsFile = config.ACCOUNTS_FILE || 'accounts.txt';
-  const channelsFile = config.CHANNELS_FILE || 'channels.txt';
-  const accounts = parseAccountsFile(accountsFile);
-  const channels = parseChannelsFile(channelsFile);
-
-  if (!channels.length) {
-    console.log('Нет каналов для проверки.');
-    return;
-  }
 
   const onboardResults = loadOnboardResults();
   const profileByEmail = new Map(
@@ -402,6 +522,7 @@ export async function runChannelStats(options = {}) {
     token: config.DOLPHIN_TOKEN,
   });
 
+  console.log('[Stats] Режим Dolphin — профили из onboard-results.json');
   console.log('[Stats] Авторизация в локальном Dolphin API...');
   await dolphin.loginWithToken();
   console.log('[Stats] Проверка доступа к Cloud API...');
@@ -441,6 +562,32 @@ export async function runChannelStats(options = {}) {
 
   console.log(`\n🏁 Итог: каналов ${processed}, успешно ${ok}, ошибок ${fail}`);
   console.log(`📄 Результаты: ${getResultsFile(config)}`);
+}
+
+export async function runChannelStats(options = {}) {
+  const config = loadConfig();
+  const channelsFile = config.CHANNELS_FILE || 'channels.txt';
+  const channels = parseChannelsFile(channelsFile);
+
+  if (!channels.length) {
+    console.log('Нет каналов для проверки.');
+    return;
+  }
+
+  const accountsFile = config.ACCOUNTS_FILE || 'accounts.txt';
+  let accounts = [];
+  try {
+    accounts = parseAccountsFile(accountsFile);
+  } catch (err) {
+    if (useDolphin(config)) throw err;
+    console.warn(`[Stats] accounts.txt не найден — только коды каналов`);
+  }
+
+  if (useDolphin(config)) {
+    await runDolphinStats(config, channels, accounts);
+  } else {
+    await runPublicStats(config, channels, accounts);
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

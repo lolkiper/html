@@ -1,13 +1,14 @@
 {
+  "USE_DOLPHIN": false,
   "DOLPHIN_TOKEN": "",
   "DOLPHIN_LOCAL_API_URL": "http://localhost:3001",
   "DOLPHIN_CLOUD_API_URL": "https://dolphin-anty-api.com",
   "TOTP_WEBSITE": "https://2fa.fb.tools/",
-  "DELAY_BETWEEN_CHANNELS_MS": 5000,
+  "DELAY_BETWEEN_CHANNELS_MS": 3000,
   "ACCOUNTS_FILE": "accounts.txt",
   "CHANNELS_FILE": "channels.txt",
   "STATS_RESULTS_FILE": "channel-stats-results.json",
   "PLATFORM": "windows",
   "BROWSER_VERSION": "140",
-  "HEADLESS": false
+  "HEADLESS": true
 }
