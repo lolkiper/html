@@ -1,0 +1,40 @@
+{
+  "appId": "com.ytstatico.app",
+  "productName": "YT-Statico",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "stats-panel/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": ".",
+      "to": "yt-statico",
+      "filter": [
+        "channel-stats.mjs",
+        "playwright-env.mjs",
+        "account-onboard.mjs",
+        "dolphin-api.mjs",
+        "google-youtube-login.mjs",
+        "totp-website.mjs",
+        "stats-config.example.json",
+        "channels.example.txt",
+        "accounts.example.txt"
+      ]
+    },
+    {
+      "from": "playwright-browsers",
+      "to": "playwright-browsers",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": [{ "target": "portable", "arch": ["x64"] }],
+    "artifactName": "YT-Statico.exe"
+  },
+  "portable": {
+    "artifactName": "YT-Statico.exe"
+  }
+}

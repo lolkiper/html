@@ -1,0 +1,10 @@
+# Коды каналов YouTube — одна строка = один канал
+# Номер строки = номер канала = номер аккаунта в accounts.txt
+#
+# Форматы:
+#   UCxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   1|UCxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# UCxxxxxxxxxxxxxxxxxxxxxxxxxx
+# https://www.youtube.com/channel/UCyyyyyyyyyyyyyyyyyyyyyyyyyy

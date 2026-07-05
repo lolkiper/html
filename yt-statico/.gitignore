@@ -1,0 +1,11 @@
+node_modules/
+playwright-browsers/
+dist/
+dist-*/
+*.log
+stats-config.json
+channels.txt
+accounts.txt
+channel-stats-results.json
+onboard-results.json
+onboard-config.json
