@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Public YouTube channel stats parser without API key."""
+"""YouTube channel stats via YouTube Data API v3 with HTML fallback."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -37,6 +38,19 @@ BAN_PATTERNS = [
 ]
 
 BAN_URL_HINTS = ("disabled", "banned", "suspended", "terminated", "notavailable", "oops")
+
+YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
+_RUNTIME_API_KEY = ""
+
+
+def set_youtube_api_key(key: str) -> None:
+    global _RUNTIME_API_KEY
+    _RUNTIME_API_KEY = (key or "").strip()
+
+
+def get_youtube_api_key() -> str:
+    return _RUNTIME_API_KEY or os.environ.get("YOUTUBE_API_KEY", "").strip()
+
 
 HTTP_HEADERS = {
     "User-Agent": (
@@ -431,7 +445,180 @@ def _apply_html_info(stats: ChannelStats, parsed: dict[str, Any]) -> None:
     stats.last_video_url = parsed.get("last_video_url")
 
 
-def fetch_channel_stats(channel_number: int, raw: str) -> ChannelStats:
+def _youtube_api_get(endpoint: str, params: dict[str, Any], api_key: str) -> dict[str, Any]:
+    query = {**params, "key": api_key}
+    response = requests.get(f"{YOUTUBE_API_BASE}/{endpoint}", params=query, timeout=25)
+    try:
+        data = response.json()
+    except json.JSONDecodeError:
+        raise RuntimeError(f"YouTube API HTTP {response.status_code}")
+
+    if response.status_code != 200:
+        err = data.get("error", {}) if isinstance(data, dict) else {}
+        message = err.get("message", response.text)[:240]
+        raise RuntimeError(f"YouTube API: {message}")
+    return data
+
+
+def _format_api_date(iso_value: str | None) -> str:
+    if not iso_value:
+        return DASH
+    try:
+        dt = datetime.fromisoformat(iso_value.replace("Z", "+00:00"))
+        return dt.strftime("%d.%m.%Y")
+    except ValueError:
+        return iso_value[:10]
+
+
+def _extract_handle(raw: str) -> str | None:
+    value = (raw or "").strip()
+    pipe_match = re.match(r"^\d+\|(.+)$", value)
+    if pipe_match:
+        value = pipe_match.group(1).strip()
+    if value.startswith("@"):
+        return value[1:]
+    handle_match = re.search(r"youtube\.com/@([\w.-]+)", value, re.I)
+    if handle_match:
+        return handle_match.group(1)
+    return None
+
+
+def resolve_channel_id_via_api(raw: str, api_key: str) -> str | None:
+    channel_id = extract_channel_id(raw)
+    if channel_id:
+        return channel_id
+
+    handle = _extract_handle(raw)
+    if handle:
+        data = _youtube_api_get("channels", {"part": "id", "forHandle": handle}, api_key)
+        items = data.get("items") or []
+        if items:
+            return items[0].get("id")
+
+    value = (raw or "").strip()
+    legacy_match = re.search(r"youtube\.com/(?:c|user)/([\w.-]+)", value, re.I)
+    if legacy_match:
+        query = legacy_match.group(1)
+        data = _youtube_api_get(
+            "search",
+            {"part": "snippet", "type": "channel", "q": query, "maxResults": 1},
+            api_key,
+        )
+        items = data.get("items") or []
+        if items:
+            return items[0].get("snippet", {}).get("channelId")
+
+    return None
+
+
+def _fetch_latest_video_via_api(channel_item: dict[str, Any], api_key: str) -> dict[str, str | None]:
+    result = {
+        "title": DASH,
+        "views": DASH,
+        "date": DASH,
+        "url": None,
+    }
+    uploads_id = (
+        channel_item.get("contentDetails", {})
+        .get("relatedPlaylists", {})
+        .get("uploads")
+    )
+    if not uploads_id:
+        return result
+
+    playlist = _youtube_api_get(
+        "playlistItems",
+        {"part": "snippet,contentDetails", "playlistId": uploads_id, "maxResults": 1},
+        api_key,
+    )
+    items = playlist.get("items") or []
+    if not items:
+        return result
+
+    item = items[0]
+    snippet = item.get("snippet", {})
+    video_id = item.get("contentDetails", {}).get("videoId") or snippet.get("resourceId", {}).get("videoId")
+    result["title"] = snippet.get("title") or DASH
+    result["date"] = _format_api_date(snippet.get("publishedAt"))
+    if video_id:
+        result["url"] = f"https://www.youtube.com/watch?v={video_id}"
+        video_data = _youtube_api_get(
+            "videos",
+            {"part": "statistics", "id": video_id},
+            api_key,
+        )
+        video_items = video_data.get("items") or []
+        if video_items:
+            result["views"] = format_count(video_items[0].get("statistics", {}).get("viewCount"))
+    return result
+
+
+def _fetch_via_youtube_api(channel_number: int, raw: str, api_key: str) -> ChannelStats:
+    stats = ChannelStats(channel_number=channel_number, raw=raw)
+    channel_id = resolve_channel_id_via_api(raw, api_key)
+
+    if not channel_id:
+        stats.status = "ERROR"
+        stats.error = "Could not resolve channel ID"
+        stats.updated_at = datetime.now(timezone.utc).isoformat()
+        return stats
+
+    data = _youtube_api_get(
+        "channels",
+        {"part": "snippet,statistics,status,contentDetails", "id": channel_id},
+        api_key,
+    )
+    items = data.get("items") or []
+    if not items:
+        stats.channel_id = channel_id
+        stats.channel_url = f"https://www.youtube.com/channel/{channel_id}"
+        stats.is_blocked = True
+        stats.block_reason = "Channel not found or terminated"
+        stats.status = "BLOCKED"
+        stats.updated_at = datetime.now(timezone.utc).isoformat()
+        return stats
+
+    item = items[0]
+    snippet = item.get("snippet", {})
+    statistics = item.get("statistics", {})
+    status_info = item.get("status", {})
+
+    stats.channel_id = channel_id
+    stats.channel_url = f"https://www.youtube.com/channel/{channel_id}"
+    stats.channel_name = snippet.get("title") or DASH
+
+    if statistics.get("hiddenSubscriberCount"):
+        stats.subscribers = "\u0441\u043a\u0440\u044b\u0442\u043e"
+    else:
+        stats.subscribers = format_count(statistics.get("subscriberCount"))
+
+    stats.total_views = format_count(statistics.get("viewCount"))
+
+    if status_info.get("privacyStatus") == "closed":
+        stats.is_blocked = True
+        stats.block_reason = "Channel closed"
+        stats.status = "BLOCKED"
+        stats.updated_at = datetime.now(timezone.utc).isoformat()
+        return stats
+
+    if not statistics and not snippet.get("title"):
+        stats.is_blocked = True
+        stats.block_reason = "Channel unavailable"
+        stats.status = "BLOCKED"
+        stats.updated_at = datetime.now(timezone.utc).isoformat()
+        return stats
+
+    latest = _fetch_latest_video_via_api(item, api_key)
+    stats.last_video_title = latest["title"] or DASH
+    stats.last_video_views = latest["views"] or DASH
+    stats.last_video_date = latest["date"] or DASH
+    stats.last_video_url = latest["url"]
+    stats.status = "OK"
+    stats.updated_at = datetime.now(timezone.utc).isoformat()
+    return stats
+
+
+def _fetch_via_fallback(channel_number: int, raw: str) -> ChannelStats:
     stats = ChannelStats(channel_number=channel_number, raw=raw)
     channel_url = normalize_channel_input(raw)
     stats.channel_url = channel_url
@@ -475,3 +662,28 @@ def fetch_channel_stats(channel_number: int, raw: str) -> ChannelStats:
 
     stats.updated_at = datetime.now(timezone.utc).isoformat()
     return stats
+
+
+def fetch_channel_stats(channel_number: int, raw: str) -> ChannelStats:
+    api_key = get_youtube_api_key()
+    if not api_key:
+        stats = ChannelStats(channel_number=channel_number, raw=raw)
+        stats.status = "ERROR"
+        stats.error = "\u041d\u0443\u0436\u0435\u043d YOUTUBE_API_KEY \u0432 bot.py"
+        stats.updated_at = datetime.now(timezone.utc).isoformat()
+        return stats
+
+    try:
+        return _fetch_via_youtube_api(channel_number, raw, api_key)
+    except Exception as err:  # noqa: BLE001
+        stats = ChannelStats(channel_number=channel_number, raw=raw)
+        message = str(err)
+        if detect_ban_from_text(message):
+            stats.is_blocked = True
+            stats.block_reason = message[:240]
+            stats.status = "BLOCKED"
+        else:
+            stats.status = "ERROR"
+            stats.error = message[:240]
+        stats.updated_at = datetime.now(timezone.utc).isoformat()
+        return stats
