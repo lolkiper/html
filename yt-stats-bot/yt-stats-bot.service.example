@@ -1,0 +1,15 @@
+[Unit]
+Description=YT Stats Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/yt-stats-bot
+EnvironmentFile=/opt/yt-stats-bot/.env
+ExecStart=/opt/yt-stats-bot/.venv/bin/python /opt/yt-stats-bot/telegram_bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
