@@ -1,0 +1,9 @@
+# Одна строка = один канал YouTube
+# Форматы:
+#   UCxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   https://www.youtube.com/channel/UCxxxxxxxxxxxxxxxxxxxxxxxxxx
+#   https://www.youtube.com/@handle
+#   1|UCxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# UCxxxxxxxxxxxxxxxxxxxxxxxxxx
+# https://www.youtube.com/channel/UCyyyyyyyyyyyyyyyyyyyyyyyyyy
