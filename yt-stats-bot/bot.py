@@ -44,7 +44,7 @@ def _ensure_deps() -> None:
 _ensure_deps()
 
 import requests
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -625,17 +625,68 @@ def save_chat_results(chat_id: int, stats_list: list[ChannelStats]) -> None:
 
 
 HELP_TEXT = (
-    "<b>YT Stats Bot</b>\n\n"
-    "\u0411\u043e\u0442 \u0434\u043b\u044f \u043c\u043e\u043d\u0438\u0442\u043e\u0440\u0438\u043d\u0433\u0430 YouTube-\u043a\u0430\u043d\u0430\u043b\u043e\u0432 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0435.\n\n"
-    "<b>\u041a\u043e\u043c\u0430\u043d\u0434\u044b:</b>\n"
-    "/add &lt;\u0441\u0441\u044b\u043b\u043a\u0430&gt; \u2014 \u0434\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u043a\u0430\u043d\u0430\u043b\n"
-    "/list \u2014 \u0441\u043f\u0438\u0441\u043e\u043a (\u043a\u043d\u043e\u043f\u043a\u0438 \u25c0\ufe0f \u25b6\ufe0f)\n"
-    "/check \u2014 \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0432\u0441\u0435\n"
-    "/check 3 \u2014 \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043a\u0430\u043d\u0430\u043b #3\n"
-    "/remove 3 \u2014 \u0443\u0434\u0430\u043b\u0438\u0442\u044c \u043a\u0430\u043d\u0430\u043b #3\n"
-    "/help \u2014 \u0441\u043f\u0440\u0430\u0432\u043a\u0430\n\n"
-    "\u041c\u043e\u0436\u043d\u043e \u043f\u0440\u043e\u0441\u0442\u043e \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u0441\u0441\u044b\u043b\u043a\u0443 \u0432 \u0447\u0430\u0442."
+    "<b>\U0001f3ac YT Stats Bot</b>\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+    "\u041c\u043e\u043d\u0438\u0442\u043e\u0440\u0438\u043d\u0433 YouTube-\u043a\u0430\u043d\u0430\u043b\u043e\u0432:\n"
+    "\u2022 \u043f\u043e\u0434\u043f\u0438\u0441\u0447\u0438\u043a\u0438\n"
+    "\u2022 \u0431\u0430\u043d / \u0441\u0442\u0430\u0442\u0443\u0441\n"
+    "\u2022 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u044b\n"
+    "\u2022 \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u0432\u0438\u0434\u0435\u043e\n\n"
+    "\U0001f449 \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439 \u043a\u043d\u043e\u043f\u043a\u0438 \u043d\u0438\u0436\u0435\n"
+    "\u0438\u043b\u0438 \u043f\u0440\u043e\u0441\u0442\u043e \u043e\u0442\u043f\u0440\u0430\u0432\u044c \u0441\u0441\u044b\u043b\u043a\u0443 \u043d\u0430 \u043a\u0430\u043d\u0430\u043b."
 )
+
+BTN_LIST = "\U0001f4cb \u041c\u043e\u0438 \u043a\u0430\u043d\u0430\u043b\u044b"
+BTN_ADD = "\u2795 \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c"
+BTN_REFRESH = "\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c"
+BTN_SUMMARY = "\U0001f4ca \u0421\u0432\u043e\u0434\u043a\u0430"
+BTN_HELP = "\u2139\ufe0f \u041f\u043e\u043c\u043e\u0449\u044c"
+BTN_MENU = "\U0001f3e0 \u041c\u0435\u043d\u044e"
+
+REMOVE_PAGE_SIZE = 6
+
+
+def _main_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(BTN_LIST), KeyboardButton(BTN_ADD)],
+            [KeyboardButton(BTN_REFRESH), KeyboardButton(BTN_SUMMARY)],
+            [KeyboardButton(BTN_HELP)],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="\u0421\u0441\u044b\u043b\u043a\u0430 YouTube \u0438\u043b\u0438 \u043a\u043d\u043e\u043f\u043a\u0430 \u043c\u0435\u043d\u044e...",
+    )
+
+
+def _welcome_text(chat_id: int) -> str:
+    count = len(get_channel_links(chat_id))
+    results = get_results_for_chat(chat_id)
+    ok = sum(1 for s in results if s.status == "OK" and not s.is_blocked)
+    banned = sum(1 for s in results if s.is_blocked)
+    return (
+        f"<b>\U0001f3ac YT Stats Bot</b>\n"
+        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+        f"\U0001f4fa \u041a\u0430\u043d\u0430\u043b\u043e\u0432 \u0432 \u0441\u043f\u0438\u0441\u043a\u0435: <b>{count}</b>\n"
+        f"\u2705 \u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0445: <b>{ok}</b>  \U0001f6ab \u0417\u0430\u0431\u0430\u043d\u0435\u043d\u043e: <b>{banned}</b>\n\n"
+        f"\U0001f449 \u0412\u044b\u0431\u0435\u0440\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043a\u043d\u043e\u043f\u043a\u0430\u043c\u0438 \u043d\u0438\u0436\u0435"
+    )
+
+
+def _home_inline_keyboard(chat_id: int) -> InlineKeyboardMarkup:
+    count = len(get_channel_links(chat_id))
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(f"\U0001f4cb \u041a\u0430\u043d\u0430\u043b\u044b ({count})", callback_data=f"menu:list:{chat_id}:0")],
+            [
+                InlineKeyboardButton("\u2795 \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c", callback_data=f"menu:add:{chat_id}"),
+                InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c", callback_data=f"menu:check:{chat_id}"),
+            ],
+            [
+                InlineKeyboardButton("\U0001f4ca \u0421\u0432\u043e\u0434\u043a\u0430", callback_data=f"menu:summary:{chat_id}"),
+                InlineKeyboardButton("\U0001f5d1 \u0423\u0434\u0430\u043b\u0438\u0442\u044c", callback_data=f"menu:remove:{chat_id}:0"),
+            ],
+        ]
+    )
 
 
 def _is_allowed(user_id: int | None) -> bool:
@@ -672,60 +723,208 @@ def _status_emoji(stats: ChannelStats) -> str:
 
 def _format_channel_card(stats: ChannelStats, total: int) -> str:
     status = "\u0417\u0410\u0411\u0410\u041d\u0415\u041d" if stats.is_blocked else stats.status
+    bar = "\u2501" * 18
     lines = [
-        f"<b>\U0001f4fa \u041a\u0430\u043d\u0430\u043b #{stats.channel_number}/{total}</b>",
+        f"<b>\U0001f4fa \u041a\u0430\u043d\u0430\u043b {stats.channel_number} / {total}</b>",
+        bar,
         f"<b>{stats.channel_name}</b>",
         "",
-        f"\U0001f465 \u041f\u043e\u0434\u043f\u0438\u0441\u0447\u0438\u043a\u0438: <b>{stats.subscribers}</b>",
-        f"\U0001f441 \u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u044b \u043a\u0430\u043d\u0430\u043b\u0430: <b>{stats.total_views}</b>",
-        f"{_status_emoji(stats)} \u0421\u0442\u0430\u0442\u0443\u0441: <b>{status}</b>",
+        f"\U0001f465 \u041f\u043e\u0434\u043f\u0438\u0441\u0447\u0438\u043a\u0438   <b>{stats.subscribers}</b>",
+        f"\U0001f441 \u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u044b       <b>{stats.total_views}</b>",
+        f"{_status_emoji(stats)} \u0421\u0442\u0430\u0442\u0443\u0441          <b>{status}</b>",
     ]
     if stats.block_reason:
         lines.append(f"\u26a0\ufe0f {stats.block_reason}")
     if stats.error:
         lines.append(f"\u26a0\ufe0f {stats.error}")
 
-    lines.extend(
-        [
-            "",
-            f"\U0001f3ac <b>\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u0432\u0438\u0434\u0435\u043e:</b> {stats.last_video_title}",
-            f"\U0001f441 \u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u044b: {stats.last_video_views}",
-            f"\U0001f4c5 \u0414\u0430\u0442\u0430: {stats.last_video_date}",
-        ]
-    )
-    if stats.last_video_url:
-        lines.append(f'\U0001f517 <a href="{stats.last_video_url}">\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0432\u0438\u0434\u0435\u043e</a>')
-    if stats.channel_url:
-        lines.append(f'\U0001f517 <a href="{stats.channel_url}">\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043a\u0430\u043d\u0430\u043b</a>')
+    lines.extend(["", bar, "\U0001f3ac <b>\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u0435 \u0432\u0438\u0434\u0435\u043e</b>"])
+    lines.append(stats.last_video_title)
+    lines.append(f"\U0001f441 {stats.last_video_views}  \U0001f4c5 {stats.last_video_date}")
     return "\n".join(lines)
 
 
-def _list_keyboard(chat_id: int, page: int, total: int) -> InlineKeyboardMarkup:
-    buttons = []
-    nav = []
+def _format_summary(chat_id: int) -> str:
+    links = get_channel_links(chat_id)
+    results = {s.channel_number: s for s in get_results_for_chat(chat_id)}
+    if not links:
+        return "\U0001f4ca <b>\u0421\u0432\u043e\u0434\u043a\u0430</b>\n\n\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0443\u0441\u0442."
+
+    lines = [
+        f"<b>\U0001f4ca \u0421\u0432\u043e\u0434\u043a\u0430</b>",
+        "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501",
+        f"\u0412\u0441\u0435\u0433\u043e \u043a\u0430\u043d\u0430\u043b\u043e\u0432: <b>{len(links)}</b>\n",
+    ]
+    for i in range(1, len(links) + 1):
+        stats = results.get(i)
+        if stats:
+            emoji = _status_emoji(stats)
+            name = stats.channel_name if stats.channel_name != DASH else links[i - 1][:40]
+            lines.append(f"{emoji} <b>#{i}</b> {name}")
+            lines.append(f"    \U0001f465 {stats.subscribers}  \U0001f441 {stats.total_views}")
+        else:
+            lines.append(f"\u23f3 <b>#{i}</b> <code>{links[i - 1][:50]}</code>")
+            lines.append("    \u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445")
+    return "\n".join(lines)
+
+
+def _list_keyboard(
+    chat_id: int,
+    page: int,
+    total: int,
+    stats: ChannelStats | None = None,
+) -> InlineKeyboardMarkup:
+    buttons: list[list[InlineKeyboardButton]] = []
+    nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(InlineKeyboardButton("\u25c0\ufe0f \u041d\u0430\u0437\u0430\u0434", callback_data=f"page:{chat_id}:{page - 1}"))
-    nav.append(InlineKeyboardButton(f"{page + 1}/{total}", callback_data="noop"))
+        nav.append(InlineKeyboardButton("\u25c0\ufe0f", callback_data=f"page:{chat_id}:{page - 1}"))
+    nav.append(InlineKeyboardButton(f" {page + 1} / {total} ", callback_data="noop"))
     if page < total - 1:
-        nav.append(InlineKeyboardButton("\u0412\u043f\u0435\u0440\u0451\u0434 \u25b6\ufe0f", callback_data=f"page:{chat_id}:{page + 1}"))
+        nav.append(InlineKeyboardButton("\u25b6\ufe0f", callback_data=f"page:{chat_id}:{page + 1}"))
+    buttons.append(nav)
+
+    link_row: list[InlineKeyboardButton] = []
+    if stats and stats.channel_url:
+        link_row.append(InlineKeyboardButton("\U0001f4fa \u041a\u0430\u043d\u0430\u043b", url=stats.channel_url))
+    if stats and stats.last_video_url:
+        link_row.append(InlineKeyboardButton("\U0001f3ac \u0412\u0438\u0434\u0435\u043e", url=stats.last_video_url))
+    if link_row:
+        buttons.append(link_row)
+
+    buttons.append(
+        [
+            InlineKeyboardButton("\U0001f504 \u042d\u0442\u043e\u0442", callback_data=f"refresh:{chat_id}:{page + 1}"),
+            InlineKeyboardButton("\U0001f504 \u0412\u0441\u0435", callback_data=f"refresh_all:{chat_id}"),
+        ]
+    )
+    buttons.append(
+        [
+            InlineKeyboardButton("\U0001f5d1 \u0423\u0434\u0430\u043b\u0438\u0442\u044c", callback_data=f"pickrm:{chat_id}:{page}"),
+            InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}"),
+        ]
+    )
+    return InlineKeyboardMarkup(buttons)
+
+
+def _remove_picker_keyboard(chat_id: int, page: int) -> InlineKeyboardMarkup:
+    links = get_channel_links(chat_id)
+    results = {s.channel_number: s for s in get_results_for_chat(chat_id)}
+    total = len(links)
+    pages = max(1, (total + REMOVE_PAGE_SIZE - 1) // REMOVE_PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    start = page * REMOVE_PAGE_SIZE
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    for i in range(start + 1, min(start + REMOVE_PAGE_SIZE + 1, total + 1)):
+        stats = results.get(i)
+        label_name = (stats.channel_name if stats and stats.channel_name != DASH else links[i - 1])[:28]
+        buttons.append(
+            [InlineKeyboardButton(f"\U0001f5d1 #{i} {label_name}", callback_data=f"remove:{chat_id}:{i}")]
+        )
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("\u25c0\ufe0f", callback_data=f"menu:remove:{chat_id}:{page - 1}"))
+    nav.append(InlineKeyboardButton(f" {page + 1}/{pages} ", callback_data="noop"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("\u25b6\ufe0f", callback_data=f"menu:remove:{chat_id}:{page + 1}"))
     if nav:
         buttons.append(nav)
-    buttons.append([
-        InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c", callback_data=f"refresh:{chat_id}:{page + 1}"),
-        InlineKeyboardButton("\U0001f504 \u0412\u0441\u0435", callback_data=f"refresh_all:{chat_id}"),
-    ])
+    buttons.append([InlineKeyboardButton("\u274c \u041e\u0442\u043c\u0435\u043d\u0430", callback_data=f"menu:home:{chat_id}")])
     return InlineKeyboardMarkup(buttons)
+
+
+async def _send_home(chat_id: int, update: Update, edit: bool = False) -> None:
+    text = _welcome_text(chat_id)
+    markup = _home_inline_keyboard(chat_id)
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=markup, disable_web_page_preview=True
+        )
+    elif update.message:
+        await update.message.reply_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=_main_reply_keyboard(),
+            disable_web_page_preview=True,
+        )
+        await update.message.reply_text(
+            "\u0411\u044b\u0441\u0442\u0440\u043e\u0435 \u043c\u0435\u043d\u044e:",
+            reply_markup=markup,
+        )
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=markup, disable_web_page_preview=True
+        )
+
+
+async def _prompt_add(chat_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["mode"] = "add"
+    text = (
+        "\u2795 <b>\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u043a\u0430\u043d\u0430\u043b</b>\n\n"
+        "\u041e\u0442\u043f\u0440\u0430\u0432\u044c \u0441\u0441\u044b\u043b\u043a\u0443:\n"
+        "<code>https://youtube.com/channel/UC...</code>\n"
+        "<code>https://youtube.com/@handle</code>\n"
+        "<code>UCxxxxxxxx</code>"
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("\u274c \u041e\u0442\u043c\u0435\u043d\u0430", callback_data=f"menu:home:{chat_id}")]])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+async def _send_summary(chat_id: int, update: Update, edit: bool = False) -> None:
+    text = _format_summary(chat_id)
+    markup = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0432\u0441\u0435", callback_data=f"menu:check:{chat_id}")],
+            [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
+        ]
+    )
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup, disable_web_page_preview=True)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+async def _send_remove_picker(chat_id: int, update: Update, page: int = 0, edit: bool = False) -> None:
+    links = get_channel_links(chat_id)
+    if not links:
+        text = "\U0001f5d1 \u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0443\u0441\u0442"
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")]])
+        if edit and update.callback_query:
+            await update.callback_query.edit_message_text(text, reply_markup=markup)
+        elif update.message:
+            await update.message.reply_text(text, reply_markup=markup)
+        return
+
+    text = "\U0001f5d1 <b>\u041a\u0430\u043a\u043e\u0439 \u043a\u0430\u043d\u0430\u043b \u0443\u0434\u0430\u043b\u0438\u0442\u044c?</b>"
+    markup = _remove_picker_keyboard(chat_id, page)
+    if edit and update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_allowed(update.effective_user and update.effective_user.id):
         await _deny(update)
         return
-    await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML)
+    context.user_data.pop("mode", None)
+    await _send_home(update.effective_chat.id, update)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await cmd_start(update, context)
+    if not _is_allowed(update.effective_user and update.effective_user.id):
+        await _deny(update)
+        return
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{update.effective_chat.id}")]])
+    await update.message.reply_text(HELP_TEXT, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -733,7 +932,7 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _deny(update)
         return
     if not context.args:
-        await update.message.reply_text("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435: /add <\u0441\u0441\u044b\u043b\u043a\u0430 \u043d\u0430 \u043a\u0430\u043d\u0430\u043b>")
+        await _prompt_add(update.effective_chat.id, update, context)
         return
 
     link = " ".join(context.args).strip()
@@ -743,7 +942,17 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     chat_id = update.effective_chat.id
     ok, message = add_channel_link(chat_id, link)
-    await update.message.reply_text(message)
+    context.user_data.pop("mode", None)
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c", callback_data=f"menu:check:{chat_id}"),
+                InlineKeyboardButton("\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data=f"menu:list:{chat_id}:0"),
+            ],
+            [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
+        ]
+    )
+    await update.message.reply_text(message, reply_markup=markup)
 
 
 async def _fetch_all(chat_id: int, links: list[str]) -> list[ChannelStats]:
@@ -776,12 +985,18 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     links = get_channel_links(chat_id)
     if not links:
-        await update.message.reply_text("\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0443\u0441\u0442. /add <\u0441\u0441\u044b\u043b\u043a\u0430>")
+        markup = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("\u2795 \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c", callback_data=f"menu:add:{chat_id}")],
+                [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
+            ]
+        )
+        await update.message.reply_text("\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0443\u0441\u0442.", reply_markup=markup)
         return
 
     if context.args and context.args[0].isdigit():
         index = int(context.args[0])
-        msg = await update.message.reply_text(f"\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e \u043a\u0430\u043d\u0430\u043b #{index}...")
+        msg = await update.message.reply_text(f"\u23f3 \u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e \u043a\u0430\u043d\u0430\u043b #{index}...")
         stats = await _fetch_one(chat_id, index)
         if not stats:
             await msg.edit_text(f"\u041d\u0435\u0442 \u043a\u0430\u043d\u0430\u043b\u0430 #{index}. \u0412\u0441\u0435\u0433\u043e: {len(links)}")
@@ -789,13 +1004,20 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.edit_text(
             _format_channel_card(stats, len(links)),
             parse_mode=ParseMode.HTML,
+            reply_markup=_list_keyboard(chat_id, index - 1, len(links), stats),
             disable_web_page_preview=True,
         )
         return
 
-    msg = await update.message.reply_text(f"\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e {len(links)} \u043a\u0430\u043d\u0430\u043b\u043e\u0432...")
+    msg = await update.message.reply_text(f"\u23f3 \u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e {len(links)} \u043a\u0430\u043d\u0430\u043b\u043e\u0432...")
     await _fetch_all(chat_id, links)
-    await msg.edit_text("\u0413\u043e\u0442\u043e\u0432\u043e. /list")
+    markup = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("\U0001f4cb \u041a \u0441\u043f\u0438\u0441\u043a\u0443", callback_data=f"menu:list:{chat_id}:0")],
+            [InlineKeyboardButton("\U0001f4ca \u0421\u0432\u043e\u0434\u043a\u0430", callback_data=f"menu:summary:{chat_id}")],
+        ]
+    )
+    await msg.edit_text("\u2705 \u0413\u043e\u0442\u043e\u0432\u043e!", reply_markup=markup)
 
 
 async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -808,7 +1030,8 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     chat_id = update.effective_chat.id
     ok, message = remove_channel_link(chat_id, int(context.args[0]))
-    await update.message.reply_text(message)
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")]])
+    await update.message.reply_text(message, reply_markup=markup)
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -821,13 +1044,19 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _send_list_page(chat_id: int, update: Update, page: int, edit: bool = False) -> None:
     links = get_channel_links(chat_id)
     if not links:
-        text = "\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0443\u0441\u0442.\n\n/add <\u0441\u0441\u044b\u043b\u043a\u0430>"
+        text = "\U0001f4cb <b>\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0443\u0441\u0442</b>"
+        markup = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("\u2795 \u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c", callback_data=f"menu:add:{chat_id}")],
+                [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
+            ]
+        )
         if edit and update.callback_query:
-            await update.callback_query.edit_message_text(text)
+            await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         elif update.message:
-            await update.message.reply_text(text)
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         elif update.callback_query:
-            await update.callback_query.message.reply_text(text)
+            await update.callback_query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
     results = get_results_for_chat(chat_id)
@@ -835,17 +1064,19 @@ async def _send_list_page(chat_id: int, update: Update, page: int, edit: bool = 
     total = len(links)
     page = max(0, min(page, total - 1))
     channel_num = page + 1
+    stats = by_num.get(channel_num)
 
-    if channel_num in by_num:
-        text = _format_channel_card(by_num[channel_num], total)
+    if stats:
+        text = _format_channel_card(stats, total)
     else:
         text = (
-            f"<b>\u041a\u0430\u043d\u0430\u043b #{channel_num}/{total}</b>\n"
+            f"<b>\U0001f4fa \u041a\u0430\u043d\u0430\u043b {channel_num} / {total}</b>\n"
+            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
             f"<code>{links[page][:120]}</code>\n\n"
-            "\u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445. \u041d\u0430\u0436\u043c\u0438 \u00ab\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c\u00bb."
+            "\u23f3 \u041d\u0430\u0436\u043c\u0438 \u00ab\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c\u00bb"
         )
 
-    keyboard = _list_keyboard(chat_id, page, total)
+    keyboard = _list_keyboard(chat_id, page, total, stats)
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(
             text,
@@ -883,6 +1114,52 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "noop":
         return
 
+    if data.startswith("menu:"):
+        parts = data.split(":")
+        action = parts[1]
+        chat_id = int(parts[2])
+        if action == "home":
+            context.user_data.pop("mode", None)
+            await _send_home(chat_id, update, edit=True)
+        elif action == "list":
+            page = int(parts[3]) if len(parts) > 3 else 0
+            await _send_list_page(chat_id, update, page, edit=True)
+        elif action == "add":
+            await _prompt_add(chat_id, update, context)
+        elif action == "check":
+            links = get_channel_links(chat_id)
+            if not links:
+                await query.edit_message_text("\u0421\u043f\u0438\u0441\u043e\u043a \u043f\u0443\u0441\u0442.")
+                return
+            await query.edit_message_text(f"\u23f3 \u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e {len(links)} \u043a\u0430\u043d\u0430\u043b\u043e\u0432...")
+            await _fetch_all(chat_id, links)
+            await _send_summary(chat_id, update, edit=True)
+        elif action == "summary":
+            await _send_summary(chat_id, update, edit=True)
+        elif action == "remove":
+            page = int(parts[3]) if len(parts) > 3 else 0
+            await _send_remove_picker(chat_id, update, page, edit=True)
+        return
+
+    if data.startswith("pickrm:"):
+        _, chat_id_raw, page_raw = data.split(":", 2)
+        await _send_remove_picker(int(chat_id_raw), update, int(page_raw), edit=True)
+        return
+
+    if data.startswith("remove:"):
+        _, chat_id_raw, index_raw = data.split(":", 2)
+        chat_id = int(chat_id_raw)
+        index = int(index_raw)
+        ok, message = remove_channel_link(chat_id, index)
+        markup = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("\U0001f4cb \u041a \u0441\u043f\u0438\u0441\u043a\u0443", callback_data=f"menu:list:{chat_id}:0")],
+                [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
+            ]
+        )
+        await query.edit_message_text(message, reply_markup=markup)
+        return
+
     if data.startswith("page:"):
         _, chat_id_raw, page_raw = data.split(":", 2)
         await _send_list_page(int(chat_id_raw), update, int(page_raw), edit=True)
@@ -891,7 +1168,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data.startswith("refresh_all:"):
         chat_id = int(data.split(":", 1)[1])
         links = get_channel_links(chat_id)
-        await query.edit_message_text(f"\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e {len(links)} \u043a\u0430\u043d\u0430\u043b\u043e\u0432...")
+        await query.edit_message_text(f"\u23f3 \u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e {len(links)} \u043a\u0430\u043d\u0430\u043b\u043e\u0432...")
         await _fetch_all(chat_id, links)
         await _send_list_page(chat_id, update, page=0, edit=True)
         return
@@ -900,8 +1177,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         _, chat_id_raw, index_raw = data.split(":", 2)
         chat_id = int(chat_id_raw)
         index = int(index_raw)
-        await query.edit_message_text(f"\u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e \u043a\u0430\u043d\u0430\u043b #{index}...")
-        await _fetch_one(chat_id, index)
+        await query.edit_message_text(f"\u23f3 \u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e \u043a\u0430\u043d\u0430\u043b #{index}...")
+        stats = await _fetch_one(chat_id, index)
         await _send_list_page(chat_id, update, page=index - 1, edit=True)
 
 
@@ -918,14 +1195,66 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _deny(update)
         return
 
-    match = YOUTUBE_RE.search(update.message.text)
+    text = update.message.text.strip()
+    chat_id = update.effective_chat.id
+
+    if text == BTN_LIST or text == BTN_MENU:
+        await _send_list_page(chat_id, update, page=0)
+        return
+    if text == BTN_ADD:
+        await _prompt_add(chat_id, update, context)
+        return
+    if text == BTN_REFRESH:
+        await cmd_check(update, context)
+        return
+    if text == BTN_SUMMARY:
+        await _send_summary(chat_id, update)
+        return
+    if text == BTN_HELP:
+        await cmd_help(update, context)
+        return
+
+    if context.user_data.get("mode") == "add":
+        match = YOUTUBE_RE.search(text)
+        if not match:
+            await update.message.reply_text("\u274c \u041d\u0443\u0436\u043d\u0430 \u0441\u0441\u044b\u043b\u043a\u0430 YouTube")
+            return
+        link = match.group(1).strip()
+        ok, message = add_channel_link(chat_id, link)
+        context.user_data.pop("mode", None)
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c", callback_data=f"menu:check:{chat_id}"),
+                    InlineKeyboardButton("\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data=f"menu:list:{chat_id}:0"),
+                ],
+                [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
+            ]
+        )
+        await update.message.reply_text(message, reply_markup=markup)
+        return
+
+    match = YOUTUBE_RE.search(text)
     if not match:
+        markup = _home_inline_keyboard(chat_id)
+        await update.message.reply_text(
+            "\U0001f449 \u0412\u044b\u0431\u0435\u0440\u0438 \u043a\u043d\u043e\u043f\u043a\u0443 \u0438\u043b\u0438 \u043e\u0442\u043f\u0440\u0430\u0432\u044c \u0441\u0441\u044b\u043b\u043a\u0443 YouTube",
+            reply_markup=markup,
+        )
         return
 
     link = match.group(1).strip()
-    chat_id = update.effective_chat.id
     ok, message = add_channel_link(chat_id, link)
-    await update.message.reply_text(f"{message}\n\n/check \u2014 \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c\n/list \u2014 \u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c")
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c", callback_data=f"menu:check:{chat_id}"),
+                InlineKeyboardButton("\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data=f"menu:list:{chat_id}:0"),
+            ],
+            [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
+        ]
+    )
+    await update.message.reply_text(message, reply_markup=markup)
 
 
 def main() -> None:
