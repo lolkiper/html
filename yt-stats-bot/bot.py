@@ -875,13 +875,30 @@ def _welcome_text(chat_id: int) -> str:
     results = get_results_for_chat(chat_id)
     ok = sum(1 for s in results if s.status == "OK" and not s.is_blocked)
     banned = sum(1 for s in results if s.is_blocked)
+    api_line = (
+        "\u2705 YouTube API \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d"
+        if get_youtube_api_key()
+        else "\u26a0\ufe0f <b>\u041d\u0443\u0436\u0435\u043d YOUTUBE_API_KEY</b> \u0432 bot.py"
+    )
     return (
         f"<b>\U0001f3ac YT Stats Bot</b>\n"
         f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+        f"{api_line}\n"
         f"\U0001f4fa \u041a\u0430\u043d\u0430\u043b\u043e\u0432 \u0432 \u0441\u043f\u0438\u0441\u043a\u0435: <b>{count}</b>\n"
         f"\u2705 \u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0445: <b>{ok}</b>  \U0001f6ab \u0417\u0430\u0431\u0430\u043d\u0435\u043d\u043e: <b>{banned}</b>\n\n"
         f"\U0001f449 \u0412\u044b\u0431\u0435\u0440\u0438 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043a\u043d\u043e\u043f\u043a\u0430\u043c\u0438 \u043d\u0438\u0436\u0435"
     )
+
+
+def _needs_stats_fetch(chat_id: int) -> bool:
+    links = get_channel_links(chat_id)
+    if not links:
+        return False
+    results = {s.channel_number: s for s in get_results_for_chat(chat_id)}
+    for i in range(1, len(links) + 1):
+        if i not in results:
+            return True
+    return False
 
 
 def _home_inline_keyboard(chat_id: int) -> InlineKeyboardMarkup:
@@ -965,18 +982,26 @@ def _format_summary(chat_id: int) -> str:
     lines = [
         f"<b>\U0001f4ca \u0421\u0432\u043e\u0434\u043a\u0430</b>",
         "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501",
-        f"\u0412\u0441\u0435\u0433\u043e \u043a\u0430\u043d\u0430\u043b\u043e\u0432: <b>{len(links)}</b>\n",
     ]
+    if not get_youtube_api_key():
+        lines.append("\u26a0\ufe0f \u0412\u0441\u0442\u0430\u0432\u044c <b>YOUTUBE_API_KEY</b> \u0432 bot.py")
+    lines.append(f"\u0412\u0441\u0435\u0433\u043e \u043a\u0430\u043d\u0430\u043b\u043e\u0432: <b>{len(links)}</b>\n")
+
     for i in range(1, len(links) + 1):
         stats = results.get(i)
-        if stats:
+        if stats and stats.status != "PENDING":
             emoji = _status_emoji(stats)
-            name = stats.channel_name if stats.channel_name != DASH else links[i - 1][:40]
+            name = stats.channel_name if stats.channel_name != DASH else f"\u041a\u0430\u043d\u0430\u043b #{i}"
             lines.append(f"{emoji} <b>#{i}</b> {name}")
             lines.append(f"    \U0001f465 {stats.subscribers}  \U0001f441 {stats.total_views}")
+            if stats.is_blocked:
+                lines.append(f"    \U0001f6ab \u0417\u0410\u0411\u0410\u041d\u0415\u041d")
+            elif stats.error:
+                lines.append(f"    \u274c {stats.error[:80]}")
         else:
-            lines.append(f"\u23f3 <b>#{i}</b> <code>{links[i - 1][:50]}</code>")
-            lines.append("    \u041d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445")
+            short = extract_channel_id(links[i - 1]) or links[i - 1][:45]
+            lines.append(f"\u23f3 <b>#{i}</b> <code>{short}</code>")
+            lines.append("    \u041d\u0430\u0436\u043c\u0438 \u00ab\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0432\u0441\u0435\u00bb")
     return "\n".join(lines)
 
 
@@ -1087,6 +1112,16 @@ async def _prompt_add(chat_id: int, update: Update, context: ContextTypes.DEFAUL
 
 
 async def _send_summary(chat_id: int, update: Update, edit: bool = False) -> None:
+    links = get_channel_links(chat_id)
+    if links and _needs_stats_fetch(chat_id) and get_youtube_api_key():
+        loading = "\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443..."
+        if edit and update.callback_query:
+            await update.callback_query.edit_message_text(loading)
+        elif update.message:
+            await update.message.reply_text(loading)
+        await _fetch_all(chat_id, links)
+        edit = bool(update.callback_query)
+
     text = _format_summary(chat_id)
     markup = InlineKeyboardMarkup(
         [
@@ -1100,6 +1135,52 @@ async def _send_summary(chat_id: int, update: Update, edit: bool = False) -> Non
         await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup, disable_web_page_preview=True)
     elif update.callback_query:
         await update.callback_query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+async def _finish_add_channel(
+    chat_id: int,
+    update: Update,
+    message: str,
+    ok: bool,
+) -> None:
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data=f"menu:list:{chat_id}:0"),
+                InlineKeyboardButton("\U0001f4ca \u0421\u0432\u043e\u0434\u043a\u0430", callback_data=f"menu:summary:{chat_id}"),
+            ],
+            [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
+        ]
+    )
+    if not ok:
+        await update.message.reply_text(message, reply_markup=markup)
+        return
+
+    if not get_youtube_api_key():
+        await update.message.reply_text(
+            f"{message}\n\n\u26a0\ufe0f \u0412\u0441\u0442\u0430\u0432\u044c <b>YOUTUBE_API_KEY</b> \u0432 bot.py \u0438 \u043d\u0430\u0436\u043c\u0438 \u00ab\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c\u00bb",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    wait = await update.message.reply_text("\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0441\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0443...")
+    index = len(get_channel_links(chat_id))
+    stats = await _fetch_one(chat_id, index)
+    if stats and stats.status == "OK":
+        await wait.edit_text(
+            f"{message}\n\n\u2705 <b>{stats.channel_name}</b>\n\U0001f465 {stats.subscribers}  \U0001f441 {stats.total_views}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    elif stats:
+        await wait.edit_text(
+            f"{message}\n\n{_status_emoji(stats)} {stats.error or stats.block_reason or stats.status}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+    else:
+        await wait.edit_text(message, reply_markup=markup)
 
 
 async def _send_remove_picker(chat_id: int, update: Update, page: int = 0, edit: bool = False) -> None:
@@ -1155,16 +1236,7 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     ok, message = add_channel_link(chat_id, link)
     context.user_data.pop("mode", None)
-    markup = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c", callback_data=f"menu:check:{chat_id}"),
-                InlineKeyboardButton("\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data=f"menu:list:{chat_id}:0"),
-            ],
-            [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
-        ]
-    )
-    await update.message.reply_text(message, reply_markup=markup)
+    await _finish_add_channel(chat_id, update, message, ok)
 
 
 async def _fetch_all(chat_id: int, links: list[str]) -> list[ChannelStats]:
@@ -1278,15 +1350,28 @@ async def _send_list_page(chat_id: int, update: Update, page: int, edit: bool = 
     channel_num = page + 1
     stats = by_num.get(channel_num)
 
-    if stats:
+    if stats is None and get_youtube_api_key():
+        if edit and update.callback_query:
+            await update.callback_query.edit_message_text(f"\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u043a\u0430\u043d\u0430\u043b #{channel_num}...")
+        elif update.message:
+            await update.message.reply_text(f"\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u043a\u0430\u043d\u0430\u043b #{channel_num}...")
+        stats = await _fetch_one(chat_id, channel_num)
+
+    if stats and stats.status != "PENDING":
         text = _format_channel_card(stats, total)
     else:
+        short = extract_channel_id(links[page]) or links[page][:80]
         text = (
             f"<b>\U0001f4fa \u041a\u0430\u043d\u0430\u043b {channel_num} / {total}</b>\n"
             f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-            f"<code>{links[page][:120]}</code>\n\n"
-            "\u23f3 \u041d\u0430\u0436\u043c\u0438 \u00ab\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c\u00bb"
+            f"<code>{short}</code>\n\n"
         )
+        if not get_youtube_api_key():
+            text += "\u26a0\ufe0f \u0412\u0441\u0442\u0430\u0432\u044c YOUTUBE_API_KEY \u0432 bot.py"
+        elif stats and stats.error:
+            text += f"\u274c {stats.error}"
+        else:
+            text += "\u23f3 \u041d\u0430\u0436\u043c\u0438 \u00ab\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c\u00bb"
 
     keyboard = _list_keyboard(chat_id, page, total, stats)
     if edit and update.callback_query:
@@ -1434,16 +1519,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         link = match.group(1).strip()
         ok, message = add_channel_link(chat_id, link)
         context.user_data.pop("mode", None)
-        markup = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c", callback_data=f"menu:check:{chat_id}"),
-                    InlineKeyboardButton("\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data=f"menu:list:{chat_id}:0"),
-                ],
-                [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
-            ]
-        )
-        await update.message.reply_text(message, reply_markup=markup)
+        await _finish_add_channel(chat_id, update, message, ok)
         return
 
     match = YOUTUBE_RE.search(text)
@@ -1457,16 +1533,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     link = match.group(1).strip()
     ok, message = add_channel_link(chat_id, link)
-    markup = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("\U0001f504 \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c", callback_data=f"menu:check:{chat_id}"),
-                InlineKeyboardButton("\U0001f4cb \u0421\u043f\u0438\u0441\u043e\u043a", callback_data=f"menu:list:{chat_id}:0"),
-            ],
-            [InlineKeyboardButton("\U0001f3e0 \u041c\u0435\u043d\u044e", callback_data=f"menu:home:{chat_id}")],
-        ]
-    )
-    await update.message.reply_text(message, reply_markup=markup)
+    await _finish_add_channel(chat_id, update, message, ok)
 
 
 def main() -> None:
