@@ -10,11 +10,20 @@ if not exist node_modules (
 
 echo.
 echo ========================================
-echo   Сборка YouTube-Farm-Pro.exe
+echo   Сборка YouTube Zaliver
 echo ========================================
 echo.
 
-call npm run build:win
+call scripts\kill-and-clean.bat
+if errorlevel 1 (
+  echo.
+  echo Закрой программу и папку dist, потом повтори
+  pause
+  exit /b 1
+)
+
+set CSC_IDENTITY_AUTO_DISCOVERY=false
+call npx electron-builder --config electron-builder.json --win dir
 if errorlevel 1 goto :fail
 
 call scripts\copy-farm-to-dist.bat
@@ -22,17 +31,18 @@ call scripts\copy-farm-to-dist.bat
 echo.
 echo ========================================
 echo   Готово!
-echo   EXE: dist\YouTube-Farm-Pro.exe
-echo.
-echo   Скопируйте рядом с EXE (build.bat копирует автоматически):
-echo     - main.mjs
-echo     - youtube-studio.mjs
-echo     (mode-presets.mjs больше не нужен для воркера — встроен в main.mjs)
+echo   Запуск: dist\win-unpacked\YouTube Zaliver.exe
 echo ========================================
 pause
 exit /b 0
 
 :fail
-echo Сборка не удалась
+echo.
+echo Сборка не удалась.
+echo.
+echo Если Access denied — закрой EXE и Electron.
+echo Если app-builder.exe — добавь папку в исключения антивируса.
+echo.
+echo Без EXE можно запустить: start.bat
 pause
 exit /b 1

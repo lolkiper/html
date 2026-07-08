@@ -29,11 +29,8 @@
     { "from": "videos", "to": "videos", "filter": ["**/*"] }
   ],
   "win": {
-    "target": ["portable"],
-    "artifactName": "YouTube-Farm-Pro.exe"
-  },
-  "portable": {
-    "artifactName": "YouTube-Farm-Pro.exe"
+    "target": ["dir"],
+    "signAndEditExecutable": false
   },
   "extraMetadata": {
     "main": "panel/main.mjs"

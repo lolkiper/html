@@ -21,13 +21,17 @@ start.bat
 
 ## Вариант Б — собрать EXE
 
+**Перед сборкой закрой программу**, если она запущена.
+
 ```bat
 СБОРКА.bat
 ```
 
 Готовый файл: `dist\win-unpacked\YouTube Zaliver.exe`
 
-Рядом с EXE автоматически лежат `main.mjs` и `youtube-studio.mjs`.
+Если ошибка **Access denied** — закрой EXE и папку `dist` в Проводнике, запусти снова.
+
+Если **app-builder.exe** — добавь папку `yt-farm` в исключения антивируса (Windows Defender).
 
 ---
 

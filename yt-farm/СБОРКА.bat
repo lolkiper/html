@@ -34,7 +34,17 @@ echo [4/5] Папка videos...
 if not exist videos mkdir videos
 
 echo.
-echo [5/5] Сборка EXE...
+echo [5/6] Очистка dist (закрытие старых процессов)...
+call scripts\kill-and-clean.bat
+if errorlevel 1 (
+  echo Закрой YouTube Zaliver и повтори СБОРКА.bat
+  pause
+  exit /b 1
+)
+
+echo.
+echo [6/6] Сборка EXE...
+set CSC_IDENTITY_AUTO_DISCOVERY=false
 call npm run build:win
 if errorlevel 1 goto :fail
 
@@ -54,5 +64,11 @@ exit /b 0
 :fail
 echo.
 echo [ОШИБКА] Сборка прервана
+echo.
+echo Частые причины:
+echo   - Access denied: закрой dist\win-unpacked\YouTube Zaliver.exe
+echo   - app-builder.exe: антивирус блокирует — добавь папку yt-farm в исключения
+echo.
+echo Работает без EXE: install.bat ^> start.bat
 pause
 exit /b 1
