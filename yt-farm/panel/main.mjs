@@ -64,9 +64,8 @@ function ensureConfigFile() {
 }
 
 function createWindow() {
-  // ~37% × ~54% экрана 1920×1080 — как на референсе пользователя
-  const WIN_W = 720;
-  const WIN_H = 580;
+  const WIN_W = 1500;
+  const WIN_H = 1000;
 
   mainWindow = new BrowserWindow({
     width: WIN_W,
@@ -79,7 +78,7 @@ function createWindow() {
     resizable: false,
     maximizable: false,
     fullscreenable: false,
-    title: 'YouTube Zaliver v1.2',
+    title: 'YouTube Shorts Farm Ultra',
     backgroundColor: '#07030d',
     autoHideMenuBar: true,
     webPreferences: {
