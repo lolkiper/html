@@ -259,10 +259,24 @@ function isValidScheduleTime(str) {
   return typeof str === 'string' && /^\d{1,2}\.\d{1,2}\.\d{4} \d{1,2}:\d{2}$/.test(str.trim());
 }
 
-function parseScheduleTime(str) {
-  if (!isValidScheduleTime(str)) {
-    throw new Error(`Некорректный формат расписания: ${String(str)}`);
+function sanitizeSchedule(schedule) {
+  return (schedule || []).filter(isValidScheduleTime);
+}
+
+function repairChannelSchedule(channel, channelNumber) {
+  if (!channel) return [];
+  const before = (channel.schedule || []).length;
+  const clean = sanitizeSchedule(channel.schedule);
+  if (clean.length !== before) {
+    console.log(`[Schedule] Канал №${channelNumber ?? channel.channelNumber}: удалено ${before - clean.length} битых слотов (immediate и др.)`);
   }
+  channel.schedule = clean;
+  if (!clean.length) channel.initialized = false;
+  return clean;
+}
+
+function parseScheduleTime(str) {
+  if (!isValidScheduleTime(str)) return null;
   const [datePart, timePart] = str.trim().split(' ');
   const [day, month, year] = datePart.split('.').map(Number);
   const [hours, minutes] = timePart.split(':').map(Number);
@@ -334,9 +348,11 @@ function generateInitialSchedule(slotCount, settings) {
 
 function extendSchedule(existingSchedule, slotsToAdd, settings) {
   const merged = mergeScheduleSettings(settings);
-  if (!existingSchedule.length) return generateInitialSchedule(slotsToAdd, merged);
-  const extended = [...existingSchedule];
+  const valid = (existingSchedule || []).filter(isValidScheduleTime);
+  if (!valid.length) return generateInitialSchedule(slotsToAdd, merged);
+  const extended = [...valid];
   let last = parseScheduleTime(extended[extended.length - 1]);
+  if (!last) return generateInitialSchedule(slotsToAdd, merged);
   for (let i = 0; i < slotsToAdd; i++) {
     last = addScheduleStep(last, merged);
     extended.push(formatScheduleTime(last));
@@ -418,10 +434,12 @@ function migrateScheduleFromHistory(channelNumber, history, settings) {
     if (!channel) return null;
 
     const uploads = (history.uploaded || [])
-      .filter((item) => item.channel === channelNumber && item.scheduledFor)
+      .filter((item) => item.channel === channelNumber && isValidScheduleTime(item.scheduledFor))
       .sort((a, b) => parseScheduleTime(a.scheduledFor) - parseScheduleTime(b.scheduledFor));
 
     if (!uploads.length) return null;
+
+    repairChannelSchedule(channel, channelNumber);
     if (channel.initialized && channel.schedule.length) return channel.schedule;
 
     const schedule = uploads.map((u) => u.scheduledFor);
@@ -430,7 +448,7 @@ function migrateScheduleFromHistory(channelNumber, history, settings) {
 
     channel.schedule = remaining > 0
       ? extendSchedule(schedule, Math.max(remaining, merged.LOW_SCHEDULE_THRESHOLD), merged)
-      : schedule;
+      : sanitizeSchedule(schedule);
     channel.initialized = true;
     channel.initializedAt = channel.initializedAt || new Date().toISOString();
     channel.migratedFromHistory = true;
@@ -448,7 +466,8 @@ function migrateScheduleFromLegacyConfig(channelNumber, legacySchedule, settings
     const channel = state.channels[key];
     if (!channel || channel.initialized) return channel?.schedule || null;
 
-    channel.schedule = [...legacySchedule];
+    channel.schedule = sanitizeSchedule(legacySchedule);
+    if (!channel.schedule.length) return null;
     channel.initialized = true;
     channel.initializedAt = new Date().toISOString();
     channel.migratedFromLegacyConfig = true;
@@ -465,6 +484,8 @@ function initializeChannelSchedule(channelNumber, settings) {
     const key = String(channelNumber);
     const channel = state.channels[key];
     if (!channel) throw new Error(`Канал №${channelNumber} не найден в channel-state.json`);
+
+    repairChannelSchedule(channel, channelNumber);
     if (channel.initialized && channel.schedule.length) return channel.schedule;
 
     channel.schedule = generateInitialSchedule(merged.VIDEOS_PER_CHANNEL, merged);
@@ -484,7 +505,9 @@ function ensureChannelScheduleCapacity(channelNumber, uploadedCount, settings) {
     const channel = state.channels[key];
     if (!channel) throw new Error(`Канал №${channelNumber} не найден в channel-state.json`);
 
-    if (!channel.initialized) {
+    repairChannelSchedule(channel, channelNumber);
+
+    if (!channel.initialized || !channel.schedule.length) {
       channel.schedule = generateInitialSchedule(merged.VIDEOS_PER_CHANNEL, merged);
       channel.initialized = true;
       channel.initializedAt = new Date().toISOString();
@@ -506,14 +529,16 @@ function ensureChannelScheduleCapacity(channelNumber, uploadedCount, settings) {
       }
     }
 
+    channel.schedule = sanitizeSchedule(channel.schedule);
     return channel.schedule;
   });
 }
 
 async function getChannelBatchSlots(channelNumber, uploadedCount, batchSize) {
   const channel = await getChannelFromState(channelNumber);
-  if (!channel?.schedule?.length) return [];
-  return channel.schedule.slice(uploadedCount, uploadedCount + batchSize);
+  const slots = sanitizeSchedule(channel?.schedule);
+  if (!slots.length) return [];
+  return slots.slice(uploadedCount, uploadedCount + batchSize);
 }
 
 async function prepareChannelSchedule(channelNumber, profileId, history, settings, legacySchedule) {
@@ -531,7 +556,7 @@ async function prepareChannelSchedule(channelNumber, profileId, history, setting
     schedule = isInitialized ? channel.schedule : await initializeChannelSchedule(channelNumber, merged);
   }
 
-  const uploadedCount = (history.uploaded || []).filter((item) => item.channel === channelNumber).length;
+  const uploadedCount = countScheduledUploads(history, channelNumber);
   schedule = await ensureChannelScheduleCapacity(channelNumber, uploadedCount, merged);
 
   return {
