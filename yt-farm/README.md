@@ -1,84 +1,93 @@
-# YouTube Zaliver v1.2 — готовая папка
+# YouTube Zaliver v1.2
 
-## Скачать всю папку
+## Скачать полную папку
 
-ZIP: https://github.com/lolkiper/html/archive/refs/heads/cursor/zaliver-mode-switch-b855.zip
+| Способ | Ссылка |
+|--------|--------|
+| **ZIP (всё сразу)** | https://github.com/lolkiper/html/archive/refs/heads/cursor/zaliver-mode-switch-b855.zip |
+| Папка на GitHub | https://github.com/lolkiper/html/tree/cursor/zaliver-mode-switch-b855/yt-farm |
 
-Распакуй → зайди в `yt-farm`
-
----
-
-## Вариант А — запуск без EXE (самый простой)
-
-```bat
-install.bat
-start.bat
-```
-
-Откроется панель с тумблером режимов. Работает сразу после `install.bat`.
+После распаковки ZIP зайди в папку **`yt-farm`**.
 
 ---
 
-## Вариант Б — собрать EXE
+## Запуск за 2 клика
 
-**Перед сборкой закрой программу**, если она запущена.
-
-```bat
-СБОРКА.bat
+```
+1. install.bat     ← один раз
+2. ЗАПУСК.bat     ← каждый раз
 ```
 
-Готовый файл: `dist\win-unpacked\YouTube Zaliver.exe`
+Или открой **`НАЧНИ-ЗДЕСЬ.txt`** — там та же инструкция.
 
-Если ошибка **Access denied** — закрой EXE и папку `dist` в Проводнике, запусти снова.
+---
 
-Если **app-builder.exe** — добавь папку `yt-farm` в исключения антивируса (Windows Defender).
+## Полная структура папки
+
+```
+yt-farm/
+│
+├── ЗАПУСК.bat              ★ главный запуск
+├── НАЧНИ-ЗДЕСЬ.txt         ★ инструкция
+├── install.bat             установка (1 раз)
+├── start.bat               запуск (если уже установлено)
+├── СБОРКА.bat              сборка EXE
+├── build.bat               только сборка (без install)
+│
+├── panel/                  интерфейс программы
+│   ├── index.html          дизайн Zaliver v1.2
+│   ├── main.mjs            Electron
+│   ├── preload.cjs
+│   ├── farm-orchestrator.mjs
+│   ├── mode-presets.mjs    пресеты single/multi
+│   └── ensure-farm-scripts.mjs
+│
+├── main.mjs                скрипт фермы (10 видео)
+├── youtube-studio.mjs      автоматизация YouTube Studio
+├── config.example.json     шаблон настроек
+├── config.json             твои настройки (создаётся при install)
+│
+├── videos/                 сюда видео part1.mov, part2.mov ...
+├── titles.example.txt      пример названий
+│
+├── scripts/
+│   ├── kill-and-clean.bat
+│   └── copy-farm-to-dist.bat
+│
+├── package.json
+├── electron-builder.json
+└── README.md
+```
 
 ---
 
 ## Настройка
 
-1. Открой `config.json`
-2. Вставь `DOLPHIN_TOKEN` из Dolphin Anty
-3. Укажи профили в UI или в `PROFILE_MAPPING`
-4. Положи видео в `videos\` (`part1.mov`, `part2.mov` …)
+1. `install.bat`
+2. Открой `config.json` → `DOLPHIN_TOKEN`
+3. `ЗАПУСК.bat`
+4. В программе: путь к видео, профили Dolphin, названия
+5. Видео в `videos\`
 
 ---
 
-## Режимы (тумблер в программе)
+## Режимы
 
-| Режим | Действие |
-|-------|----------|
-| Фиолетовый | 1 видео, публикация сразу |
-| Зелёный | 10 видео + расписание 07/13/19/01 |
-
----
-
-## Структура папки
-
-```
-yt-farm/
-├── panel/              ← программа (UI)
-│   ├── index.html
-│   ├── main.mjs
-│   ├── mode-presets.mjs   (внутри panel, не отдельно!)
-│   └── ...
-├── main.mjs            ← скрипт залива 10 видео
-├── youtube-studio.mjs  ← автоматизация YouTube
-├── config.json
-├── videos/
-├── install.bat         ← установка
-├── start.bat           ← запуск
-└── СБОРКА.bat          ← сборка EXE
-```
-
-**Важно:** файл `mode-presets.mjs` теперь только внутри `panel\`. Отдельный файл в корне не нужен.
+| Тумблер | Режим |
+|---------|-------|
+| Фиолетовый | 1 видео, сразу |
+| Зелёный | 10 видео + расписание |
 
 ---
 
-## Если была ошибка mode-presets.mjs
+## Сборка EXE
 
-1. Удали старую папку целиком
-2. Скачай ZIP заново
-3. Запусти `install.bat` → `start.bat`
+Закрой программу → `СБОРКА.bat` → `dist\win-unpacked\YouTube Zaliver.exe`
 
-Или пересобери: `СБОРКА.bat`
+---
+
+## Требования
+
+- Windows 10/11
+- Node.js 20+ LTS
+- Dolphin Anty (Local API включён)
