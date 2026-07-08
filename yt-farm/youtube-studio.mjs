@@ -133,7 +133,7 @@ async function humanType(page, text, delayRange = [55, 130]) {
  * @param {string} videosDir - Корневая папка с видеороликами
  * @param {string|null} scheduledTime - Время планирования в формате "DD.MM.YYYY HH:MM" (если null — публикует сразу)
  */
-export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime = null, studioDelayMs = 10000) {
+export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime = null) {
   // Высчитываем точный абсолютный путь к видеофайлу на ПК
   const absoluteVideoPath = path.isAbsolute(videoToUpload.file) 
     ? videoToUpload.file 
@@ -731,10 +731,5 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
     await sleepMs(500);
   }
   console.log(`🚀 [Робот] Видео успешно и полностью село на сервера YouTube!`);
-
-  if (studioDelayMs > 0) {
-    console.log(`[Робот] Перехожу в YouTube Studio, пауза ${studioDelayMs / 1000} сек...`);
-    await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded' }).catch(() => {});
-    await sleepRaw(studioDelayMs);
-  }
+  await sleepMs(500);
 }

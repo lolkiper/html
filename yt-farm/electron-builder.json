@@ -6,21 +6,20 @@
   },
   "files": [
     "panel/**/*",
-    "main.mjs",
-    "youtube-studio.mjs",
-    "mode-presets.mjs",
-    "config.example.json",
     "package.json"
   ],
-  "extraResources": [
-    {
-      "from": ".",
-      "to": "yt-farm",
-      "filter": ["main.mjs", "youtube-studio.mjs", "mode-presets.mjs", "config.example.json"]
-    }
+  "extraFiles": [
+    { "from": "main.mjs", "to": "." },
+    { "from": "youtube-studio.mjs", "to": "." },
+    { "from": "mode-presets.mjs", "to": "." },
+    { "from": "config.example.json", "to": "." },
+    { "from": "videos", "to": "videos", "filter": ["**/*"] }
   ],
   "win": {
     "target": ["portable"],
+    "artifactName": "YouTube-Farm-Pro.exe"
+  },
+  "portable": {
     "artifactName": "YouTube-Farm-Pro.exe"
   },
   "extraMetadata": {

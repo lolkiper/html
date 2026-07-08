@@ -13,7 +13,7 @@ export const FARM_MODE_PRESETS = {
       USE_SCHEDULE: false,
       SCHEDULE_HOURS: [7, 13, 19, 1],
       LOW_SCHEDULE_THRESHOLD: 10,
-      SCHEDULE_EXTENSION_BUFFER: 16,
+      SCHEDULE_EXTENSION_BUFFER: 50,
     },
   },
   multi: {
@@ -24,8 +24,19 @@ export const FARM_MODE_PRESETS = {
       USE_SCHEDULE: true,
       SCHEDULE_HOURS: [7, 13, 19, 1],
       LOW_SCHEDULE_THRESHOLD: 10,
-      SCHEDULE_EXTENSION_BUFFER: 16,
+      SCHEDULE_EXTENSION_BUFFER: 50,
     },
+  },
+};
+
+export const ANTIDETECT_PRESETS = {
+  single: {
+    BETWEEN_UPLOAD_MIN_MS: 5000,
+    BETWEEN_UPLOAD_MAX_MS: 5000,
+  },
+  multi: {
+    BETWEEN_UPLOAD_MIN_MS: 10000,
+    BETWEEN_UPLOAD_MAX_MS: 12000,
   },
 };
 
@@ -44,12 +55,18 @@ export function applyFarmModePreset(config, mode) {
   const preset = getModePreset(mode);
   const farmMode = preset.FARM_MODE;
 
+  const antidetect = ANTIDETECT_PRESETS[farmMode] || ANTIDETECT_PRESETS.single;
+
   return {
     ...config,
     FARM_MODE: farmMode,
     SCHEDULE_SETTINGS: {
       ...(config.SCHEDULE_SETTINGS || {}),
       ...preset.SCHEDULE_SETTINGS,
+    },
+    ANTIDETECT: {
+      ...(config.ANTIDETECT || {}),
+      ...antidetect,
     },
   };
 }

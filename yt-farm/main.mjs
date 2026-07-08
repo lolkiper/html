@@ -141,8 +141,8 @@ function atomicWriteJson(filePath, data) {
 }
 
 function pauseBetweenUploads() {
-  const rawMin = Number(ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 5000);
-  const rawMax = Number(ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 5000);
+  const rawMin = Number(ANTIDETECT.BETWEEN_UPLOAD_MIN_MS ?? 10000);
+  const rawMax = Number(ANTIDETECT.BETWEEN_UPLOAD_MAX_MS ?? 12000);
   const lo = Math.min(rawMin, rawMax);
   const hi = Math.max(rawMin, rawMax);
   const waitMs = randomBetween(lo, hi);
@@ -157,8 +157,8 @@ function pauseBetweenUploads() {
 const SCHEDULE_DEFAULTS = {
   SCHEDULE_HOURS: [7, 13, 19, 1],
   LOW_SCHEDULE_THRESHOLD: 10,
-  VIDEOS_PER_CHANNEL: 16,
-  SCHEDULE_EXTENSION_BUFFER: 16,
+  VIDEOS_PER_CHANNEL: 50,
+  SCHEDULE_EXTENSION_BUFFER: 50,
 };
 
 function mergeScheduleSettings(settings = {}) {
@@ -659,11 +659,10 @@ export async function runFarm(slot, profileId) {
 
     let attempts = 3;
     let success = false;
-    const studioDelayMs = Number(ANTIDETECT.AFTER_UPLOAD_STUDIO_DELAY_MS ?? 10000);
 
     while (attempts > 0 && !success) {
       try {
-        await uploadVideo(page, videoToUpload, finalVideosDir, USE_SCHEDULE ? videoTimeSlot : null, studioDelayMs);
+        await uploadVideo(page, videoToUpload, finalVideosDir, USE_SCHEDULE ? videoTimeSlot : null);
 
         success = true;
         totalUploadedInSession++;
@@ -678,10 +677,6 @@ export async function runFarm(slot, profileId) {
         console.error(`⚠️ Ошибка загрузки файла ${videoToUpload.file}. Попыток осталось: ${attempts}. Ошибка: ${error.message}`);
         if (attempts > 0 && !browserClosed) {
           await page.goto('https://studio.youtube.com/', { waitUntil: 'domcontentloaded' }).catch(() => {});
-          if (studioDelayMs > 0) {
-            console.log(`[Робот] Пауза ${studioDelayMs / 1000} сек в Studio перед повторной попыткой...`);
-            await new Promise(r => setTimeout(r, capDelay(studioDelayMs)));
-          }
           await pauseBetweenUploads();
         }
       }
