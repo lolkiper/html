@@ -88,6 +88,56 @@ function randomBetween(min, max) {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
+const TITLES_PER_BLOCK = 4;
+
+function countChannelUploads(history, channelNumber) {
+  return (history.uploaded || []).filter((item) => item.channel === channelNumber).length;
+}
+
+/**
+ * Блочный рандом названий: блок N = строки [N*4 .. N*4+3], цикл % videosPerChannel.
+ * uploadOrdinal — сколько уже выложено на канале (0-based).
+ */
+function pickBlockTitle(allTitles, uploadOrdinal, videosPerChannel = 50, titlesPerBlock = TITLES_PER_BLOCK) {
+  const blockIndex = uploadOrdinal % videosPerChannel;
+  const startLine = blockIndex * titlesPerBlock;
+  const block = allTitles
+    .slice(startLine, startLine + titlesPerBlock)
+    .map((t) => String(t).trim())
+    .filter(Boolean);
+
+  if (!block.length) {
+    return {
+      title: `Shorts #${uploadOrdinal + 1}`,
+      blockIndex,
+      startLine,
+      endLine: startLine + titlesPerBlock - 1,
+    };
+  }
+
+  const pickIndex = Math.floor(Math.random() * block.length);
+  return {
+    title: block[pickIndex],
+    blockIndex,
+    startLine,
+    endLine: startLine + titlesPerBlock - 1,
+    pickIndex,
+  };
+}
+
+function resolveTitleForUpload(allTitles, uploadOrdinal, channelNumber, filename, videosPerChannel) {
+  const picked = pickBlockTitle(allTitles, uploadOrdinal, videosPerChannel, TITLES_PER_BLOCK);
+  const partNum = parseInt(filename.match(/part(\d+)/)?.[1] || '0', 10);
+  const startVideoNum = (channelNumber - 1) * videosPerChannel + 1;
+  const stepInChannel = partNum - startVideoNum + 1;
+
+  console.log(
+    `[Title] Канал №${channelNumber}, ${filename}, шаг ${stepInChannel}, `
+    + `блок ${picked.blockIndex} (строки ${picked.startLine}–${picked.endLine}) → "${picked.title}"`,
+  );
+  return picked.title;
+}
+
 async function acquireFileLock(lockPath, label) {
   const started = Date.now();
   while (Date.now() - started < LOCK_MAX_WAIT_MS) {
@@ -613,10 +663,9 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
   for (let i = 0; i < VIDEOS_PER_CHANNEL; i++) {
     const currentVideoIndex = startVideoNum + i;
     const filename = `part${currentVideoIndex}.mov`;
-    const title = allTitles[Math.floor(Math.random() * allTitles.length)] || `Shorts Video ${currentVideoIndex}`;
     const alreadyUploaded = history.uploaded.some((item) => item.file === filename);
     if (!alreadyUploaded) {
-      availableVideos.push({ file: filename, title, channel: channelNumber });
+      availableVideos.push({ file: filename, channel: channelNumber });
     }
   }
 
@@ -659,6 +708,7 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
   let isBanned = false;
   let browserClosed = false;
   let totalUploadedInSession = 0;
+  let channelUploadOrdinal = countChannelUploads(history, channelNumber);
 
   for (let i = 0; i < currentBatch.length; i++) {
     const videoToUpload = currentBatch[i];
@@ -668,6 +718,14 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
       console.log(`⚠️ Предупреждение: в расписании канала №${channelNumber} закончились тайм-слоты на шаге ${i + 1}. Остаток пачки пропускается.`);
       break;
     }
+
+    videoToUpload.title = resolveTitleForUpload(
+      allTitles,
+      channelUploadOrdinal,
+      channelNumber,
+      videoToUpload.file,
+      VIDEOS_PER_CHANNEL,
+    );
 
     console.log(`\n🎬 [Видео ${i + 1}/${currentBatch.length}] Начинаю процесс для: ${videoToUpload.file}`);
     console.log(`📅 Целевой тайм-слот публикации: ${videoTimeSlot}`);
@@ -681,6 +739,7 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
 
         success = true;
         totalUploadedInSession++;
+        channelUploadOrdinal++;
         await saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
         console.log(`💾 Успешно запланировано! Файл ${videoToUpload.file} закреплен за временем ${videoTimeSlot}`);
       } catch (error) {
@@ -756,10 +815,9 @@ async function runFarmSingle(slot, profileId, channelNumber, finalVideosDir) {
   for (let i = 0; i < VIDEOS_PER_CHANNEL; i++) {
     const currentVideoIndex = startVideoNum + i;
     const filename = `part${currentVideoIndex}.mov`;
-    const title = allTitles[Math.floor(Math.random() * allTitles.length)] || `Shorts Video ${currentVideoIndex}`;
     const alreadyUploaded = history.uploaded.some((item) => item.file === filename);
     if (!alreadyUploaded) {
-      availableVideos.push({ file: filename, title, channel: channelNumber });
+      availableVideos.push({ file: filename, channel: channelNumber });
     }
   }
 
@@ -782,6 +840,7 @@ async function runFarmSingle(slot, profileId, channelNumber, finalVideosDir) {
   let isBanned = false;
   let browserClosed = false;
   let totalUploadedInSession = 0;
+  let channelUploadOrdinal = countChannelUploads(history, channelNumber);
 
   console.log(`🔄 Слот ${CURRENT_SLOT} открывает профиль Dolphin: ${directProfileId}...`);
   try {
@@ -795,6 +854,13 @@ async function runFarmSingle(slot, profileId, channelNumber, finalVideosDir) {
   const page = context.pages()[0] || await context.newPage();
   page.setDefaultTimeout(60000);
   const videoToUpload = currentBatch[0];
+  videoToUpload.title = resolveTitleForUpload(
+    allTitles,
+    channelUploadOrdinal,
+    channelNumber,
+    videoToUpload.file,
+    VIDEOS_PER_CHANNEL,
+  );
 
   console.log(`\n🎬 [Видео 1/1] Начинаю процесс для: ${videoToUpload.file}`);
   console.log(`📅 Публикация: сразу (без расписания)`);
