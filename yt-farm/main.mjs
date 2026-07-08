@@ -1,17 +1,83 @@
 import { uploadVideo } from './youtube-studio.mjs';
-import {
-  applyFarmModePreset,
-  getEffectiveBatchSize,
-  getVideosPerChannel,
-  isScheduleMode,
-  normalizeFarmMode,
-} from './mode-presets.mjs';
 import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+
+// =============================================================================
+// ПРЕСЕТЫ РЕЖИМОВ (встроены в main.mjs — не нужен отдельный mode-presets.mjs)
+// =============================================================================
+
+const FARM_MODE_PRESETS = {
+  single: {
+    FARM_MODE: 'single',
+    SCHEDULE_SETTINGS: {
+      BATCH_SIZE: 1,
+      VIDEOS_PER_CHANNEL: 50,
+      USE_SCHEDULE: false,
+      SCHEDULE_HOURS: [7, 13, 19, 1],
+      LOW_SCHEDULE_THRESHOLD: 10,
+      SCHEDULE_EXTENSION_BUFFER: 50,
+    },
+  },
+  multi: {
+    FARM_MODE: 'multi',
+    SCHEDULE_SETTINGS: {
+      BATCH_SIZE: 10,
+      VIDEOS_PER_CHANNEL: 50,
+      USE_SCHEDULE: true,
+      SCHEDULE_HOURS: [7, 13, 19, 1],
+      LOW_SCHEDULE_THRESHOLD: 10,
+      SCHEDULE_EXTENSION_BUFFER: 50,
+    },
+  },
+};
+
+const ANTIDETECT_PRESETS = {
+  single: { BETWEEN_UPLOAD_MIN_MS: 5000, BETWEEN_UPLOAD_MAX_MS: 5000 },
+  multi: { BETWEEN_UPLOAD_MIN_MS: 10000, BETWEEN_UPLOAD_MAX_MS: 12000 },
+};
+
+function normalizeFarmMode(mode) {
+  return mode === 'multi' ? 'multi' : 'single';
+}
+
+function getModePreset(mode) {
+  return FARM_MODE_PRESETS[normalizeFarmMode(mode)];
+}
+
+function applyFarmModePreset(config, mode) {
+  const preset = getModePreset(mode);
+  const farmMode = preset.FARM_MODE;
+  const antidetect = ANTIDETECT_PRESETS[farmMode] || ANTIDETECT_PRESETS.single;
+  return {
+    ...config,
+    FARM_MODE: farmMode,
+    SCHEDULE_SETTINGS: { ...(config.SCHEDULE_SETTINGS || {}), ...preset.SCHEDULE_SETTINGS },
+    ANTIDETECT: { ...(config.ANTIDETECT || {}), ...antidetect },
+  };
+}
+
+function isScheduleMode(config) {
+  if (normalizeFarmMode(config?.FARM_MODE) === 'single') return false;
+  return config?.SCHEDULE_SETTINGS?.USE_SCHEDULE !== false;
+}
+
+function getEffectiveBatchSize(config) {
+  const preset = getModePreset(config?.FARM_MODE);
+  return config?.SCHEDULE_SETTINGS?.BATCH_SIZE ?? preset.SCHEDULE_SETTINGS.BATCH_SIZE;
+}
+
+function getVideosPerChannel(config) {
+  const preset = getModePreset(config?.FARM_MODE);
+  return config?.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL
+    ?? config?.VIDEOS_PER_CHANNEL
+    ?? preset.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
+}
+
+export { applyFarmModePreset, normalizeFarmMode, getEffectiveBatchSize, getVideosPerChannel, isScheduleMode };
 
 /**
  * main.mjs — единственная точка входа фермы.
@@ -774,7 +840,7 @@ export function spawnFarmWorker(slot, profileId) {
     cwd: baseDir,
     stdio: 'inherit',
     shell: false,
-    env,
+    env: { ...env, FARM_SCRIPT_DIR: SCRIPT_DIR },
   });
   child.on('error', (err) => {
     workerLogError(`❌ Spawn слота ${slot} не удался: ${err.message}`);

@@ -17,17 +17,17 @@ echo.
 call npm run build:win
 if errorlevel 1 goto :fail
 
+call scripts\copy-farm-to-dist.bat
+
 echo.
 echo ========================================
 echo   Готово!
 echo   EXE: dist\YouTube-Farm-Pro.exe
 echo.
-echo   Скопируйте рядом с EXE:
+echo   Скопируйте рядом с EXE (build.bat копирует автоматически):
 echo     - main.mjs
 echo     - youtube-studio.mjs
-echo     - mode-presets.mjs
-echo     - config.json
-echo     - папку videos\
+echo     (mode-presets.mjs больше не нужен для воркера — встроен в main.mjs)
 echo ========================================
 pause
 exit /b 0

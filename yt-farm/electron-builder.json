@@ -6,6 +6,7 @@
   },
   "files": [
     "panel/**/*",
+    "mode-presets.mjs",
     "package.json"
   ],
   "extraFiles": [

@@ -87,9 +87,8 @@ build.bat
 
 Рядом с EXE должны лежать (build.bat копирует автоматически):
 
-- `main.mjs`
+- `main.mjs` (пресеты режимов встроены — отдельный `mode-presets.mjs` для воркера не нужен)
 - `youtube-studio.mjs`
-- `mode-presets.mjs`
 - `config.json`
 - папка `videos\`
 
