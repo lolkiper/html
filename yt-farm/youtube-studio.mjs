@@ -645,58 +645,8 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
         await humanDelay(100, 200);
       }
 
-      // === 1.5 УСТАНОВКА ЧАСОВОГО ПОЯСА GMT+03:00 ===
-      // Время из config.json ("07:00", "13:00"...) не содержит часовой пояс —
-      // без явной установки YouTube будет интерпретировать его в том поясе,
-      // что стоит в аккаунте по умолчанию. Фиксируем GMT+3 перед вводом даты/времени.
-      //
-      // ФИКС: разметка попапа подтверждена реальным timezone-opened.html —
-      // это компонент ytcp-text-menu > tp-yt-paper-listbox#paper-list >
-      // tp-yt-paper-item > yt-formatted-string.item-text с текстом вида
-      // "(GMT+03:00) Moscow". Строки поиска в этом попапе НЕТ (это просто
-      // прокручиваемый список) — раньше код ждал несуществующее поле поиска
-      // до 3с впустую. Убрал этот шаг и сузил селекторы под точную разметку.
-      console.log(`[Робот] Устанавливаю часовой пояс GMT+03:00...`);
-      try {
-        const tzButton = page.locator(
-          '#timezone-select-button, ytcp-button[label="Time zone"], button[aria-label="Time zone"]'
-        ).first();
-        await tzButton.waitFor({ state: 'visible', timeout: 10000 });
-        await tzButton.scrollIntoViewIfNeeded().catch(() => {});
-        await humanClick(page, tzButton);
-        await humanDelay(100, 200);
-
-        // Список часовых поясов: ytcp-text-menu > tp-yt-paper-listbox#paper-list.
-        // Селектор жёстко привязан к ytcp-text-menu (а не общий tp-yt-paper-listbox),
-        // т.к. цикл грузит до 10 видео на одной странице подряд — попапы от
-        // предыдущих видео могут оставаться в DOM скрытыми, и общий селектор
-        // мог бы схватить не тот список (та же причина, что ломала выбор времени).
-        const tzListbox = page.locator('ytcp-text-menu tp-yt-paper-listbox').last();
-        await tzListbox.waitFor({ state: 'visible', timeout: 5000 });
-
-        const tzOption = tzListbox
-          .locator('tp-yt-paper-item')
-          .filter({ hasText: /GMT\+0?3:00/ })
-          .first();
-
-        await tzOption.waitFor({ state: 'attached', timeout: 5000 });
-        await tzOption.scrollIntoViewIfNeeded().catch(() => {});
-        await humanClick(page, tzOption);
-        console.log(`✅ Часовой пояс установлен: GMT+03:00`);
-
-        // Ждём, пока попап реально закроется, чтобы он не мешал следующему
-        // клику по календарю (гонка анимации закрытия — частая причина того,
-        // что следующий клик "проваливается в пустоту").
-        await tzListbox.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {});
-        await page.waitForTimeout(capDelay(200));
-      } catch (tzErr) {
-        await page.screenshot({ path: 'timezone-error.png', fullPage: true }).catch(() => {});
-        console.log(`⚠️ Не удалось выставить часовой пояс автоматически: ${tzErr.message}. Проверьте timezone-opened.html/timezone-error.png и пришлите мне — подберу точные селекторы. Продолжаю с текущим (возможно неверным) часовым поясом аккаунта.`);
-        // Если попап всё же был открыт, но выбор не удался — закрываем его,
-        // чтобы не мешать вводу даты/времени дальше.
-        await page.keyboard.press('Escape').catch(() => {});
-        await page.waitForTimeout(capDelay(200));
-      }
+      // === 1.5 ЧАСОВОЙ ПОЯС: (GMT+03:00) Москва ===
+      await selectTimezoneMoscowGmt3(page);
 
       // === 2. ВВОД ДАТЫ ===
       // Точная структура (подтверждена реальным HTML):

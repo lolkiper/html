@@ -580,7 +580,20 @@
 
     window.addEventListener('DOMContentLoaded', async () => {
         let config = null;
-        if (window.electronAPI && window.electronAPI.getConfig) config = await window.electronAPI.getConfig();
+        try {
+            if (window.electronAPI && window.electronAPI.getConfig) {
+                config = await window.electronAPI.getConfig();
+            }
+        } catch (err) {
+            const statusMessage = document.getElementById('statusMessage');
+            const msg = 'Ошибка config.json: ' + (err.message || String(err)) + '. Откройте config.json и проверьте синтаксис, или удалите файл — создастся заново.';
+            if (statusMessage) {
+                statusMessage.innerText = msg;
+                statusMessage.style.color = '#f43f5e';
+            } else {
+                alert(msg);
+            }
+        }
         if (config) {
             if (config.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL) {
                 videosPerChannel = config.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;

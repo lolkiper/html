@@ -1,10 +1,10 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import {
   createFarmOrchestrator,
-  getFarmPaths,
+  getConfigPath,
   loadConfig,
   mergeGuiConfig,
   saveConfig,
@@ -21,6 +21,21 @@ function getBaseDir() {
 let mainWindow = null;
 let orchestrator = null;
 
+function getErrorLogPath() {
+  return path.join(getBaseDir(), 'zaliver-error.log');
+}
+
+function logStartupError(label, err) {
+  const message = err instanceof Error ? err.stack || err.message : String(err);
+  const line = `[${new Date().toISOString()}] ${label}: ${message}\n`;
+  console.error(line);
+  try {
+    fs.appendFileSync(getErrorLogPath(), line, 'utf-8');
+  } catch {
+    /* ignore log write errors */
+  }
+}
+
 function sendLog(data) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('farm-log', data);
@@ -29,7 +44,7 @@ function sendLog(data) {
 
 function ensureConfigFile() {
   const baseDir = getBaseDir();
-  const { configPath } = getFarmPaths(baseDir);
+  const configPath = getConfigPath(baseDir);
   const examplePath = path.join(baseDir, 'config.example.json');
   const exampleFallback = path.join(__dirname, '..', 'config.example.json');
   if (!fs.existsSync(configPath)) {
@@ -70,24 +85,55 @@ function getOrchestrator() {
   return orchestrator;
 }
 
+function wrapIpc(handler) {
+  return async (...args) => {
+    try {
+      return await handler(...args);
+    } catch (err) {
+      logStartupError('IPC', err);
+      throw err;
+    }
+  };
+}
+
+process.on('uncaughtException', (err) => {
+  logStartupError('uncaughtException', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logStartupError('unhandledRejection', reason);
+});
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
 
   const baseDir = getBaseDir();
-  const copied = ensureFarmScripts(baseDir, __dirname);
-  if (copied.length) {
-    console.log(`[Zaliver] Скопированы скрипты фермы: ${copied.join(', ')}`);
+  try {
+    const { copied, missing } = ensureFarmScripts(baseDir, __dirname);
+    if (copied.length) {
+      console.log(`[Zaliver] Скопированы скрипты фермы: ${copied.join(', ')}`);
+    }
+    if (missing.length) {
+      const text = `Не найдены файлы: ${missing.join(', ')}\n\nПапка запуска:\n${baseDir}\n\nСкопируйте main.mjs и youtube-studio.mjs в эту папку или пересоберите через СБОРКА.bat`;
+      logStartupError('ensureFarmScripts', new Error(text));
+      dialog.showErrorBox('YouTube Zaliver — ошибка запуска', text);
+    }
+    ensureConfigFile();
+    createWindow();
+  } catch (err) {
+    logStartupError('startup', err);
+    dialog.showErrorBox('YouTube Zaliver — ошибка запуска', err.message || String(err));
+    app.quit();
+    return;
   }
-  ensureConfigFile();
-  createWindow();
 
-  ipcMain.handle('get-config', () => {
+  ipcMain.handle('get-config', wrapIpc(() => {
     const raw = loadConfig(baseDir);
     if (!raw) return null;
     return applyFarmModePreset(raw, raw.FARM_MODE);
-  });
+  }));
 
-  ipcMain.handle('set-farm-mode', (_event, mode) => {
+  ipcMain.handle('set-farm-mode', wrapIpc((_event, mode) => {
     const existing = loadConfig(baseDir) || {};
     const updated = applyFarmModePreset(existing, mode);
     saveConfig(baseDir, updated);
@@ -95,19 +141,22 @@ app.whenReady().then(() => {
       FARM_MODE: updated.FARM_MODE,
       SCHEDULE_SETTINGS: updated.SCHEDULE_SETTINGS,
     };
-  });
+  }));
 
-  ipcMain.handle('start-farm', (_event, guiConfig) => {
-    ensureFarmScripts(baseDir, __dirname);
+  ipcMain.handle('start-farm', wrapIpc((_event, guiConfig) => {
+    const { missing } = ensureFarmScripts(baseDir, __dirname);
+    if (missing.length) {
+      throw new Error(`Не найдены скрипты: ${missing.join(', ')}. Положите их в ${baseDir}`);
+    }
     const merged = mergeGuiConfig(baseDir, guiConfig);
     saveConfig(baseDir, merged);
     return getOrchestrator().start(merged);
-  });
+  }));
 
-  ipcMain.handle('stop-farm', () => {
+  ipcMain.handle('stop-farm', wrapIpc(() => {
     getOrchestrator().stop();
     return true;
-  });
+  }));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

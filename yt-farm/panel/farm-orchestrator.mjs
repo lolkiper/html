@@ -6,6 +6,10 @@ import { applyFarmModePreset } from './mode-presets.mjs';
 
 const PANEL_DIR = path.dirname(fileURLToPath(import.meta.url));
 
+export function getConfigPath(baseDir = process.cwd()) {
+  return path.join(baseDir, 'config.json');
+}
+
 function resolveMainScript(baseDir) {
   const candidates = [
     path.join(baseDir, 'main.mjs'),
@@ -14,27 +18,35 @@ function resolveMainScript(baseDir) {
   ];
   const found = candidates.find((p) => p && fs.existsSync(p));
   if (!found) {
-    throw new Error(`main.mjs не найден. Положите main.mjs и youtube-studio.mjs в: ${baseDir}`);
+    throw new Error(
+      `main.mjs не найден в папке запуска.\n`
+      + `Положите main.mjs и youtube-studio.mjs сюда:\n${baseDir}\n`
+      + `Или пересоберите EXE через СБОРКА.bat`,
+    );
   }
   return found;
 }
 
 export function getFarmPaths(baseDir = process.cwd()) {
   return {
-    configPath: path.join(baseDir, 'config.json'),
+    configPath: getConfigPath(baseDir),
     mainScript: resolveMainScript(baseDir),
     baseDir,
   };
 }
 
 export function loadConfig(baseDir) {
-  const { configPath } = getFarmPaths(baseDir);
+  const configPath = getConfigPath(baseDir);
   if (!fs.existsSync(configPath)) return null;
-  return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  } catch (err) {
+    throw new Error(`config.json повреждён (${configPath}): ${err.message}`);
+  }
 }
 
 export function saveConfig(baseDir, config) {
-  const { configPath } = getFarmPaths(baseDir);
+  const configPath = getConfigPath(baseDir);
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 }
 

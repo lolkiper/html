@@ -604,7 +604,7 @@ async function saveToHistory(profileId, file, title, channelNum, scheduledTime) 
       file,
       title,
       channel: channelNum,
-      scheduledFor: scheduledTime,
+      ...(isValidScheduleTime(scheduledTime) ? { scheduledFor: scheduledTime } : {}),
       date: new Date().toLocaleString(),
     });
     atomicWriteJson(historyFile, history);
@@ -770,7 +770,7 @@ export async function runFarm(slot, profileId) {
 
         success = true;
         totalUploadedInSession++;
-        await saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, USE_SCHEDULE ? videoTimeSlot : 'immediate');
+        await saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, USE_SCHEDULE ? videoTimeSlot : null);
         const publishLabel = USE_SCHEDULE ? `запланировано на ${videoTimeSlot}` : 'опубликовано сразу';
         console.log(`💾 Успешно ${publishLabel}! Файл ${videoToUpload.file}`);
       } catch (error) {
