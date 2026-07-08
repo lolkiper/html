@@ -64,12 +64,14 @@ function ensureConfigFile() {
 }
 
 function createWindow() {
-  const WIN_W = 720;
-  const WIN_H = 640;
+  // Размер контентной области как на референсе (~1/3 экрана 1920×1080)
+  const WIN_W = 580;
+  const WIN_H = 500;
 
   mainWindow = new BrowserWindow({
     width: WIN_W,
     height: WIN_H,
+    useContentSize: true,
     minWidth: WIN_W,
     maxWidth: WIN_W,
     minHeight: WIN_H,

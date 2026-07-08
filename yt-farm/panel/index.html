@@ -24,53 +24,52 @@
         }
     </style>
     <style>
+        html, body {
+            width: 580px;
+            max-width: 580px;
+            height: 500px;
+            max-height: 500px;
+            overflow: hidden;
+        }
+
         body {
             background-color: var(--bg-dark);
             color: #e2daf0;
             font-family: 'Segoe UI', Arial, sans-serif;
             margin: 0;
-            padding: 8px;
+            padding: 0;
             user-select: none;
-            overflow-x: hidden;
-            overflow-y: auto;
             position: relative;
             transition: background-color 0.4s ease;
+            box-sizing: border-box;
         }
 
-        #cursor-glow {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 200px;
-            height: 200px;
-            background: radial-gradient(circle, var(--neon-glow) 0%, rgba(0, 0, 0, 0) 70%);
-            border-radius: 50%;
-            pointer-events: none;
-            transform: translate(-50%, -50%);
-            z-index: 9999;
-            mix-blend-mode: screen;
-        }
+        #cursor-glow { display: none; }
 
         .app-container {
-            max-width: 100%;
-            margin: 0 auto;
+            width: 100%;
+            height: 100%;
+            max-width: 580px;
+            margin: 0;
             background-color: var(--bg-card);
-            backdrop-filter: blur(10px);
-            padding: 12px 14px;
-            border-radius: 12px;
-            border: 1px solid var(--border-main);
-            box-shadow: 0 12px 30px rgba(0,0,0,0.9), 0 0 18px var(--neon-glow);
+            padding: 6px 8px 8px;
+            border-radius: 0;
+            border: none;
+            box-shadow: none;
             position: relative;
             z-index: 1;
             transition: all 0.4s ease;
+            box-sizing: border-box;
+            overflow-y: auto;
+            overflow-x: hidden;
         }
 
         h1 {
             color: #ffffff;
             text-align: center;
-            font-size: 17px;
-            margin-bottom: 10px;
-            letter-spacing: 1px;
+            font-size: 13px;
+            margin: 0 0 6px;
+            letter-spacing: 0.5px;
             font-weight: 900;
             background: linear-gradient(45deg, #ffffff, var(--neon-primary), var(--neon-secondary));
             -webkit-background-clip: text;
@@ -80,62 +79,62 @@
 
         h2.section-title {
             color: var(--neon-primary);
-            font-size: 12px;
+            font-size: 10px;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-top: 12px;
-            margin-bottom: 8px;
-            border-left: 4px solid var(--neon-secondary);
-            padding-left: 10px;
+            letter-spacing: 0.4px;
+            margin-top: 8px;
+            margin-bottom: 5px;
+            border-left: 3px solid var(--neon-secondary);
+            padding-left: 6px;
             text-shadow: 0 0 10px var(--neon-glow);
             transition: all 0.4s ease;
         }
 
-        .form-group { margin-bottom: 10px; }
-        label { display: block; margin-bottom: 4px; font-size: 10px; font-weight: 600; color: var(--text-label); text-transform: uppercase; letter-spacing: 0.5px; transition: color 0.4s; }
+        .form-group { margin-bottom: 6px; }
+        label { display: block; margin-bottom: 2px; font-size: 9px; font-weight: 600; color: var(--text-label); text-transform: uppercase; letter-spacing: 0.3px; transition: color 0.4s; }
 
         input[type="text"], input[type="number"], textarea {
             width: 100%;
-            padding: 7px 9px;
+            padding: 5px 7px;
             background-color: var(--bg-input);
             border: 1px solid var(--border-input);
-            border-radius: 6px;
+            border-radius: 4px;
             color: #ffffff;
             box-sizing: border-box;
-            font-size: 12px;
+            font-size: 11px;
             font-family: 'Segoe UI', Arial, sans-serif;
             transition: all 0.4s ease;
         }
 
-        textarea { height: 72px; resize: none; line-height: 1.35; }
-        input:focus, textarea:focus { border-color: var(--neon-primary); outline: none; box-shadow: 0 0 10px var(--neon-primary); }
+        textarea { height: 88px; resize: none; line-height: 1.3; font-size: 10px; }
+        input:focus, textarea:focus { border-color: var(--neon-primary); outline: none; box-shadow: 0 0 8px var(--neon-primary); }
 
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
         .mode-selector-container {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 10px;
+            gap: 6px;
             background: rgba(0, 0, 0, 0.3);
-            padding: 8px 10px;
-            border-radius: 8px;
+            padding: 5px 6px;
+            border-radius: 6px;
             border: 1px dashed var(--border-dashed);
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             transition: border 0.4s ease;
         }
 
         .mode-hint {
             text-align: center;
-            font-size: 10px;
+            font-size: 9px;
             color: var(--text-label);
-            margin-bottom: 10px;
-            min-height: 14px;
+            margin-bottom: 6px;
+            min-height: 12px;
             transition: color 0.4s;
         }
 
         .mode-label {
-            font-size: 10px;
+            font-size: 8px;
             font-weight: 800;
             letter-spacing: 1px;
             text-transform: uppercase;
@@ -149,8 +148,8 @@
         .switch {
             position: relative;
             display: inline-block;
-            width: 52px;
-            height: 26px;
+            width: 44px;
+            height: 22px;
         }
 
         .switch input { opacity: 0; width: 0; height: 0; }
@@ -169,8 +168,8 @@
         .slider:before {
             position: absolute;
             content: "";
-            height: 18px; width: 18px;
-            left: 3px; bottom: 3px;
+            height: 14px; width: 14px;
+            left: 2px; bottom: 2px;
             background-color: #00ffcc;
             box-shadow: 0 0 8px #00ffcc;
             transition: .4s;
@@ -184,32 +183,69 @@
         }
 
         input:checked + .slider:before {
-            transform: translateX(26px);
+            transform: translateX(22px);
             background-color: #00ff66;
             box-shadow: 0 0 12px #00ff66;
         }
 
-        .table-container { max-height: 130px; overflow-y: auto; margin-top: 6px; border: 1px solid var(--border-input); border-radius: 6px; background: rgba(0,0,0,0.2); transition: border 0.4s; }
+        .table-container { max-height: 88px; overflow-y: auto; margin-top: 4px; border: 1px solid var(--border-input); border-radius: 4px; background: rgba(0,0,0,0.2); transition: border 0.4s; }
         table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border-table-td); font-size: 11px; transition: border 0.4s; }
-        th { background-color: var(--bg-table-th); color: var(--neon-primary); font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.4s; }
+        th, td { padding: 4px 5px; text-align: left; border-bottom: 1px solid var(--border-table-td); font-size: 10px; transition: border 0.4s; }
+        th { background-color: var(--bg-table-th); color: var(--neon-primary); font-size: 8px; text-transform: uppercase; letter-spacing: 0.3px; transition: all 0.4s; }
 
-        .btn-add { background-color: rgba(188, 111, 255, 0.08); color: #ffffff; border: 1px solid var(--border-input); padding: 5px 10px; border-radius: 5px; cursor: pointer; margin-top: 6px; font-size: 11px; font-weight: 600; transition: all 0.2s ease-in-out; }
-        .btn-add:hover { background-color: var(--neon-primary); color: #000; border-color: var(--neon-primary); box-shadow: 0 0 12px var(--neon-primary); }
+        .btn-add {
+            background-color: rgba(188, 111, 255, 0.08);
+            color: #ffffff;
+            border: 1px solid var(--border-input);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .btn-add:hover { background-color: var(--neon-primary); color: #000; border-color: var(--neon-primary); }
 
-        .btn-remove { background-color: rgba(159, 18, 57, 0.15); color: #fda4af; border: 1px solid rgba(225, 29, 72, 0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; transition: all 0.2s ease-in-out; }
+        .btn-remove {
+            background-color: rgba(159, 18, 57, 0.15);
+            color: #fda4af;
+            border: 1px solid rgba(225, 29, 72, 0.3);
+            padding: 3px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 9px;
+        }
 
-        .controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+        .controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 
-        .btn-start { width: 100%; background: var(--btn-start-bg); color: var(--btn-start-text); border: none; padding: 11px; font-size: 15px; font-weight: bold; border-radius: 6px; cursor: pointer; box-shadow: 0 4px 12px var(--neon-glow); transition: all 0.3s; text-transform: uppercase; letter-spacing: 1px; }
-        .btn-start:hover { box-shadow: 0 0 25px var(--neon-primary); transform: translateY(-1px); }
+        .btn-start {
+            width: 100%;
+            background: var(--btn-start-bg);
+            color: var(--btn-start-text);
+            border: none;
+            padding: 8px;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
 
-        .btn-stop { width: 100%; background: rgba(159, 18, 57, 0.1); color: #f43f5e; border: 1px solid rgba(225, 29, 72, 0.4); padding: 11px; font-size: 15px; font-weight: bold; border-radius: 6px; cursor: pointer; transition: all 0.3s; text-transform: uppercase; letter-spacing: 1px; }
-        .btn-stop:hover { background: #ff0055ff; color: #fff; border-color: #ff0055ff; box-shadow: 0 0 20px #ff0055ff; transform: translateY(-1px); }
+        .btn-stop {
+            width: 100%;
+            background: rgba(159, 18, 57, 0.1);
+            color: #f43f5e;
+            border: 1px solid rgba(225, 29, 72, 0.4);
+            padding: 8px;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
 
-        .status { text-align: center; margin-top: 8px; font-weight: bold; color: var(--neon-primary); font-size: 11px; margin-bottom: 8px; transition: color 0.4s; }
-        .threads-container { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 8px; max-height: 70px; overflow-y: auto; padding-right: 3px; }
-        .thread-card { background: rgba(0, 0, 0, 0.4); border: 1px solid var(--border-input); border-radius: 6px; padding: 6px; display: flex; flex-direction: column; height: 60px; box-sizing: border-box; transition: all 0.4s ease; }
+        .status { text-align: center; margin-top: 5px; font-weight: bold; color: var(--neon-primary); font-size: 10px; margin-bottom: 4px; }
+        .threads-container { display: none; }
 
         @keyframes purplePulse {
             0% { box-shadow: 0 0 8px rgba(188, 111, 255, 0.2); border-color: rgba(188, 111, 255, 0.3); }
@@ -225,11 +261,12 @@
         .thread-header { font-size: 12px; font-weight: bold; color: #ffffff; border-bottom: 1px solid var(--border-table-td); padding-bottom: 6px; margin-bottom: 6px; text-align: left; transition: border 0.4s; }
         .thread-log { font-family: 'Consolas', monospace; font-size: 11px; color: #e2daf0; white-space: pre-wrap; overflow-y: auto; flex-grow: 1; text-align: left; line-height: 1.4; }
 
-        .stats-section { margin-top: 12px; border-top: 1px dashed var(--border-input); padding-top: 10px; transition: border 0.4s; }
-        .stats-section h2 { color: var(--neon-primary); font-size: 12px; letter-spacing: 0.5px; margin-bottom: 8px; text-shadow: 0 0 8px var(--neon-glow); transition: all 0.4s; }
-        .stats-badges { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 8px; }
-        .badge-card { background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-input); border-radius: 6px; padding: 6px; text-align: center; transition: border 0.4s; }
-        .badge-card .num { font-size: 16px; font-weight: 900; color: #fff; margin-top: 2px; }
+        .stats-section { margin-top: 8px; border-top: 1px dashed var(--border-input); padding-top: 6px; }
+        .stats-section h2 { color: var(--neon-primary); font-size: 10px; margin-bottom: 5px; }
+        .stats-badges { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; margin-bottom: 5px; }
+        .badge-card { background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-input); border-radius: 4px; padding: 4px; text-align: center; }
+        .badge-card .num { font-size: 13px; font-weight: 900; color: #fff; margin-top: 1px; }
+        .badge-card label { font-size: 8px; color: var(--text-label); margin: 0; }
         .badge-card.active-ch .num { color: var(--neon-primary); text-shadow: 0 0 12px var(--neon-primary); transition: all 0.4s; }
         .badge-card.bans .num { color: #f43f5e; text-shadow: 0 0 12px #f43f5e; }
         .badge-card label { font-size: 10px; color: var(--text-label); margin: 0; transition: color 0.4s; }
@@ -265,14 +302,14 @@
             <label>Путь к папке с видео</label>
             <input type="text" id="videosDir" value="C:\\Users\\PC\\yt-farm\\videos">
         </div>
-        <div class="form-group">
-            <label>Количество потоков (окон)</label>
+        <div class="form-group" style="margin-bottom:4px;">
+            <label>Количество потоков (окон консоли)</label>
             <input type="number" id="concurrencyLimit" value="6" min="1" max="12">
         </div>
     </div>
 
     <div class="form-group">
-        <label>Названия (200 строк = 50 блоков × 4)</label>
+        <label>Названия видео (каждое с новой строки)</label>
         <textarea id="baseTitles" placeholder="Строка 0–3: блок для part1&#10;Строка 4–7: блок для part2&#10;...&#10;Строка 196–199: блок для part50"></textarea>
     </div>
 
@@ -315,7 +352,7 @@
             </div>
         </div>
 
-        <div class="table-container" style="max-height: 110px;">
+        <div class="table-container" style="max-height: 72px;">
             <table>
                 <thead>
                     <tr>
