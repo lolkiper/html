@@ -95,45 +95,54 @@ function countChannelUploads(history, channelNumber) {
 }
 
 /**
- * Блочный рандом названий: блок N = строки [N*4 .. N*4+3], цикл % videosPerChannel.
- * uploadOrdinal — сколько уже выложено на канале (0-based).
+ * Блочный рандом названий:
+ * videoSegmentIndex = (totalUploadedEver + batchIndex) % videosPerChannel
+ * Блок N = строки [N*4 .. N*4+3] в BASE_TITLES; финальная строка — randomBetween в этом диапазоне.
  */
-function pickBlockTitle(allTitles, uploadOrdinal, videosPerChannel = 50, titlesPerBlock = TITLES_PER_BLOCK) {
-  const blockIndex = uploadOrdinal % videosPerChannel;
-  const startLine = blockIndex * titlesPerBlock;
-  const block = allTitles
-    .slice(startLine, startLine + titlesPerBlock)
-    .map((t) => String(t).trim())
-    .filter(Boolean);
+function pickBlockTitle(allTitles, totalUploadedEver, batchIndex, videosPerChannel = 50, titlesPerBlock = TITLES_PER_BLOCK) {
+  const videoSegmentIndex = (totalUploadedEver + batchIndex) % videosPerChannel;
+  const blockStartIndex = videoSegmentIndex * titlesPerBlock;
+  const blockEndIndex = blockStartIndex + titlesPerBlock - 1;
 
-  if (!block.length) {
+  if (!allTitles.length || blockStartIndex >= allTitles.length) {
     return {
-      title: `Shorts #${uploadOrdinal + 1}`,
-      blockIndex,
-      startLine,
-      endLine: startLine + titlesPerBlock - 1,
+      title: `Shorts #${videoSegmentIndex + 1}`,
+      videoSegmentIndex,
+      blockStartIndex,
+      blockEndIndex,
+      randomTitleIndex: -1,
     };
   }
 
-  const pickIndex = Math.floor(Math.random() * block.length);
+  const randomTitleIndex = randomBetween(
+    blockStartIndex,
+    Math.min(blockEndIndex, allTitles.length - 1),
+  );
+  const rawTitle = allTitles[randomTitleIndex];
+  const title = rawTitle != null && String(rawTitle).trim()
+    ? String(rawTitle).trim()
+    : `Shorts #${videoSegmentIndex + 1}`;
+
   return {
-    title: block[pickIndex],
-    blockIndex,
-    startLine,
-    endLine: startLine + titlesPerBlock - 1,
-    pickIndex,
+    title,
+    videoSegmentIndex,
+    blockStartIndex,
+    blockEndIndex,
+    randomTitleIndex,
   };
 }
 
-function resolveTitleForUpload(allTitles, uploadOrdinal, channelNumber, filename, videosPerChannel) {
-  const picked = pickBlockTitle(allTitles, uploadOrdinal, videosPerChannel, TITLES_PER_BLOCK);
-  const partNum = parseInt(filename.match(/part(\d+)/)?.[1] || '0', 10);
+function resolveTitleForUpload(allTitles, totalUploadedEver, batchIndex, channelNumber, filename, videosPerChannel) {
+  const picked = pickBlockTitle(allTitles, totalUploadedEver, batchIndex, videosPerChannel, TITLES_PER_BLOCK);
   const startVideoNum = (channelNumber - 1) * videosPerChannel + 1;
-  const stepInChannel = partNum - startVideoNum + 1;
+  const logicalPartName = `part${startVideoNum + picked.videoSegmentIndex}.mov`;
 
   console.log(
-    `[Title] Канал №${channelNumber}, ${filename}, шаг ${stepInChannel}, `
-    + `блок ${picked.blockIndex} (строки ${picked.startLine}–${picked.endLine}) → "${picked.title}"`,
+    `[Title] Канал №${channelNumber}, ${filename}, `
+    + `totalUploaded=${totalUploadedEver}, i=${batchIndex}, `
+    + `segment=${picked.videoSegmentIndex} (логически ${logicalPartName}), `
+    + `блок ${picked.videoSegmentIndex} (строки ${picked.blockStartIndex}–${picked.blockEndIndex}`
+    + `${picked.randomTitleIndex >= 0 ? `, индекс ${picked.randomTitleIndex}` : ''}) → "${picked.title}"`,
   );
   return picked.title;
 }
@@ -708,7 +717,7 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
   let isBanned = false;
   let browserClosed = false;
   let totalUploadedInSession = 0;
-  let channelUploadOrdinal = countChannelUploads(history, channelNumber);
+  const totalUploadedEver = countChannelUploads(history, channelNumber);
 
   for (let i = 0; i < currentBatch.length; i++) {
     const videoToUpload = currentBatch[i];
@@ -721,7 +730,8 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
 
     videoToUpload.title = resolveTitleForUpload(
       allTitles,
-      channelUploadOrdinal,
+      totalUploadedEver,
+      i,
       channelNumber,
       videoToUpload.file,
       VIDEOS_PER_CHANNEL,
@@ -739,7 +749,6 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
 
         success = true;
         totalUploadedInSession++;
-        channelUploadOrdinal++;
         await saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
         console.log(`💾 Успешно запланировано! Файл ${videoToUpload.file} закреплен за временем ${videoTimeSlot}`);
       } catch (error) {
@@ -840,7 +849,7 @@ async function runFarmSingle(slot, profileId, channelNumber, finalVideosDir) {
   let isBanned = false;
   let browserClosed = false;
   let totalUploadedInSession = 0;
-  let channelUploadOrdinal = countChannelUploads(history, channelNumber);
+  const totalUploadedEver = countChannelUploads(history, channelNumber);
 
   console.log(`🔄 Слот ${CURRENT_SLOT} открывает профиль Dolphin: ${directProfileId}...`);
   try {
@@ -856,7 +865,8 @@ async function runFarmSingle(slot, profileId, channelNumber, finalVideosDir) {
   const videoToUpload = currentBatch[0];
   videoToUpload.title = resolveTitleForUpload(
     allTitles,
-    channelUploadOrdinal,
+    totalUploadedEver,
+    0,
     channelNumber,
     videoToUpload.file,
     VIDEOS_PER_CHANNEL,
