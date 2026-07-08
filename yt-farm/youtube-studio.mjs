@@ -127,6 +127,119 @@ async function humanType(page, text, delayRange = [55, 130]) {
 }
 
 /**
+ * Выбор часового пояса (GMT+03:00) Москва в планировщике YouTube Studio.
+ * Приоритет: строка с "Москва"/"Moscow" и GMT+3.
+ */
+async function selectTimezoneMoscowGmt3(page) {
+  console.log(`[Робот] Устанавливаю часовой пояс: (GMT+03:00) Москва...`);
+
+  const tzButton = page.locator([
+    '#timezone-select-button',
+    'ytcp-button[label="Time zone"]',
+    'ytcp-button[label="Часовой пояс"]',
+    'button[aria-label="Time zone"]',
+    'button[aria-label="Часовой пояс"]',
+  ].join(', ')).first();
+
+  await tzButton.waitFor({ state: 'visible', timeout: 12000 });
+  await tzButton.scrollIntoViewIfNeeded().catch(() => {});
+  await humanClick(page, tzButton);
+  await humanDelay(200, 400);
+
+  const tzListbox = page.locator([
+    'ytcp-text-menu tp-yt-paper-listbox',
+    'ytcp-time-zone-picker tp-yt-paper-listbox',
+    'tp-yt-paper-listbox#paper-list',
+  ].join(', ')).last();
+  await tzListbox.waitFor({ state: 'visible', timeout: 8000 });
+
+  const picked = await page.evaluate(() => {
+    const norm = (t) => (t || '').replace(/\u202f/g, ' ').replace(/\s+/g, ' ').trim();
+    const listboxes = Array.from(document.querySelectorAll(
+      'ytcp-text-menu tp-yt-paper-listbox, ytcp-time-zone-picker tp-yt-paper-listbox, tp-yt-paper-listbox#paper-list'
+    ));
+    const listbox = listboxes[listboxes.length - 1];
+    if (!listbox) return { ok: false, reason: 'listbox not found' };
+
+    const items = Array.from(listbox.querySelectorAll('tp-yt-paper-item'));
+    const scrollEl = listbox.querySelector('iron-list #items')
+      || listbox.querySelector('#items')
+      || listbox.querySelector('iron-list')
+      || listbox;
+
+    const scoreItem = (text) => {
+      const t = norm(text);
+      if (/москв/i.test(t) && /gmt\+0?3/i.test(t)) return 100;
+      if (/moscow/i.test(t) && /gmt\+0?3/i.test(t)) return 100;
+      if (/\(gmt\+0?3:00\).*москв/i.test(t)) return 95;
+      if (/\(gmt\+0?3:00\).*moscow/i.test(t)) return 95;
+      if (/москв/i.test(t)) return 90;
+      if (/moscow/i.test(t)) return 90;
+      if (/gmt\+0?3:00/i.test(t)) return 60;
+      return 0;
+    };
+
+    const tryPick = () => {
+      let best = null;
+      let bestScore = 0;
+      for (const item of items) {
+        const text = norm(item.innerText || item.textContent);
+        const s = scoreItem(text);
+        if (s > bestScore) {
+          bestScore = s;
+          best = { text, item };
+        }
+      }
+      if (best && bestScore >= 60) {
+        best.item.scrollIntoView({ block: 'center', behavior: 'instant' });
+        best.item.click();
+        return { ok: true, matched: best.text, score: bestScore };
+      }
+      return null;
+    };
+
+    let result = tryPick();
+    if (result) return result;
+
+    const itemHeight = items[0]?.getBoundingClientRect().height || 36;
+    for (let top = 0; top <= (scrollEl.scrollHeight || 8000); top += itemHeight) {
+      scrollEl.scrollTop = top;
+      scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }));
+      result = tryPick();
+      if (result) return result;
+    }
+
+    return {
+      ok: false,
+      reason: 'Moscow GMT+3 not found',
+      sample: items.slice(0, 8).map((i) => norm(i.innerText || i.textContent)),
+    };
+  });
+
+  if (!picked.ok) {
+    const tzOption = tzListbox
+      .locator('tp-yt-paper-item')
+      .filter({ hasText: /Москв|Moscow|GMT\+0?3:00/i })
+      .first();
+    await tzOption.waitFor({ state: 'attached', timeout: 5000 });
+    await tzOption.scrollIntoViewIfNeeded().catch(() => {});
+    await humanClick(page, tzOption);
+    const fallbackText = await tzOption.innerText().catch(() => '');
+    if (!/москв|moscow|gmt\+0?3/i.test(fallbackText)) {
+      await page.screenshot({ path: 'timezone-error.png', fullPage: true }).catch(() => {});
+      throw new Error(`Не найден часовой пояс Москва GMT+3. См. timezone-error.png`);
+    }
+    console.log(`✅ Часовой пояс установлен: ${fallbackText.trim()}`);
+  } else {
+    console.log(`✅ Часовой пояс установлен: ${picked.matched}`);
+  }
+
+  await tzListbox.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {});
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(capDelay(300));
+}
+
+/**
  * Функция загрузки и планирования Shorts на YouTube (С чистыми CSS-селекторами)
  * @param {object} page - Объект страницы Playwright
  * @param {object} videoToUpload - Объект с данными видео { file: "...", title: "..." }
