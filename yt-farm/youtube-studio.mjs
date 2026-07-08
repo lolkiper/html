@@ -473,13 +473,37 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       return null;
     }
 
+    function parseMinuteFromField(value) {
+      const norm = (value || '').replace(/\u202f/g, ' ').trim();
+      let m = norm.match(/^\d{1,2}:(\d{2})(?:\s*(?:AM|PM))?$/i);
+      if (m) return parseInt(m[1], 10);
+      return null;
+    }
+
+    function pickTimeLabelForField(labels, fieldBefore) {
+      const norm = (fieldBefore || '').replace(/\u202f/g, ' ').trim();
+      const is12h = /AM|PM/i.test(norm);
+      if (!is12h) {
+        const unpadded = /^\d{1}:\d{2}$/.test(norm);
+        if (unpadded) {
+          return labels.find((l) => /^\d{1}:\d{2}$/.test(l)) ?? labels.find((l) => !/AM|PM/i.test(l)) ?? labels[0];
+        }
+        return labels.find((l) => /^\d{2}:\d{2}$/.test(l)) ?? labels[0];
+      }
+      const paddedHour = /^\d{2}:/.test(norm);
+      return labels.find((l) => {
+        if (!/AM|PM/i.test(l)) return false;
+        return paddedHour ? /^\d{2}:/.test(l) : /^\d{1}:/.test(l);
+      }) ?? labels.find((l) => /AM|PM/i.test(l)) ?? labels.at(-1);
+    }
+
     async function verifyFieldHour(timeInput, expectedH) {
       const val = await timeInput.inputValue().catch(() => '');
       const h = parseHourFromField(val);
       return h === expectedH;
     }
 
-    // Клик :00 в списке → backspace последней цифры → вписать rand 1–10
+    // После клика :00 в списке — вписываем fuzz 1–10 в минуты (12ч и 24ч форматы)
     async function applyMinuteFuzz(timeInput) {
       const fieldBefore = await timeInput.inputValue().catch(() => '');
       if (!(await verifyFieldHour(timeInput, targetH))) {
@@ -487,24 +511,41 @@ export async function uploadVideo(page, videoToUpload, videosDir, scheduledTime 
       }
 
       const { rand, minute: fuzzMinute } = computeMinuteFuzz(0);
-      const finalTime = `${String(targetH).padStart(2, '0')}:${String(fuzzMinute).padStart(2, '0')}`;
+      const labels = buildTimeLabels(targetH, fuzzMinute);
+      const targetTime = pickTimeLabelForField(labels, fieldBefore);
 
-      await timeInput.focus();
-      await humanDelay(150, 300);
-      await page.keyboard.press('End');
+      await timeInput.scrollIntoViewIfNeeded().catch(() => {});
+      await timeInput.click();
+      await humanDelay(120, 220);
+      await page.keyboard.press('Control+A');
+      await humanDelay(80, 150);
+      await page.keyboard.type(targetTime, { delay: randomBetween(45, 95) });
+      await humanDelay(100, 200);
+      await page.keyboard.press('Tab').catch(() => page.keyboard.press('Enter').catch(() => {}));
+      await humanDelay(150, 250);
 
-      if (rand === 10) {
-        await page.keyboard.press('Backspace');
-        await page.keyboard.press('Backspace');
-        await page.keyboard.type('10', { delay: randomBetween(40, 90) });
-      } else {
-        await page.keyboard.press('Backspace');
-        await page.keyboard.type(String(rand), { delay: randomBetween(40, 90) });
+      let fieldAfter = await timeInput.inputValue().catch(() => '');
+      let afterMinute = parseMinuteFromField(fieldAfter);
+
+      if (afterMinute !== fuzzMinute) {
+        console.log(`⚠️ Fuzz через Ctrl+A не сработал (${fieldAfter}), пробую fill...`);
+        await timeInput.fill(targetTime);
+        await timeInput.evaluate((el) => {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await humanDelay(100, 200);
+        await page.keyboard.press('Tab').catch(() => {});
+        fieldAfter = await timeInput.inputValue().catch(() => targetTime);
+        afterMinute = parseMinuteFromField(fieldAfter);
       }
 
-      await page.keyboard.press('Tab').catch(() => page.keyboard.press('Enter').catch(() => {}));
-      console.log(`✅ Fuzz: клик ${String(targetH).padStart(2, '0')}:00 → rand ${rand} → ${finalTime}`);
-      return finalTime;
+      if (afterMinute !== fuzzMinute) {
+        throw new Error(`Минуты не изменились: было "${fieldBefore}", ожидалось ${targetTime}, в поле "${fieldAfter}"`);
+      }
+
+      console.log(`✅ Fuzz: ${fieldBefore} → ${targetTime} (rand ${rand}, минуты ${fuzzMinute})`);
+      return targetTime;
     }
 
     async function clickStandardTimeInList(timeListbox) {

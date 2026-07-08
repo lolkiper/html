@@ -1,6 +1,6 @@
 {
   "name": "yt-farm",
-  "version": "2.2.6",
+  "version": "2.2.7",
   "description": "YouTube Zaliver — массовый залив Shorts через Dolphin Anty",
   "type": "module",
   "private": true,
