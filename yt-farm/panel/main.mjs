@@ -65,8 +65,8 @@ function ensureConfigFile() {
 
 function createWindow() {
   // Размер контентной области как на референсе (~1/3 экрана 1920×1080)
-  const WIN_W = 580;
-  const WIN_H = 500;
+  const WIN_W = 1160;
+  const WIN_H = 1000;
 
   mainWindow = new BrowserWindow({
     width: WIN_W,
