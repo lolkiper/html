@@ -255,11 +255,24 @@ function normalizeScheduleHours(settings) {
   return [7, 13, 19, 1];
 }
 
+function isValidScheduleTime(str) {
+  return typeof str === 'string' && /^\d{1,2}\.\d{1,2}\.\d{4} \d{1,2}:\d{2}$/.test(str.trim());
+}
+
 function parseScheduleTime(str) {
-  const [datePart, timePart] = str.split(' ');
+  if (!isValidScheduleTime(str)) {
+    throw new Error(`Некорректный формат расписания: ${String(str)}`);
+  }
+  const [datePart, timePart] = str.trim().split(' ');
   const [day, month, year] = datePart.split('.').map(Number);
   const [hours, minutes] = timePart.split(':').map(Number);
   return new Date(year, month - 1, day, hours, minutes, 0, 0);
+}
+
+function countScheduledUploads(history, channelNumber) {
+  return (history.uploaded || []).filter(
+    (item) => item.channel === channelNumber && isValidScheduleTime(item.scheduledFor)
+  ).length;
 }
 
 function formatScheduleTime(date) {
