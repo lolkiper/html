@@ -1,4 +1,11 @@
 import { uploadVideo } from './youtube-studio.mjs';
+import {
+  applyFarmModePreset,
+  getEffectiveBatchSize,
+  getVideosPerChannel,
+  isScheduleMode,
+  normalizeFarmMode,
+} from './mode-presets.mjs';
 import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
@@ -39,15 +46,18 @@ if (!fs.existsSync(configPath)) {
 }
 
 function normalizeConfig(raw) {
-  const schedule = raw.SCHEDULE_SETTINGS || {};
+  const withMode = applyFarmModePreset(raw, raw.FARM_MODE);
+  const schedule = withMode.SCHEDULE_SETTINGS || {};
   return {
-    ...raw,
-    MAX_PARALLEL_SLOTS: raw.MAX_PARALLEL_SLOTS ?? raw.CONCURRENCY_LIMIT ?? 1,
+    ...withMode,
+    FARM_MODE: normalizeFarmMode(withMode.FARM_MODE),
+    MAX_PARALLEL_SLOTS: withMode.MAX_PARALLEL_SLOTS ?? withMode.CONCURRENCY_LIMIT ?? 1,
     SCHEDULE_SETTINGS: {
       ...schedule,
-      VIDEOS_PER_CHANNEL: schedule.VIDEOS_PER_CHANNEL ?? raw.VIDEOS_PER_CHANNEL ?? 16,
+      VIDEOS_PER_CHANNEL: getVideosPerChannel(withMode),
+      BATCH_SIZE: getEffectiveBatchSize(withMode),
     },
-    ANTIDETECT: raw.ANTIDETECT || {},
+    ANTIDETECT: withMode.ANTIDETECT || {},
   };
 }
 
@@ -55,8 +65,10 @@ const CONFIG = normalizeConfig(JSON.parse(fs.readFileSync(configPath, 'utf-8')))
 
 const SCHEDULE_SETTINGS = CONFIG.SCHEDULE_SETTINGS || {};
 const ANTIDETECT = CONFIG.ANTIDETECT || {};
-const VIDEOS_PER_CHANNEL = SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL ?? 16;
-const BATCH_SIZE = SCHEDULE_SETTINGS.BATCH_SIZE ?? 10;
+const FARM_MODE = CONFIG.FARM_MODE;
+const USE_SCHEDULE = isScheduleMode(CONFIG);
+const VIDEOS_PER_CHANNEL = getVideosPerChannel(CONFIG);
+const BATCH_SIZE = getEffectiveBatchSize(CONFIG);
 
 const CHANNEL_STATE_FILE = path.join(baseDir, 'channel-state.json');
 const CHANNEL_STATE_LOCK_FILE = path.join(baseDir, 'channel-state.lock');
@@ -536,6 +548,7 @@ export async function runFarm(slot, profileId) {
   const channelNumber = channelData[0];
 
   console.log(`\n📺 ================= ОБРАБОТКА КАНАЛА №${channelNumber} =================`);
+  console.log(`⚙️ Режим фермы: ${FARM_MODE.toUpperCase()} | пачка: ${BATCH_SIZE} | расписание: ${USE_SCHEDULE ? 'да' : 'сразу'}`);
 
   const allTitles = CONFIG.BASE_TITLES || [];
   const history = await loadHistory(directProfileId);
@@ -544,19 +557,24 @@ export async function runFarm(slot, profileId) {
   const discovered = await syncChannelsFromMapping(CONFIG.PROFILE_MAPPING);
   const isNewChannel = discovered.new.some((c) => c.channelNumber === channelNumber);
 
-  const schedulePrep = await prepareChannelSchedule(
-    channelNumber,
-    directProfileId,
-    history,
-    SCHEDULE_SETTINGS,
-    CONFIG.SCHEDULE
-  );
+  let schedulePrep = null;
+  if (USE_SCHEDULE) {
+    schedulePrep = await prepareChannelSchedule(
+      channelNumber,
+      directProfileId,
+      history,
+      SCHEDULE_SETTINGS,
+      CONFIG.SCHEDULE
+    );
 
-  if (isNewChannel) {
-    console.log(`🆕 Канал №${channelNumber} — первый запуск, расписание с завтра ${String(normalizeScheduleHours(SCHEDULE_SETTINGS)[0]).padStart(2, '0')}:00`);
+    if (isNewChannel) {
+      console.log(`🆕 Канал №${channelNumber} — первый запуск, расписание с завтра ${String(normalizeScheduleHours(SCHEDULE_SETTINGS)[0]).padStart(2, '0')}:00`);
+    } else {
+      const remaining = schedulePrep.schedule.length - schedulePrep.uploadedCount;
+      console.log(`📋 Канал №${channelNumber} — известный, свободных слотов: ${remaining}, всего в графике: ${schedulePrep.schedule.length}`);
+    }
   } else {
-    const remaining = schedulePrep.schedule.length - schedulePrep.uploadedCount;
-    console.log(`📋 Канал №${channelNumber} — известный, свободных слотов: ${remaining}, всего в графике: ${schedulePrep.schedule.length}`);
+    console.log(`🚀 Канал №${channelNumber} — одиночный режим: публикация сразу, без расписания`);
   }
 
   const startVideoNum = (channelNumber - 1) * VIDEOS_PER_CHANNEL + 1;
@@ -583,13 +601,16 @@ export async function runFarm(slot, profileId) {
 
   shuffle(availableVideos);
   const currentBatch = availableVideos.slice(0, BATCH_SIZE);
-  console.log(`🎯 Слот ${CURRENT_SLOT} собрал пачку из ${currentBatch.length} видео для этого пакетного захода.`);
+  console.log(`🎯 Слот ${CURRENT_SLOT} собрал пачку из ${currentBatch.length} видео для этого ${USE_SCHEDULE ? 'пакетного' : 'одиночного'} захода.`);
 
-  const batchTimeSlots = await schedulePrep.batchSlots(currentBatch.length);
-  if (batchTimeSlots.length < currentBatch.length) {
-    console.error(`❌ Не хватает тайм-слотов в расписании канала №${channelNumber} (нужно ${currentBatch.length}, есть ${batchTimeSlots.length})`);
-    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: мало слотов в расписании`);
-    return;
+  let batchTimeSlots = currentBatch.map(() => null);
+  if (USE_SCHEDULE) {
+    batchTimeSlots = await schedulePrep.batchSlots(currentBatch.length);
+    if (batchTimeSlots.length < currentBatch.length) {
+      console.error(`❌ Не хватает тайм-слотов в расписании канала №${channelNumber} (нужно ${currentBatch.length}, есть ${batchTimeSlots.length})`);
+      workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: мало слотов в расписании`);
+      return;
+    }
   }
 
   let browser = null;
@@ -624,13 +645,17 @@ export async function runFarm(slot, profileId) {
     const videoToUpload = currentBatch[i];
     const videoTimeSlot = batchTimeSlots[i];
 
-    if (!videoTimeSlot) {
+    if (USE_SCHEDULE && !videoTimeSlot) {
       console.log(`⚠️ Предупреждение: в расписании канала №${channelNumber} закончились тайм-слоты на шаге ${i + 1}. Остаток пачки пропускается.`);
       break;
     }
 
     console.log(`\n🎬 [Видео ${i + 1}/${currentBatch.length}] Начинаю процесс для: ${videoToUpload.file}`);
-    console.log(`📅 Целевой тайм-слот публикации: ${videoTimeSlot}`);
+    if (USE_SCHEDULE) {
+      console.log(`📅 Целевой тайм-слот публикации: ${videoTimeSlot}`);
+    } else {
+      console.log(`📅 Публикация: сразу (без расписания)`);
+    }
 
     let attempts = 3;
     let success = false;
@@ -638,12 +663,13 @@ export async function runFarm(slot, profileId) {
 
     while (attempts > 0 && !success) {
       try {
-        await uploadVideo(page, videoToUpload, finalVideosDir, videoTimeSlot, studioDelayMs);
+        await uploadVideo(page, videoToUpload, finalVideosDir, USE_SCHEDULE ? videoTimeSlot : null, studioDelayMs);
 
         success = true;
         totalUploadedInSession++;
-        await saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
-        console.log(`💾 Успешно запланировано! Файл ${videoToUpload.file} закреплен за временем ${videoTimeSlot}`);
+        await saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, USE_SCHEDULE ? videoTimeSlot : 'immediate');
+        const publishLabel = USE_SCHEDULE ? `запланировано на ${videoTimeSlot}` : 'опубликовано сразу';
+        console.log(`💾 Успешно ${publishLabel}! Файл ${videoToUpload.file}`);
       } catch (error) {
         if (error.message === 'BAN_DETECTED') { isBanned = true; break; }
         if (error.message.includes('closed') || error.message.includes('browser has been closed')) { browserClosed = true; break; }
@@ -764,7 +790,7 @@ export function spawnFarmWorker(slot, profileId) {
   return child;
 }
 
-export { baseDir, CONFIG };
+export { baseDir, CONFIG, normalizeConfig };
 
 // Worker-режим: node main.mjs <slot> <profileId>
 if (process.argv[2] && process.argv[3]) {

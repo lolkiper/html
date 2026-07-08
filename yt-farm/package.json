@@ -1,15 +1,22 @@
 {
   "name": "yt-farm",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "private": true,
+  "main": "panel/main.mjs",
   "scripts": {
     "farm": "node main.mjs",
-    "start": "node main.mjs"
+    "start": "electron panel/main.mjs",
+    "panel": "electron panel/main.mjs",
+    "build:win": "electron-builder --config electron-builder.json --win portable"
   },
   "dependencies": {
     "axios": "^1.7.0",
     "dotenv": "^16.4.0",
     "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
   }
 }

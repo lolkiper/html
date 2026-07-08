@@ -7,8 +7,9 @@ export const CONFIG = {
   DOLPHIN_TOKEN: process.env.DOLPHIN_TOKEN,
 
   VIDEOS_DIR: './videos',
+  FARM_MODE: 'single',
   TOTAL_CHANNELS: 16,
-  VIDEOS_PER_CHANNEL: 16,
+  VIDEOS_PER_CHANNEL: 50,
 
   CONCURRENCY_LIMIT: 6,
 
@@ -22,9 +23,11 @@ export const CONFIG = {
     'Example title 2',
   ],
 
-  // Опционально — иначе дефолты в upload-farm.mjs
+  // Пресеты режимов: single = 1 видео сразу, multi = 10 видео + расписание
   SCHEDULE_SETTINGS: {
-    BATCH_SIZE: 10,
+    BATCH_SIZE: 1,
+    VIDEOS_PER_CHANNEL: 50,
+    USE_SCHEDULE: false,
     SCHEDULE_HOURS: [7, 13, 19, 1],
     LOW_SCHEDULE_THRESHOLD: 10,
   },

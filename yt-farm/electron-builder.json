@@ -1,0 +1,29 @@
+{
+  "appId": "com.ytzaliver.farm",
+  "productName": "YouTube Zaliver",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "panel/**/*",
+    "main.mjs",
+    "youtube-studio.mjs",
+    "mode-presets.mjs",
+    "config.example.json",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": ".",
+      "to": "yt-farm",
+      "filter": ["main.mjs", "youtube-studio.mjs", "mode-presets.mjs", "config.example.json"]
+    }
+  ],
+  "win": {
+    "target": ["portable"],
+    "artifactName": "YouTube-Farm-Pro.exe"
+  },
+  "extraMetadata": {
+    "main": "panel/main.mjs"
+  }
+}
