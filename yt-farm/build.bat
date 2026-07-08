@@ -23,7 +23,7 @@ if errorlevel 1 (
 )
 
 set CSC_IDENTITY_AUTO_DISCOVERY=false
-call npx electron-builder --config electron-builder.json --win dir
+call npx electron-builder --projectDir . --config electron-builder.json --win dir
 if errorlevel 1 goto :fail
 
 call scripts\copy-farm-to-dist.bat

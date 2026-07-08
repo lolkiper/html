@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
+cd /d "%~dp0\.."
 
 echo [clean] Закрываю YouTube Zaliver / Electron...
 taskkill /F /IM "YouTube Zaliver.exe" 2>nul
