@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { applyFarmModePreset } from '../mode-presets.mjs';
+import { applyFarmModePreset } from './mode-presets.mjs';
 
 const PANEL_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -10,11 +10,13 @@ function resolveMainScript(baseDir) {
   const candidates = [
     path.join(baseDir, 'main.mjs'),
     path.join(PANEL_DIR, '..', 'main.mjs'),
+    path.join(process.resourcesPath || '', 'farm', 'main.mjs'),
   ];
-  if (process.resourcesPath) {
-    candidates.push(path.join(process.resourcesPath, 'yt-farm', 'main.mjs'));
+  const found = candidates.find((p) => p && fs.existsSync(p));
+  if (!found) {
+    throw new Error(`main.mjs не найден. Положите main.mjs и youtube-studio.mjs в: ${baseDir}`);
   }
-  return candidates.find((p) => fs.existsSync(p)) || path.join(PANEL_DIR, '..', 'main.mjs');
+  return found;
 }
 
 export function getFarmPaths(baseDir = process.cwd()) {

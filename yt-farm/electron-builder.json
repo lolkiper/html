@@ -6,14 +6,26 @@
   },
   "files": [
     "panel/**/*",
-    "mode-presets.mjs",
     "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "main.mjs",
+      "to": "farm/main.mjs"
+    },
+    {
+      "from": "youtube-studio.mjs",
+      "to": "farm/youtube-studio.mjs"
+    },
+    {
+      "from": "config.example.json",
+      "to": "farm/config.example.json"
+    }
   ],
   "extraFiles": [
     { "from": "main.mjs", "to": "." },
     { "from": "youtube-studio.mjs", "to": "." },
-    { "from": "mode-presets.mjs", "to": "." },
-    { "from": "config.example.json", "to": "." },
+    { "from": "config.example.json", "to": "config.example.json" },
     { "from": "videos", "to": "videos", "filter": ["**/*"] }
   ],
   "win": {

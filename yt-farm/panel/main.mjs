@@ -9,12 +9,13 @@ import {
   mergeGuiConfig,
   saveConfig,
 } from './farm-orchestrator.mjs';
-import { applyFarmModePreset } from '../mode-presets.mjs';
+import { applyFarmModePreset } from './mode-presets.mjs';
+import { ensureFarmScripts } from './ensure-farm-scripts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function getBaseDir() {
-  return app.isPackaged ? path.dirname(process.execPath) : process.cwd();
+  return app.isPackaged ? path.dirname(process.execPath) : path.join(__dirname, '..');
 }
 
 let mainWindow = null;
@@ -27,10 +28,16 @@ function sendLog(data) {
 }
 
 function ensureConfigFile() {
-  const { configPath } = getFarmPaths(getBaseDir());
-  const examplePath = path.join(__dirname, '..', 'config.example.json');
-  if (!fs.existsSync(configPath) && fs.existsSync(examplePath)) {
-    fs.copyFileSync(examplePath, configPath);
+  const baseDir = getBaseDir();
+  const { configPath } = getFarmPaths(baseDir);
+  const examplePath = path.join(baseDir, 'config.example.json');
+  const exampleFallback = path.join(__dirname, '..', 'config.example.json');
+  if (!fs.existsSync(configPath)) {
+    if (fs.existsSync(examplePath)) {
+      fs.copyFileSync(examplePath, configPath);
+    } else if (fs.existsSync(exampleFallback)) {
+      fs.copyFileSync(exampleFallback, configPath);
+    }
   }
 }
 
@@ -63,17 +70,21 @@ function getOrchestrator() {
 }
 
 app.whenReady().then(() => {
+  const baseDir = getBaseDir();
+  const copied = ensureFarmScripts(baseDir, __dirname);
+  if (copied.length) {
+    console.log(`[Zaliver] Скопированы скрипты фермы: ${copied.join(', ')}`);
+  }
   ensureConfigFile();
   createWindow();
 
   ipcMain.handle('get-config', () => {
-    const raw = loadConfig(getBaseDir());
+    const raw = loadConfig(baseDir);
     if (!raw) return null;
     return applyFarmModePreset(raw, raw.FARM_MODE);
   });
 
   ipcMain.handle('set-farm-mode', (_event, mode) => {
-    const baseDir = getBaseDir();
     const existing = loadConfig(baseDir) || {};
     const updated = applyFarmModePreset(existing, mode);
     saveConfig(baseDir, updated);
@@ -84,7 +95,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('start-farm', (_event, guiConfig) => {
-    const baseDir = getBaseDir();
+    ensureFarmScripts(baseDir, __dirname);
     const merged = mergeGuiConfig(baseDir, guiConfig);
     saveConfig(baseDir, merged);
     return getOrchestrator().start(merged);

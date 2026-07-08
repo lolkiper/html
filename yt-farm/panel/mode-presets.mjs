@@ -1,7 +1,5 @@
 /**
- * Пресеты режимов YouTube Zaliver.
- * single — 1 видео за запуск, публикация сразу (без расписания)
- * multi  — пачка из 10 видео с отложенной публикацией по графику
+ * Пресеты режимов YouTube Zaliver (внутри panel/ — всегда в сборке).
  */
 
 export const FARM_MODE_PRESETS = {
@@ -30,14 +28,8 @@ export const FARM_MODE_PRESETS = {
 };
 
 export const ANTIDETECT_PRESETS = {
-  single: {
-    BETWEEN_UPLOAD_MIN_MS: 5000,
-    BETWEEN_UPLOAD_MAX_MS: 5000,
-  },
-  multi: {
-    BETWEEN_UPLOAD_MIN_MS: 10000,
-    BETWEEN_UPLOAD_MAX_MS: 12000,
-  },
+  single: { BETWEEN_UPLOAD_MIN_MS: 5000, BETWEEN_UPLOAD_MAX_MS: 5000 },
+  multi: { BETWEEN_UPLOAD_MIN_MS: 10000, BETWEEN_UPLOAD_MAX_MS: 12000 },
 };
 
 export function normalizeFarmMode(mode) {
@@ -48,32 +40,20 @@ export function getModePreset(mode) {
   return FARM_MODE_PRESETS[normalizeFarmMode(mode)];
 }
 
-/**
- * Применяет пресет режима к конфигу (SCHEDULE_SETTINGS мержатся поверх существующих).
- */
 export function applyFarmModePreset(config, mode) {
   const preset = getModePreset(mode);
   const farmMode = preset.FARM_MODE;
-
   const antidetect = ANTIDETECT_PRESETS[farmMode] || ANTIDETECT_PRESETS.single;
-
   return {
     ...config,
     FARM_MODE: farmMode,
-    SCHEDULE_SETTINGS: {
-      ...(config.SCHEDULE_SETTINGS || {}),
-      ...preset.SCHEDULE_SETTINGS,
-    },
-    ANTIDETECT: {
-      ...(config.ANTIDETECT || {}),
-      ...antidetect,
-    },
+    SCHEDULE_SETTINGS: { ...(config.SCHEDULE_SETTINGS || {}), ...preset.SCHEDULE_SETTINGS },
+    ANTIDETECT: { ...(config.ANTIDETECT || {}), ...antidetect },
   };
 }
 
 export function isScheduleMode(config) {
-  const mode = normalizeFarmMode(config?.FARM_MODE);
-  if (mode === 'single') return false;
+  if (normalizeFarmMode(config?.FARM_MODE) === 'single') return false;
   return config?.SCHEDULE_SETTINGS?.USE_SCHEDULE !== false;
 }
 
