@@ -64,8 +64,8 @@ function ensureConfigFile() {
 }
 
 function createWindow() {
-  const WIN_W = 1500;
-  const WIN_H = 1000;
+  const WIN_W = 750;
+  const WIN_H = 500;
 
   mainWindow = new BrowserWindow({
     width: WIN_W,

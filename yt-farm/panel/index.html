@@ -5,6 +5,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' http://localhost:* ws://127.0.0.1:*;">
     <title>YouTube Shorts Farm Ultra</title>
     <style id="dynamicThemeStyles">
+        /* Базовые динамические переменные, которые JavaScript будет менять налету */
         :root {
             --neon-primary: #bc6fffff;
             --neon-secondary: #ff0055ff;
@@ -24,32 +25,19 @@
         }
     </style>
     <style>
-        :root {
-            --panel-w: 1500px;
-            --panel-h: 1000px;
-        }
-
-        html, body {
-            width: var(--panel-w);
-            max-width: var(--panel-w);
-            height: var(--panel-h);
-            max-height: var(--panel-h);
-            overflow: hidden;
-            margin: 0;
-            padding: 0;
-        }
-
         body {
             background-color: var(--bg-dark);
             color: #e2daf0;
             font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
             padding: 20px;
-            box-sizing: border-box;
             user-select: none;
+            overflow-x: hidden;
             position: relative;
             transition: background-color 0.4s ease;
         }
 
+        /* НЕОНОВАЯ ПОДСВЕТКА ЗА КУРСОРOM */
         #cursor-glow {
             position: fixed;
             top: 0;
@@ -65,9 +53,7 @@
         }
 
         .app-container {
-            width: 100%;
-            height: calc(var(--panel-h) - 40px);
-            max-width: 100%;
+            max-width: 900px;
             margin: 0 auto;
             background-color: var(--bg-card);
             backdrop-filter: blur(10px);
@@ -78,9 +64,6 @@
             position: relative;
             z-index: 1;
             transition: all 0.4s ease;
-            box-sizing: border-box;
-            overflow-y: auto;
-            overflow-x: hidden;
         }
 
         h1 {
@@ -129,7 +112,8 @@
         input:focus, textarea:focus { border-color: var(--neon-primary); outline: none; box-shadow: 0 0 15px var(--neon-primary); }
 
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-
+        
+        /* 🔥 ТУМБЛЕР ПЕРЕКЛЮЧЕНИЯ РЕЖИМОВ */
         .mode-selector-container {
             display: flex;
             align-items: center;
@@ -139,17 +123,8 @@
             padding: 15px;
             border-radius: 12px;
             border: 1px dashed var(--border-dashed);
-            margin-bottom: 12px;
+            margin-bottom: 25px;
             transition: border 0.4s ease;
-        }
-
-        .mode-hint {
-            text-align: center;
-            font-size: 12px;
-            color: var(--text-label);
-            margin-bottom: 20px;
-            min-height: 18px;
-            transition: color 0.4s;
         }
 
         .mode-label {
@@ -277,7 +252,6 @@
         </label>
         <span id="labelMultiMode" class="mode-label inactive">Мульти-расписание (10 видео)</span>
     </div>
-    <div id="modeHint" class="mode-hint">Скрипт: 1 видео за запуск, публикация сразу</div>
 
     <div class="grid-2">
         <div class="form-group">
@@ -292,7 +266,7 @@
 
     <div class="form-group">
         <label>Названия видео (каждое название с новой строки)</label>
-        <textarea id="baseTitles" placeholder="200 строк = 50 блоков × 4 названия (part1 → строки 0–3, part2 → 4–7...)"></textarea>
+        <textarea id="baseTitles" placeholder="Вставь сюда свои 160 строк названий..."></textarea>
     </div>
 
     <h2 class="section-title">📺 Профили Dolphin (Канал ──► ID Профиля)</h2>
@@ -321,7 +295,7 @@
     <div class="threads-container" id="threadsContainer"></div>
 
     <div class="stats-section">
-        <h2 id="statsSectionTitle">📊 СТАТИСТИКА ФЕРМЫ</h2>
+        <h2>📊 СТАТИСТИКА ФЕРМЫ (МАССОВЫЙ ПАКЕТНЫЙ ЗАЛИВ)</h2>
 
         <div class="stats-badges">
             <div class="badge-card active-ch">
@@ -360,9 +334,6 @@
     const modeToggle = document.getElementById('modeToggle');
     const labelSingle = document.getElementById('labelSingleMode');
     const labelMulti = document.getElementById('labelMultiMode');
-    const modeHint = document.getElementById('modeHint');
-    const statsSectionTitle = document.getElementById('statsSectionTitle');
-
     function getCurrentMode() {
         return modeToggle.checked ? 'multi' : 'single';
     }
@@ -398,16 +369,6 @@
             entries.forEach(([profileId, channels]) => addProfileRow(channels[0], profileId));
         } else {
             for (let i = 1; i <= 6; i++) addProfileRow(i, '');
-        }
-    }
-
-    function updateModeHint() {
-        if (modeToggle.checked) {
-            modeHint.textContent = 'Скрипт: пачка 10 видео + расписание 07:00 / 13:00 / 19:00 / 01:00';
-            statsSectionTitle.textContent = '📊 СТАТИСТИКА ФЕРМЫ (МАССОВЫЙ ПАКЕТНЫЙ ЗАЛИВ)';
-        } else {
-            modeHint.textContent = 'Скрипт: 1 видео за запуск, публикация сразу';
-            statsSectionTitle.textContent = '📊 СТАТИСТИКА ФЕРМЫ (ОДИНОЧНЫЙ ЗАЛИВ)';
         }
     }
 
@@ -459,7 +420,6 @@
                 }
             `;
         }
-        updateModeHint();
     }
 
     async function persistFarmMode(previousMode) {
