@@ -10,6 +10,13 @@ import {
   saveConfig,
 } from './farm-orchestrator.mjs';
 import { applyFarmModePreset } from './mode-presets.mjs';
+import {
+  applyModeSettingsToConfig,
+  getModeSettings,
+  migrateModeSettings,
+  normalizeMode,
+  saveModeSnapshot,
+} from './mode-settings.mjs';
 import { ensureFarmScripts } from './ensure-farm-scripts.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -57,11 +64,19 @@ function ensureConfigFile() {
 }
 
 function createWindow() {
+  const WIN_W = 980;
+  const WIN_H = 920;
+
   mainWindow = new BrowserWindow({
-    width: 980,
-    height: 920,
-    minWidth: 860,
-    minHeight: 700,
+    width: WIN_W,
+    height: WIN_H,
+    minWidth: WIN_W,
+    maxWidth: WIN_W,
+    minHeight: WIN_H,
+    maxHeight: WIN_H,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     title: 'YouTube Zaliver v1.2',
     backgroundColor: '#07030d',
     autoHideMenuBar: true,
@@ -130,16 +145,37 @@ app.whenReady().then(() => {
   ipcMain.handle('get-config', wrapIpc(() => {
     const raw = loadConfig(baseDir);
     if (!raw) return null;
-    return applyFarmModePreset(raw, raw.FARM_MODE);
+    const migrated = migrateModeSettings(raw);
+    const mode = normalizeMode(migrated.FARM_MODE);
+    const withModeFields = applyModeSettingsToConfig(migrated, mode);
+    const preset = applyFarmModePreset(withModeFields, mode);
+    return {
+      ...preset,
+      MODE_SETTINGS: migrated.MODE_SETTINGS,
+      modeSettings: getModeSettings(migrated, mode),
+    };
   }));
 
-  ipcMain.handle('set-farm-mode', wrapIpc((_event, mode) => {
-    const existing = loadConfig(baseDir) || {};
-    const updated = applyFarmModePreset(existing, mode);
+  ipcMain.handle('set-farm-mode', wrapIpc((_event, payload) => {
+    const mode = normalizeMode(typeof payload === 'string' ? payload : payload?.mode);
+    const snapshot = typeof payload === 'object' ? payload?.snapshot : null;
+
+    let existing = migrateModeSettings(loadConfig(baseDir) || {});
+
+    if (snapshot?.forMode) {
+      existing = saveModeSnapshot(existing, snapshot.forMode, snapshot);
+    }
+
+    existing.FARM_MODE = mode;
+    const withFields = applyModeSettingsToConfig(existing, mode);
+    const updated = applyFarmModePreset(withFields, mode);
+    updated.MODE_SETTINGS = existing.MODE_SETTINGS;
     saveConfig(baseDir, updated);
+
     return {
       FARM_MODE: updated.FARM_MODE,
       SCHEDULE_SETTINGS: updated.SCHEDULE_SETTINGS,
+      modeSettings: getModeSettings(updated, mode),
     };
   }));
 

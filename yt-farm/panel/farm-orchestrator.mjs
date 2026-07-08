@@ -3,6 +3,13 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { applyFarmModePreset } from './mode-presets.mjs';
+import {
+  applyModeSettingsToConfig,
+  getModeSettings,
+  migrateModeSettings,
+  normalizeMode,
+  saveModeSnapshot,
+} from './mode-settings.mjs';
 
 const PANEL_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -51,14 +58,22 @@ export function saveConfig(baseDir, config) {
 }
 
 export function mergeGuiConfig(baseDir, guiConfig) {
-  const existing = loadConfig(baseDir) || {};
-  const mode = guiConfig.FARM_MODE || existing.FARM_MODE || 'single';
+  let existing = migrateModeSettings(loadConfig(baseDir) || {});
+  const mode = normalizeMode(guiConfig.FARM_MODE || existing.FARM_MODE || 'single');
+
+  existing = saveModeSnapshot(existing, mode, {
+    PROFILE_MAPPING: guiConfig.PROFILE_MAPPING || {},
+    VIDEOS_DIR: guiConfig.VIDEOS_DIR,
+    CONCURRENCY_LIMIT: guiConfig.CONCURRENCY_LIMIT,
+    BASE_TITLES: guiConfig.BASE_TITLES,
+  });
 
   const merged = applyFarmModePreset({
     ...existing,
     ...guiConfig,
-    PROFILE_MAPPING: guiConfig.PROFILE_MAPPING || existing.PROFILE_MAPPING || {},
-    BASE_TITLES: guiConfig.BASE_TITLES || existing.BASE_TITLES || [],
+    MODE_SETTINGS: existing.MODE_SETTINGS,
+    PROFILE_MAPPING: guiConfig.PROFILE_MAPPING || {},
+    BASE_TITLES: guiConfig.BASE_TITLES || [],
     VIDEOS_DIR: guiConfig.VIDEOS_DIR || existing.VIDEOS_DIR,
     CONCURRENCY_LIMIT: guiConfig.CONCURRENCY_LIMIT ?? existing.CONCURRENCY_LIMIT ?? 6,
     MAX_PARALLEL_SLOTS: guiConfig.CONCURRENCY_LIMIT ?? existing.MAX_PARALLEL_SLOTS ?? existing.CONCURRENCY_LIMIT ?? 6,

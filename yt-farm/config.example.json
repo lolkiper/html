@@ -22,6 +22,27 @@
     "BETWEEN_UPLOAD_MIN_MS": 10000,
     "BETWEEN_UPLOAD_MAX_MS": 12000
   },
+  "MODE_SETTINGS": {
+    "single": {
+      "PROFILE_MAPPING": {},
+      "VIDEOS_DIR": "C:\\Users\\PC\\yt-farm\\videos",
+      "CONCURRENCY_LIMIT": 6,
+      "BASE_TITLES": []
+    },
+    "multi": {
+      "PROFILE_MAPPING": {
+        "819465082": [1],
+        "819465083": [2]
+      },
+      "VIDEOS_DIR": "C:\\Users\\PC\\yt-farm\\videos",
+      "CONCURRENCY_LIMIT": 6,
+      "BASE_TITLES": [
+        "Amazing Short #1",
+        "Viral Moment",
+        "Must Watch"
+      ]
+    }
+  },
   "PROFILE_MAPPING": {
     "819465082": [1],
     "819465083": [2]

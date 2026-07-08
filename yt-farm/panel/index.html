@@ -348,6 +348,40 @@
         return modeToggle.checked ? 'multi' : 'single';
     }
 
+    function collectUiState(forMode) {
+        const mapping = {};
+        document.querySelectorAll('#profileTable tbody tr').forEach(row => {
+            const ch = row.querySelector('.row-channel').value;
+            const prof = row.querySelector('.row-profile').value.trim();
+            if (ch && prof) mapping[prof] = [parseInt(ch, 10)];
+        });
+        return {
+            forMode,
+            PROFILE_MAPPING: mapping,
+            VIDEOS_DIR: document.getElementById('videosDir').value.trim(),
+            CONCURRENCY_LIMIT: parseInt(document.getElementById('concurrencyLimit').value, 10) || 6,
+            BASE_TITLES: document.getElementById('baseTitles').value.split('\n').filter(t => t.trim() !== ''),
+        };
+    }
+
+    function loadUiFromSettings(settings) {
+        document.getElementById('videosDir').value = settings?.VIDEOS_DIR || '';
+        document.getElementById('concurrencyLimit').value = settings?.CONCURRENCY_LIMIT || 6;
+        document.getElementById('baseTitles').value = (settings?.BASE_TITLES || []).join('\n');
+
+        const tbody = document.querySelector('#profileTable tbody');
+        tbody.innerHTML = '';
+        channelCounter = 1;
+
+        const mapping = settings?.PROFILE_MAPPING || {};
+        const entries = Object.entries(mapping);
+        if (entries.length > 0) {
+            entries.forEach(([profileId, channels]) => addProfileRow(channels[0], profileId));
+        } else {
+            for (let i = 1; i <= 6; i++) addProfileRow(i, '');
+        }
+    }
+
     function updateModeHint() {
         if (modeToggle.checked) {
             modeHint.textContent = 'Скрипт: пачка 10 видео + расписание 07:00 / 13:00 / 19:00 / 01:00';
@@ -409,18 +443,32 @@
         updateModeHint();
     }
 
-    async function persistFarmMode() {
-        if (window.electronAPI && window.electronAPI.setFarmMode) {
-            const result = await window.electronAPI.setFarmMode(getCurrentMode());
-            if (result?.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL) {
-                videosPerChannel = result.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
-            }
+    async function persistFarmMode(previousMode) {
+        if (!window.electronAPI?.setFarmMode) return null;
+        const newMode = getCurrentMode();
+        const snapshot = collectUiState(previousMode);
+        const result = await window.electronAPI.setFarmMode(newMode, snapshot);
+        if (result?.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL) {
+            videosPerChannel = result.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
         }
+        if (result?.modeSettings) {
+            loadUiFromSettings(result.modeSettings);
+        }
+        return result;
     }
 
     modeToggle.addEventListener('change', async () => {
+        const newMode = getCurrentMode();
+        const previousMode = newMode === 'multi' ? 'single' : 'multi';
         updateUiMode();
-        await persistFarmMode();
+        await persistFarmMode(previousMode);
+        const status = document.getElementById('statusMessage');
+        if (status) {
+            status.innerText = newMode === 'multi'
+                ? '🟢 Мульти-режим: отдельный список каналов загружен'
+                : '🟣 Обычный режим: отдельный список каналов загружен';
+            status.style.color = 'var(--neon-primary)';
+        }
     });
 
     const glow = document.getElementById('cursor-glow');
@@ -601,11 +649,16 @@
             modeToggle.checked = config.FARM_MODE === 'multi';
             updateUiMode();
 
-            if (config.PROFILE_MAPPING && Object.keys(config.PROFILE_MAPPING).length > 0) {
-                document.getElementById('videosDir').value = config.VIDEOS_DIR || '';
-                document.getElementById('concurrencyLimit').value = config.CONCURRENCY_LIMIT || 6;
-                document.getElementById('baseTitles').value = (config.BASE_TITLES || []).join('\n');
-                Object.entries(config.PROFILE_MAPPING).forEach(([profileId, channels]) => { addProfileRow(channels[0], profileId); });
+            const modeSettings = config.modeSettings || config.MODE_SETTINGS?.[getCurrentMode()];
+            if (modeSettings) {
+                loadUiFromSettings(modeSettings);
+            } else if (config.PROFILE_MAPPING && Object.keys(config.PROFILE_MAPPING).length > 0) {
+                loadUiFromSettings({
+                    PROFILE_MAPPING: config.PROFILE_MAPPING,
+                    VIDEOS_DIR: config.VIDEOS_DIR,
+                    CONCURRENCY_LIMIT: config.CONCURRENCY_LIMIT,
+                    BASE_TITLES: config.BASE_TITLES,
+                });
             } else {
                 for (let i = 1; i <= 6; i++) addProfileRow(i, '');
             }
