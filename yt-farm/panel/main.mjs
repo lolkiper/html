@@ -49,6 +49,7 @@ function createWindow() {
     minHeight: 700,
     title: 'YouTube Zaliver v1.2',
     backgroundColor: '#07030d',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -70,6 +71,8 @@ function getOrchestrator() {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
+
   const baseDir = getBaseDir();
   const copied = ensureFarmScripts(baseDir, __dirname);
   if (copied.length) {
