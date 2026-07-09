@@ -182,11 +182,13 @@ def find_dnconsole(settings: BotSettings) -> Path:
     for p in search:
         if not p:
             continue
-        candidate = Path(p) / "dnconsole.exe"
-        if candidate.is_file():
-            return candidate
+        folder = Path(p)
+        for name in ("dnconsole.exe", "ldconsole.exe"):
+            candidate = folder / name
+            if candidate.is_file():
+                return candidate
     raise FileNotFoundError(
-        "dnconsole.exe не найден. Укажи папку LDPlayer в настройках или задай LDPLAYER_HOME."
+        "dnconsole.exe / ldconsole.exe не найден. Укажи папку LDPlayer (не подпапку apps)."
     )
 
 

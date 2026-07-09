@@ -56,7 +56,7 @@ class BotApp(tk.Tk):
         cfg = ttk.LabelFrame(self, text="Настройки")
         cfg.pack(fill="x", padx=10, pady=8)
 
-        ttk.Label(cfg, text="Папка LDPlayer (dnconsole.exe):").grid(row=0, column=0, sticky="w", **pad)
+        ttk.Label(cfg, text="Папка LDPlayer (корень LDPlayer9):").grid(row=0, column=0, sticky="w", **pad)
         self.ld_path_var = tk.StringVar()
         ttk.Entry(cfg, textvariable=self.ld_path_var, width=55).grid(row=0, column=1, sticky="ew", **pad)
         ttk.Button(cfg, text="Обзор…", command=self._browse_ldplayer).grid(row=0, column=2, **pad)
@@ -158,7 +158,7 @@ class BotApp(tk.Tk):
         cfg_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _browse_ldplayer(self) -> None:
-        path = filedialog.askdirectory(title="Папка LDPlayer (где dnconsole.exe)")
+        path = filedialog.askdirectory(title="Папка LDPlayer9 (где dnconsole.exe / ldconsole.exe)")
         if path:
             self.ld_path_var.set(path)
 
