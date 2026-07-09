@@ -22,8 +22,6 @@
 }
 html,body{width:100%;height:100%;overflow:hidden;font-family:var(--font);background:var(--bg-deep);color:var(--text-primary);-webkit-font-smoothing:antialiased}
 body.multi-mode{--accent:#00FF88;--accent-rgb:0,255,136;--accent-glow:rgba(0,255,136,.45);--accent-soft:rgba(0,255,136,.15);--accent-dim:rgba(0,255,136,.08);--accent-secondary:#00CC6A}
-#bg-canvas,#particle-canvas,#cursor-canvas{position:fixed;inset:0;pointer-events:none;z-index:0}
-#particle-canvas{z-index:1}#cursor-canvas{z-index:9999}
 .app{position:relative;z-index:2;display:flex;flex-direction:column;width:100vw;height:100vh;overflow:hidden}
 .topbar{height:var(--topbar-h);display:flex;align-items:center;justify-content:space-between;padding:0 28px;
 background:rgba(12,12,16,.72);backdrop-filter:blur(var(--blur));-webkit-backdrop-filter:blur(var(--blur));
@@ -115,10 +113,11 @@ color:#fff;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer
 .table-wrap{flex:1;overflow:auto;padding:0 24px 24px;position:relative;z-index:1}
 .data-table{width:100%;border-collapse:separate;border-spacing:0 6px}
 .data-table th{text-align:left;padding:10px 16px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em}
-.data-table td{padding:14px 16px;background:rgba(255,255,255,.03);border-top:1px solid var(--glass-border);border-bottom:1px solid var(--glass-border);font-size:13px;transition:background .2s}
+.data-table td{padding:14px 16px;background:rgba(255,255,255,.03);border-top:1px solid var(--glass-border);border-bottom:1px solid var(--glass-border);font-size:13px;transition:background .2s;user-select:none}
+.data-table tr:hover td{background:rgba(255,255,255,.06)}
 .data-table td:first-child{border-left:1px solid var(--glass-border);border-radius:12px 0 0 12px}
 .data-table td:last-child{border-right:1px solid var(--glass-border);border-radius:0 12px 12px 0}
-.data-table tr:hover td{background:rgba(255255,255,.06)}
+.data-table td::selection,.data-table td *::selection{background:rgba(var(--accent-rgb),.35);color:#fff}
 .data-table input{background:rgba(255,255,255,.06);border:1px solid var(--glass-border);border-radius:8px;padding:8px 12px;
 color:var(--text-primary);font-family:var(--font);font-size:13px;width:100%;outline:none;transition:border-color .2s,box-shadow .2s}
 .data-table input:focus{border-color:rgba(var(--accent-rgb),.4);box-shadow:0 0 12px var(--accent-dim)}
@@ -196,10 +195,7 @@ background:radial-gradient(circle at var(--mx) var(--my),rgba(var(--accent-rgb),
 .stat-card:hover .card-shine{opacity:1}
 .glass-panel{animation:panelIn .6s cubic-bezier(.4,0,.2,1)}
 @keyframes panelIn{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
-.glass-panel::after{content:'';position:absolute;inset:-1px;border-radius:inherit;padding:1px;
-background:conic-gradient(from var(--border-angle,0deg),transparent,rgba(var(--accent-rgb),.25),transparent,rgba(var(--accent-rgb),.15),transparent);
--webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
--webkit-mask-composite:xor;mask-composite:exclude;opacity:.35;pointer-events:none;animation:borderRotate 8s linear infinite}
+.glass-panel::after{display:none}
 .stat-card-value{transition:color var(--transition),text-shadow var(--transition)}
 .stat-card:hover .stat-card-value{text-shadow:0 0 24px var(--accent-glow)}
 .btn-action::before{content:'';position:absolute;inset:0;border-radius:inherit;background:radial-gradient(circle at var(--rx,50%) var(--ry,50%),rgba(255,255,255,.18),transparent 65%);opacity:0;transition:opacity .25s}
@@ -208,7 +204,7 @@ background:conic-gradient(from var(--border-angle,0deg),transparent,rgba(var(--a
 .nav-item:hover::after{opacity:1}
 .topbar::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.25}
 .terminal-body::selection{background:rgba(var(--accent-rgb),.25)}
-.chart-panel{animation:glowPulse 4s ease-in-out infinite}
+.chart-panel{box-shadow:0 0 20px var(--accent-dim)}
 .logo-icon{animation:floatY 6s ease-in-out infinite}
 @media(max-width:1400px){.stat-cards{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:1100px){.stat-cards{grid-template-columns:repeat(2,1fr)}.settings-grid{grid-template-columns:1fr}.stats-layout{flex-direction:column}.chart-panel{width:100%}}
@@ -216,9 +212,6 @@ background:conic-gradient(from var(--border-angle,0deg),transparent,rgba(var(--a
 </style>
 </head>
 <body>
-<canvas id="bg-canvas"></canvas>
-<canvas id="particle-canvas"></canvas>
-<canvas id="cursor-canvas"></canvas>
 <div class="app">
 <header class="topbar">
 <div class="logo"><div class="logo-icon"><svg viewBox="0 0 24 24"><path d="M23 7.5a3 3 0 0 0-2.1-2.1C19 5 12 5 12 5s-7 0-8.9.4A3 3 0 0 0 1 7.5 31 31 0 0 0 0 12a31 31 0 0 0 .4 4.5 3 3 0 0 0 2.1 2.1C5 19 12 19 12 19s7 0 8.9-.4a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.4-4.5z"/><polygon points="10,8 16,12 10,16" fill="#fff"/></svg></div><span class="logo-text">YouTube Zaliver</span></div>
@@ -648,113 +641,14 @@ function initRipple() {
   });
 }
 
-/* Background mesh canvas */
-function initBgCanvas() {
-  const c = $('#bg-canvas');
-  const ctx = c.getContext('2d');
-  let w, h, t = 0;
-  const blobs = [
-    { x: 0.2, y: 0.3, r: 0.35, color: [139, 92, 246], speed: 0.0003 },
-    { x: 0.7, y: 0.6, r: 0.3, color: [99, 102, 241], speed: 0.0004 },
-    { x: 0.5, y: 0.15, r: 0.25, color: [59, 130, 246], speed: 0.0005 },
-    { x: 0.85, y: 0.25, r: 0.2, color: [139, 92, 246], speed: 0.00035 },
-  ];
-  function resize() { w = c.width = window.innerWidth; h = c.height = window.innerHeight; }
-  resize();
-  window.addEventListener('resize', resize);
-  function draw() {
-    ctx.fillStyle = '#07070A';
-    ctx.fillRect(0, 0, w, h);
-    blobs.forEach((b, i) => {
-      const ox = b.x * w + Math.sin(t * b.speed * 1000 + i) * 80;
-      const oy = b.y * h + Math.cos(t * b.speed * 800 + i * 2) * 60;
-      const isGreen = document.body.classList.contains('multi-mode');
-      const col = isGreen ? [0, 255, 136] : b.color;
-      const grad = ctx.createRadialGradient(ox, oy, 0, ox, oy, b.r * Math.min(w, h));
-      grad.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},0.12)`);
-      grad.addColorStop(1, 'transparent');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
-    });
-    t += 16;
-    requestAnimationFrame(draw);
-  }
-  draw();
-}
+/* Background — static only */
+function initBgCanvas() {}
 
-/* Floating particles */
-function initParticles() {
-  const c = $('#particle-canvas');
-  const ctx = c.getContext('2d');
-  let w, h;
-  const particles = [];
-  function resize() {
-    w = c.width = window.innerWidth;
-    h = c.height = window.innerHeight;
-  }
-  resize();
-  window.addEventListener('resize', resize);
-  for (let i = 0; i < 60; i++) {
-    particles.push({
-      x: Math.random() * w, y: Math.random() * h,
-      vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3,
-      size: Math.random() * 2 + 0.5, alpha: Math.random() * 0.4 + 0.1
-    });
-  }
-  function draw() {
-    ctx.clearRect(0, 0, w, h);
-    const isGreen = document.body.classList.contains('multi-mode');
-    particles.forEach(p => {
-      p.x += p.vx; p.y += p.vy;
-      if (p.x < 0) p.x = w; if (p.x > w) p.x = 0;
-      if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fillStyle = isGreen ? `rgba(0,255,136,${p.alpha})` : `rgba(139,92,246,${p.alpha})`;
-      ctx.fill();
-    });
-    requestAnimationFrame(draw);
-  }
-  draw();
-}
+/* Particles disabled */
+function initParticles() {}
 
-/* Cursor trail */
-function initCursor() {
-  const c = $('#cursor-canvas');
-  const ctx = c.getContext('2d');
-  let w, h;
-  const trail = [];
-  const MAX = 24;
-  function resize() { w = c.width = window.innerWidth; h = c.height = window.innerHeight; }
-  resize();
-  window.addEventListener('resize', resize);
-  document.addEventListener('mousemove', e => {
-    trail.push({ x: e.clientX, y: e.clientY, life: 1 });
-    if (trail.length > MAX) trail.shift();
-  });
-  function draw() {
-    ctx.clearRect(0, 0, w, h);
-    const isGreen = document.body.classList.contains('multi-mode');
-    trail.forEach((p, i) => {
-      p.life -= 0.04;
-      if (p.life <= 0) return;
-      const alpha = p.life * 0.5;
-      const size = (i / trail.length) * 6 + 2;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
-      ctx.fillStyle = isGreen ? `rgba(0,255,136,${alpha})` : `rgba(139,92,246,${alpha})`;
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = isGreen ? 'rgba(0,255,136,0.6)' : 'rgba(139,92,246,0.6)';
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    });
-    for (let i = trail.length - 1; i >= 0; i--) {
-      if (trail[i].life <= 0) trail.splice(i, 1);
-    }
-    requestAnimationFrame(draw);
-  }
-  draw();
-}
+/* Cursor trail disabled */
+function initCursor() {}
 
 function initGlassReflection() {
   document.addEventListener('mousemove', e => {
