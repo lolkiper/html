@@ -149,22 +149,20 @@ class LdConsole:
         )
 
     def adb_shell(self, command: str) -> str:
-        inner = command.removeprefix("shell ").strip()
         exe = str(self.exe)
         idx = self.index
         cwd = str(self.exe.parent)
 
         variants = [
-            f'"{exe}" adb --index {idx} --command "shell {inner}"',
-            f'"{exe}" adb --index {idx} --command "shell,{inner}"',
-            f'"{exe}" adb --name LDPlayer-{idx} --command "shell {inner}"',
+            [exe, "adb", "--index", str(idx), "--command", f"shell {command}"],
+            [exe, "adb", "--index", str(idx), "--command", command],
+            [exe, "adb", "--name", f"LDPlayer-{idx}", "--command", f"shell {command}"],
         ]
 
         last_out = ""
-        for cmd_line in variants:
+        for args in variants:
             result = subprocess.run(
-                cmd_line,
-                shell=True,
+                args,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -173,7 +171,7 @@ class LdConsole:
                 cwd=cwd,
             )
             last_out = ((result.stdout or "") + (result.stderr or "")).strip()
-            if last_out and "unknown command" not in last_out.lower():
+            if is_adb_ok(last_out):
                 return last_out
 
         return last_out
@@ -185,9 +183,13 @@ class LdConsole:
             pass
         time.sleep(3)
 
+    def run_app(self, package: str) -> None:
+        self._run("runapp", "--index", str(self.index), "--packagename", package, check=False)
+        time.sleep(3)
+
     def launch(self) -> None:
         self._run("launch", "--index", str(self.index), check=False)
-        time.sleep(15)
+        time.sleep(20)
 
     def randomize_device_ids(self) -> None:
         """IMEI / Android ID / MAC — только при выключенном инстансе."""
@@ -226,50 +228,146 @@ def find_dnconsole(settings: BotSettings) -> Path:
     )
 
 
+BAD_ADB_MARKERS = (
+    "not found",
+    "unknown command",
+    "failed",
+    "refused",
+    "cannot connect",
+    "no devices",
+    "error:",
+    "unauthorized",
+    "offline",
+)
+
+
+def is_adb_ok(out: str) -> bool:
+    if not out or not out.strip():
+        return False
+    low = out.lower()
+    return not any(m in low for m in BAD_ADB_MARKERS)
+
+
+def find_adb_exe(dnconsole: Path) -> Optional[Path]:
+    folder = dnconsole.parent
+    for name in ("adb.exe", "adb"):
+        candidate = folder / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def guess_adb_ports(index: int) -> list[int]:
+    ports = [
+        5555 + index * 2,
+        5554 + index * 2,
+        5555 + index,
+        5557 + index * 2,
+    ]
+    seen: set[int] = set()
+    result: list[int] = []
+    for p in ports:
+        if p not in seen and p > 0:
+            seen.add(p)
+            result.append(p)
+    return result
+
+
+def adb_run(adb_exe: Path, *args: str) -> str:
+    result = subprocess.run(
+        [str(adb_exe), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+        cwd=str(adb_exe.parent),
+    )
+    out = ((result.stdout or "") + (result.stderr or "")).strip()
+    if out:
+        log(f"adb {' '.join(args[:3])}... → {out[:180]}")
+    return out
+
+
+class DirectAdbDevice:
+    def __init__(self, adb_exe: Path, serial: str) -> None:
+        self.adb_exe = adb_exe
+        self.serial = serial
+
+    def shell(self, command: str) -> str:
+        inner = command.removeprefix("shell ").strip()
+        out = adb_run(self.adb_exe, "-s", self.serial, "shell", inner)
+        return out
+
+
 class DnconsoleDevice:
-    """Управление эмулятором через dnconsole adb (без adb connect на порт)."""
+    """Fallback: dnconsole adb."""
 
     def __init__(self, ld: LdConsole) -> None:
         self.ld = ld
 
     def shell(self, command: str) -> str:
-        cmd = command if command.startswith("shell ") else f"shell {command}"
-        return self.ld.adb_shell(cmd)
+        inner = command.removeprefix("shell ").strip()
+        return self.ld.adb_shell(inner)
 
 
 def connect_device(
     settings: BotSettings,
     ld: LdConsole,
+    adb_exe: Optional[Path] = None,
     retries: int = 15,
-    pause: float = 5.0,
-) -> DnconsoleDevice:
-    device = DnconsoleDevice(ld)
-    log(f"Подключение через dnconsole adb (index={ld.index})...")
+    pause: float = 4.0,
+):
+    host = settings.adb_host
+    ports = guess_adb_ports(settings.emulator_index)
+    if settings.adb_port is not None:
+        ports.insert(0, settings.adb_port)
 
+    log(f"Подключение ADB index={ld.index}, порты: {ports}")
+
+    if adb_exe and adb_exe.is_file():
+        adb_run(adb_exe, "start-server")
+        for attempt in range(1, retries + 1):
+            check_stop()
+            for port in ports:
+                serial = f"{host}:{port}"
+                adb_run(adb_exe, "connect", serial)
+                time.sleep(1)
+                devices = adb_run(adb_exe, "devices")
+                if serial in devices and "device" in devices:
+                    dev = DirectAdbDevice(adb_exe, serial)
+                    out = dev.shell("getprop ro.build.version.release")
+                    if is_adb_ok(out) and any(ch.isdigit() for ch in out):
+                        log(f"ADB подключён: {serial}, Android {out.strip()}")
+                        return dev
+            log(f"Прямой ADB: попытка {attempt}/{retries} — устройство не найдено")
+            time.sleep(pause)
+
+    log("Прямой ADB не сработал, пробую dnconsole adb...")
+    dev = DnconsoleDevice(ld)
     for attempt in range(1, retries + 1):
         check_stop()
-        try:
-            out = device.shell("getprop ro.build.version.release")
-            if out and "unknown command" not in out.lower() and "error" not in out.lower():
-                log(f"ADB готов: index={ld.index}, Android {out.strip()}")
-                return device
-            log(f"dnconsole adb ответ: {out[:200] if out else '(пусто)'}")
-        except Exception as exc:
-            log(f"dnconsole adb попытка {attempt}/{retries}: {exc}")
+        out = dev.shell("getprop ro.build.version.release")
+        if is_adb_ok(out) and any(ch.isdigit() for ch in out):
+            log(f"ADB через dnconsole: Android {out.strip()}")
+            return dev
+        log(f"dnconsole adb: {out[:200] if out else '(пусто)'} [{attempt}/{retries}]")
         time.sleep(pause)
 
     raise TimeoutError(
-        f"dnconsole adb не отвечает (index={ld.index}).\n"
-        "1) LDPlayer-10 полностью загружен\n"
-        "2) Настройки → Другие → ADB отладка → «Открыть локальное подключение»\n"
-        "3) Проверка в cmd:\n"
-        f'   C:\\LDPlayer\\LDPlayer9\\dnconsole.exe adb --index {ld.index} --command "shell getprop ro.build.version.release"'
+        f"ADB не работает на index={ld.index}.\n"
+        "В LDPlayer-10 открой: Настройки → Другие → ADB отладка → «Открыть локальное подключение».\n"
+        "Эмулятор должен быть на рабочем столе (не в загрузке).\n"
+        f"Проверка: C:\\LDPlayer\\LDPlayer9\\adb.exe connect 127.0.0.1:{ports[0]}"
     )
 
 
 def shell(device, command: str) -> str:
     out = device.shell(command)
-    return out if isinstance(out, str) else out.decode("utf-8", errors="replace")
+    result = out if isinstance(out, str) else out.decode("utf-8", errors="replace")
+    if not is_adb_ok(result):
+        log(f"ADB warn: {command[:60]} → {result[:120]}")
+    return result
 
 
 def tap(device, x: int, y: int, jitter: int = 3) -> None:
@@ -530,11 +628,35 @@ def emergency_cleanup(device, google_email: str, ld: LdConsole) -> None:
         pass
 
 
-def step_google_account(device, pair: AccountPair) -> None:
-    shell(
-        device,
+def step_google_account(device, pair: AccountPair, ld: LdConsole) -> None:
+    ld.run_app("com.android.settings")
+    time.sleep(2)
+
+    intents = [
+        "am start -a android.settings.ADD_ACCOUNT_SETTINGS",
+        "am start -n com.android.settings/.accounts.AddAccountSettings",
         "am start -n com.android.settings/.accounts.ChooseAccountActivity",
-    )
+    ]
+    opened = False
+    for intent in intents:
+        shell(device, intent)
+        time.sleep(3)
+        if wait_for_element(device, "text", "Google", timeout=8):
+            opened = True
+            break
+        if wait_for_element(device, "text", "Аккаунт", timeout=5):
+            opened = True
+            break
+        if wait_for_element(device, "text", "Account", timeout=5):
+            opened = True
+            break
+
+    if not opened:
+        raise TimeoutError(
+            "Не открылось окно аккаунтов Google. Включи ADB в LDPlayer-10: "
+            "Настройки → Другие → ADB отладка → Открыть локальное подключение"
+        )
+
     log("Окно настроек Android открыто.")
     rnd_delay()
 
@@ -664,15 +786,15 @@ def step_logout_and_cleanup(device, google_email: str) -> None:
     log("Круг завершен.")
 
 
-def run_cycle(root: Path, ld: LdConsole, pair: AccountPair, settings: BotSettings) -> None:
+def run_cycle(root: Path, ld: LdConsole, pair: AccountPair, settings: BotSettings, adb_exe: Optional[Path]) -> None:
     device = None
     try:
         check_stop()
         ld.randomize_device_ids()
-        device = connect_device(settings, ld)
+        device = connect_device(settings, ld, adb_exe=adb_exe)
 
         try:
-            step_google_account(device, pair)
+            step_google_account(device, pair, ld)
         except Exception as exc:
             raise RuntimeError(f"Google: {exc}") from exc
 
@@ -731,6 +853,7 @@ def run_bot(
 
     idx = settings.emulator_index
     ld = LdConsole(dnconsole, idx)
+    adb_exe = find_adb_exe(dnconsole)
     log(f"LDPlayer: {dnconsole} | index={idx} | adb={settings.adb_serial}")
 
     while not stop_event.is_set():
@@ -741,7 +864,7 @@ def run_bot(
 
         log(f"=== Новый круг: Google={pair.google_login} | Twitch={pair.twitch_login} ===")
         try:
-            run_cycle(root, ld, pair, settings)
+            run_cycle(root, ld, pair, settings, adb_exe)
         except InterruptedError:
             log("Цикл прерван.")
             break

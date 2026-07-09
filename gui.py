@@ -30,6 +30,7 @@ from main import (
     base_dir,
     connect_device,
     count_lines,
+    find_adb_exe,
     find_dnconsole,
     run_bot,
 )
@@ -228,9 +229,12 @@ class BotApp:
             settings = self._build_settings()
             dnconsole = find_dnconsole(settings)
             ld = LdConsole(dnconsole, settings.emulator_index)
-            connect_device(settings, ld, retries=3, pause=2.0)
-            self._append_log("=== ADB OK ===")
-            messagebox.showinfo("ADB", "Подключение успешно!")
+            adb_exe = find_adb_exe(dnconsole)
+            dev = connect_device(settings, ld, adb_exe=adb_exe, retries=5, pause=2.0)
+            out = dev.shell("input tap 640 360")
+            self._append_log(f"Тестовый тап: {out or 'ok'}")
+            self._append_log("=== ADB OK — на эмуляторе должен быть клик по центру ===")
+            messagebox.showinfo("ADB", "Подключение OK. Проверь клик на экране эмулятора.")
         except Exception as exc:
             self._append_log(f"=== ADB FAIL: {exc} ===")
             messagebox.showerror("ADB", str(exc))
