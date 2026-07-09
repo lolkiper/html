@@ -3,14 +3,16 @@
 """
 LDPlayer automation: Google + Standoff 2 + Twitch Drops cycle.
 
+CLI:
+    python main.py
+
+GUI:
+    python gui.py
+
 Build:
     pip install -r requirements.txt
     pyinstaller --onefile --console main.py
-
-Env (optional):
-    LDPLAYER_HOME   — папка установки LDPlayer (где dnconsole.exe)
-    EMULATOR_INDEX  — индекс инстанса (default: 0)
-    ADB_PORT        — порт ADB (default: 5555 + index*2)
+    pyinstaller --onefile --windowed --name Standoff2Bot gui.py
 """
 
 from __future__ import annotations
@@ -20,11 +22,12 @@ import random
 import re
 import subprocess
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from ppadb.client import Client as AdbClient
 
@@ -32,10 +35,35 @@ from ppadb.client import Client as AdbClient
 # Paths & config
 # ---------------------------------------------------------------------------
 
-EMULATOR_INDEX = int(os.environ.get("EMULATOR_INDEX", "0"))
-ADB_PORT = int(os.environ.get("ADB_PORT", str(5555 + EMULATOR_INDEX * 2)))
-ADB_HOST = os.environ.get("ADB_HOST", "127.0.0.1")
-ADB_SERIAL = f"{ADB_HOST}:{ADB_PORT}"
+LogFn = Callable[[str], None]
+
+
+@dataclass
+class BotSettings:
+    work_dir: Path
+    ldplayer_home: Optional[Path] = None
+    emulator_index: int = 0
+    adb_host: str = "127.0.0.1"
+    adb_port: Optional[int] = None
+
+    def adb_port_resolved(self) -> int:
+        if self.adb_port is not None:
+            return self.adb_port
+        return 5555 + self.emulator_index * 2
+
+    @property
+    def adb_serial(self) -> str:
+        return f"{self.adb_host}:{self.adb_port_resolved()}"
+
+
+@dataclass
+class RuntimeCtx:
+    settings: BotSettings
+    log: LogFn = field(default=lambda msg: print(msg, flush=True))
+    stop_event: threading.Event = field(default_factory=threading.Event)
+
+
+_ctx = RuntimeCtx(settings=BotSettings(work_dir=Path(".")))
 
 SCREEN_W = 1280
 SCREEN_H = 720
@@ -75,13 +103,24 @@ def base_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def count_lines(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    return sum(1 for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip())
+
+
 def rnd_delay() -> None:
     time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
 
 def log(msg: str) -> None:
     ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    _ctx.log(f"[{ts}] {msg}")
+
+
+def check_stop() -> None:
+    if _ctx.stop_event.is_set():
+        raise InterruptedError("Остановлено пользователем")
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +128,7 @@ def log(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 class LdConsole:
-    def __init__(self, exe: Path, index: int = EMULATOR_INDEX) -> None:
+    def __init__(self, exe: Path, index: int) -> None:
         self.exe = exe
         self.index = index
 
@@ -135,31 +174,37 @@ class LdConsole:
         self.launch()
 
 
-def find_dnconsole() -> Path:
-    for p in LDPLAYER_SEARCH_PATHS:
+def find_dnconsole(settings: BotSettings) -> Path:
+    search = []
+    if settings.ldplayer_home:
+        search.append(str(settings.ldplayer_home))
+    search.extend(LDPLAYER_SEARCH_PATHS)
+    for p in search:
         if not p:
             continue
         candidate = Path(p) / "dnconsole.exe"
         if candidate.is_file():
             return candidate
     raise FileNotFoundError(
-        "dnconsole.exe не найден. Задай LDPLAYER_HOME или положи скрипт рядом с LDPlayer."
+        "dnconsole.exe не найден. Укажи папку LDPlayer в настройках или задай LDPLAYER_HOME."
     )
 
 
-def connect_device(retries: int = 12, pause: float = 5.0):
-    client = AdbClient(host=ADB_HOST, port=5037)
+def connect_device(settings: BotSettings, retries: int = 12, pause: float = 5.0):
+    serial = settings.adb_serial
+    client = AdbClient(host=settings.adb_host, port=5037)
     for attempt in range(1, retries + 1):
+        check_stop()
         try:
-            client.remote_connect(ADB_HOST, ADB_PORT)
-            device = client.device(ADB_SERIAL)
+            client.remote_connect(settings.adb_host, settings.adb_port_resolved())
+            device = client.device(serial)
             if device is not None:
                 device.shell("echo ok")
                 return device
         except Exception as exc:
             log(f"ADB connect попытка {attempt}/{retries}: {exc}")
         time.sleep(pause)
-    raise TimeoutError(f"Не удалось подключиться к {ADB_SERIAL}")
+    raise TimeoutError(f"Не удалось подключиться к {serial}")
 
 
 def shell(device, command: str) -> str:
@@ -274,6 +319,7 @@ def click_by_ui_element(
 ) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
+        check_stop()
         root = uiautomator_dump(device)
         if root is not None:
             node = find_node(root, search_type, value)
@@ -558,11 +604,12 @@ def step_logout_and_cleanup(device, google_email: str) -> None:
     log("Круг завершен.")
 
 
-def run_cycle(root: Path, ld: LdConsole, pair: AccountPair) -> None:
+def run_cycle(root: Path, ld: LdConsole, pair: AccountPair, settings: BotSettings) -> None:
     device = None
     try:
+        check_stop()
         ld.randomize_device_ids()
-        device = connect_device()
+        device = connect_device(settings)
 
         try:
             step_google_account(device, pair)
@@ -599,33 +646,61 @@ def run_cycle(root: Path, ld: LdConsole, pair: AccountPair) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    root = base_dir()
+def run_bot(
+    settings: BotSettings,
+    stop_event: threading.Event,
+    log_fn: Optional[LogFn] = None,
+) -> int:
+    global _ctx
+    _ctx = RuntimeCtx(
+        settings=settings,
+        log=log_fn or (lambda msg: print(msg, flush=True)),
+        stop_event=stop_event,
+    )
+
+    root = settings.work_dir.resolve()
+    root.mkdir(parents=True, exist_ok=True)
     os.chdir(root)
     log(f"Рабочая папка: {root}")
 
     try:
-        dnconsole = find_dnconsole()
+        dnconsole = find_dnconsole(settings)
     except FileNotFoundError as exc:
         log(str(exc))
         return 1
 
-    ld = LdConsole(dnconsole, EMULATOR_INDEX)
-    log(f"LDPlayer: {dnconsole} | index={EMULATOR_INDEX} | adb={ADB_SERIAL}")
+    idx = settings.emulator_index
+    ld = LdConsole(dnconsole, idx)
+    log(f"LDPlayer: {dnconsole} | index={idx} | adb={settings.adb_serial}")
 
-    while True:
+    while not stop_event.is_set():
         pair = load_next_pair(root)
         if pair is None:
             log("База аккаунтов пуста. Выход.")
             break
 
-        log(
-            f"=== Новый круг: Google={pair.google_login} | Twitch={pair.twitch_login} ==="
-        )
-        run_cycle(root, ld, pair)
+        log(f"=== Новый круг: Google={pair.google_login} | Twitch={pair.twitch_login} ===")
+        try:
+            run_cycle(root, ld, pair, settings)
+        except InterruptedError:
+            log("Цикл прерван.")
+            break
         time.sleep(random.uniform(3, 6))
 
     return 0
+
+
+def main() -> int:
+    idx = int(os.environ.get("EMULATOR_INDEX", "0"))
+    adb_env = os.environ.get("ADB_PORT", "").strip()
+    ld_env = os.environ.get("LDPLAYER_HOME", "").strip()
+    settings = BotSettings(
+        work_dir=base_dir(),
+        ldplayer_home=Path(ld_env) if ld_env else None,
+        emulator_index=idx,
+        adb_port=int(adb_env) if adb_env else None,
+    )
+    return run_bot(settings, threading.Event())
 
 
 if __name__ == "__main__":
