@@ -1,1 +1,1 @@
-pure-python-adb==0.3.0.dev0
+# dnconsole adb Ч внешний adb не нужен
