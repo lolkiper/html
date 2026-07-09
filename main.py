@@ -215,7 +215,8 @@ class DnconsoleDevice:
         self.ld = ld
 
     def shell(self, command: str) -> str:
-        return self.ld.adb_shell(command)
+        cmd = command if command.startswith("shell ") else f"shell {command}"
+        return self.ld.adb_shell(cmd)
 
 
 def connect_device(
