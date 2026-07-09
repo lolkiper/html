@@ -35,12 +35,12 @@ from main import (
 )
 
 
-class BotApp(tk.Tk):
+class BotApp:
     def __init__(self) -> None:
-        super().__init__()
-        self.title("Standoff 2 · LDPlayer Bot")
-        self.geometry("820x620")
-        self.minsize(700, 500)
+        self.root = tk.Tk()
+        self.root.title("Standoff 2 · LDPlayer Bot")
+        self.root.geometry("820x620")
+        self.root.minsize(700, 500)
 
         self.work_dir = base_dir()
         self.stop_event = threading.Event()
@@ -50,13 +50,16 @@ class BotApp(tk.Tk):
         self._build_ui()
         self._load_settings_ui()
         self.refresh_stats()
-        self.after(100, self._drain_log_queue)
+        self.root.after(100, self._drain_log_queue)
+
+    def run(self) -> None:
+        self.root.mainloop()
 
     def _build_ui(self) -> None:
         pad = {"padx": 8, "pady": 4}
+        root = self.root
 
-        # --- Настройки ---
-        cfg = ttk.LabelFrame(self, text="Настройки")
+        cfg = ttk.LabelFrame(root, text="Настройки")
         cfg.pack(fill="x", padx=10, pady=8)
 
         ttk.Label(cfg, text="Папка LDPlayer (корень LDPlayer9):").grid(row=0, column=0, sticky="w", **pad)
@@ -81,8 +84,7 @@ class BotApp(tk.Tk):
 
         cfg.columnconfigure(1, weight=1)
 
-        # --- Статистика ---
-        stat = ttk.LabelFrame(self, text="База аккаунтов")
+        stat = ttk.LabelFrame(root, text="База аккаунтов")
         stat.pack(fill="x", padx=10, pady=4)
 
         self.stat_google = tk.StringVar(value="0")
@@ -106,21 +108,19 @@ class BotApp(tk.Tk):
         ttk.Button(stat, text="Обновить", command=self.refresh_stats).grid(row=0, column=8, padx=8)
         ttk.Button(stat, text="Открыть папку", command=self._open_workdir).grid(row=0, column=9, padx=4)
 
-        # --- Управление ---
-        ctrl = ttk.Frame(self)
+        ctrl = ttk.Frame(root)
         ctrl.pack(fill="x", padx=10, pady=4)
 
         self.btn_start = ttk.Button(ctrl, text="▶ Старт", command=self.start_bot)
         self.btn_start.pack(side="left", padx=4)
         self.btn_stop = ttk.Button(ctrl, text="■ Стоп", command=self.stop_bot, state="disabled")
         self.btn_stop.pack(side="left", padx=4)
-        ttk.Button(ctrl, text="Тест ADB", command=self.test_adb).pack(side="left", padx=4)
+        ttk.Button(ctrl, text="Тест ADB", command=self.on_test_adb).pack(side="left", padx=4)
 
         self.status_var = tk.StringVar(value="Готов")
         ttk.Label(ctrl, textvariable=self.status_var).pack(side="right", padx=8)
 
-        # --- Лог ---
-        log_frame = ttk.LabelFrame(self, text="Лог")
+        log_frame = ttk.LabelFrame(root, text="Лог")
         log_frame.pack(fill="both", expand=True, padx=10, pady=8)
 
         self.log_text = scrolledtext.ScrolledText(
@@ -199,7 +199,7 @@ class BotApp(tk.Tk):
             except queue.Empty:
                 break
             self._append_log(msg)
-        self.after(100, self._drain_log_queue)
+        self.root.after(100, self._drain_log_queue)
 
     def _log_callback(self, msg: str) -> None:
         self.log_queue.put(msg)
@@ -221,6 +221,19 @@ class BotApp(tk.Tk):
             emulator_index=int(self.index_var.get()),
             adb_port=adb_port,
         )
+
+    def on_test_adb(self) -> None:
+        self._append_log("=== Тест ADB (без перезапуска эмулятора) ===")
+        try:
+            settings = self._build_settings()
+            dnconsole = find_dnconsole(settings)
+            ld = LdConsole(dnconsole, settings.emulator_index)
+            connect_device(settings, ld, retries=3, pause=2.0)
+            self._append_log("=== ADB OK ===")
+            messagebox.showinfo("ADB", "Подключение успешно!")
+        except Exception as exc:
+            self._append_log(f"=== ADB FAIL: {exc} ===")
+            messagebox.showerror("ADB", str(exc))
 
     def start_bot(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -257,7 +270,7 @@ class BotApp(tk.Tk):
             except Exception as exc:
                 self._log_callback(f"Фатальная ошибка: {exc}")
             finally:
-                self.after(0, self._on_bot_finished)
+                self.root.after(0, self._on_bot_finished)
 
         self.worker = threading.Thread(target=_run, daemon=True)
         self.worker.start()
@@ -276,8 +289,7 @@ class BotApp(tk.Tk):
 
 
 def main() -> None:
-    app = BotApp()
-    app.mainloop()
+    BotApp().run()
 
 
 if __name__ == "__main__":
