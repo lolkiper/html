@@ -149,16 +149,34 @@ class LdConsole:
         )
 
     def adb_shell(self, command: str) -> str:
-        result = self._run(
-            "adb",
-            "--index",
-            str(self.index),
-            "--command",
-            command,
-            check=False,
-            quiet=True,
-        )
-        return ((result.stdout or "") + (result.stderr or "")).strip()
+        inner = command.removeprefix("shell ").strip()
+        exe = str(self.exe)
+        idx = self.index
+        cwd = str(self.exe.parent)
+
+        variants = [
+            f'"{exe}" adb --index {idx} --command "shell {inner}"',
+            f'"{exe}" adb --index {idx} --command "shell,{inner}"',
+            f'"{exe}" adb --name LDPlayer-{idx} --command "shell {inner}"',
+        ]
+
+        last_out = ""
+        for cmd_line in variants:
+            result = subprocess.run(
+                cmd_line,
+                shell=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                cwd=cwd,
+            )
+            last_out = ((result.stdout or "") + (result.stderr or "")).strip()
+            if last_out and "unknown command" not in last_out.lower():
+                return last_out
+
+        return last_out
 
     def quit(self) -> None:
         try:
@@ -231,19 +249,21 @@ def connect_device(
     for attempt in range(1, retries + 1):
         check_stop()
         try:
-            out = device.shell("echo ok")
-            if "ok" in out.lower() or not out:
-                log(f"ADB готов: index={ld.index} ({settings.adb_serial})")
+            out = device.shell("getprop ro.build.version.release")
+            if out and "unknown command" not in out.lower() and "error" not in out.lower():
+                log(f"ADB готов: index={ld.index}, Android {out.strip()}")
                 return device
-            log(f"dnconsole adb ответ: {out[:200]}")
+            log(f"dnconsole adb ответ: {out[:200] if out else '(пусто)'}")
         except Exception as exc:
             log(f"dnconsole adb попытка {attempt}/{retries}: {exc}")
         time.sleep(pause)
 
     raise TimeoutError(
-        f"dnconsole adb не отвечает (index={ld.index}). "
-        "В LDPlayer-10: Настройки → Другие → ADB отладка → «Открыть локальное подключение». "
-        "Эмулятор должен быть полностью загружен."
+        f"dnconsole adb не отвечает (index={ld.index}).\n"
+        "1) LDPlayer-10 полностью загружен\n"
+        "2) Настройки → Другие → ADB отладка → «Открыть локальное подключение»\n"
+        "3) Проверка в cmd:\n"
+        f'   C:\\LDPlayer\\LDPlayer9\\dnconsole.exe adb --index {ld.index} --command "shell getprop ro.build.version.release"'
     )
 
 

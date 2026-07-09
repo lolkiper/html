@@ -26,8 +26,11 @@ from main import (
     SUCCESS_LOG_FILE,
     TWITCH_ACCOUNTS_FILE,
     BotSettings,
+    LdConsole,
     base_dir,
+    connect_device,
     count_lines,
+    find_dnconsole,
     run_bot,
 )
 
@@ -111,6 +114,7 @@ class BotApp(tk.Tk):
         self.btn_start.pack(side="left", padx=4)
         self.btn_stop = ttk.Button(ctrl, text="■ Стоп", command=self.stop_bot, state="disabled")
         self.btn_stop.pack(side="left", padx=4)
+        ttk.Button(ctrl, text="Тест ADB", command=self.test_adb).pack(side="left", padx=4)
 
         self.status_var = tk.StringVar(value="Готов")
         ttk.Label(ctrl, textvariable=self.status_var).pack(side="right", padx=8)
