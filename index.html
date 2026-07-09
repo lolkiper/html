@@ -1,0 +1,1755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Zaliver</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <style>
+    :root {
+      --accent: #8B5CF6;
+      --accent-rgb: 139, 92, 246;
+      --accent-soft: rgba(139, 92, 246, 0.15);
+      --accent-glow: rgba(139, 92, 246, 0.45);
+      --accent-border: rgba(139, 92, 246, 0.55);
+      --accent-hover: rgba(139, 92, 246, 0.25);
+      --transition-speed: 400ms;
+      --bg-deep: #050508;
+      --bg-surface: rgba(12, 10, 20, 0.72);
+      --bg-glass: rgba(18, 14, 32, 0.55);
+      --bg-glass-hover: rgba(24, 18, 42, 0.65);
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --border-glass: rgba(255, 255, 255, 0.08);
+      --text-primary: #F4F2F8;
+      --text-secondary: rgba(244, 242, 248, 0.55);
+      --text-muted: rgba(244, 242, 248, 0.35);
+      --radius-lg: 22px;
+      --radius-md: 18px;
+      --radius-sm: 12px;
+      --shadow-soft: 0 8px 32px rgba(0, 0, 0, 0.45);
+      --shadow-glow: 0 0 24px var(--accent-glow);
+      --success: #22C55E;
+      --error: #EF4444;
+      --info: #6B7280;
+      --start-btn: #00FF88;
+      --stop-btn: #EF4444;
+    }
+
+    [data-mode="multi"] {
+      --accent: #00FF88;
+      --accent-rgb: 0, 255, 136;
+      --accent-soft: rgba(0, 255, 136, 0.12);
+      --accent-glow: rgba(0, 255, 136, 0.4);
+      --accent-border: rgba(0, 255, 136, 0.5);
+      --accent-hover: rgba(0, 255, 136, 0.2);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      -webkit-font-smoothing: antialiased;
+      transition: background var(--transition-speed) ease;
+    }
+
+    body {
+      background:
+        radial-gradient(ellipse 80% 60% at 20% 0%, rgba(var(--accent-rgb), 0.08) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 80% 100%, rgba(var(--accent-rgb), 0.05) 0%, transparent 50%),
+        linear-gradient(180deg, #08060F 0%, #050508 40%, #030306 100%);
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      position: relative;
+    }
+
+    /* Title Bar */
+    .titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 38px;
+      padding: 0 16px;
+      background: rgba(8, 6, 14, 0.9);
+      border-bottom: 1px solid var(--border-subtle);
+      -webkit-app-region: drag;
+      flex-shrink: 0;
+    }
+
+    .titlebar-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .window-controls {
+      display: flex;
+      gap: 8px;
+      -webkit-app-region: no-drag;
+    }
+
+    .window-btn {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+    }
+
+    .window-btn.close { background: #FF5F57; }
+    .window-btn.minimize { background: #FEBC2E; }
+    .window-btn.maximize { background: #28C840; }
+
+    /* Top Bar */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      background: var(--bg-glass);
+      backdrop-filter: blur(24px) saturate(1.4);
+      -webkit-backdrop-filter: blur(24px) saturate(1.4);
+      border-bottom: 1px solid var(--border-glass);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 10;
+    }
+
+    .topbar::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent-border), transparent);
+      opacity: 0.5;
+      transition: background var(--transition-speed) ease;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand-logo {
+      width: 36px;
+      height: 36px;
+      filter: drop-shadow(0 0 12px var(--accent-glow));
+      transition: filter var(--transition-speed) ease;
+    }
+
+    .brand-name {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, var(--text-primary) 0%, rgba(var(--accent-rgb), 0.8) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      transition: background var(--transition-speed) ease;
+    }
+
+    .topbar-center {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    /* Mode Toggle */
+    .mode-toggle {
+      display: flex;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--border-glass);
+      border-radius: 14px;
+      padding: 4px;
+      position: relative;
+      transition: border-color var(--transition-speed) ease, box-shadow var(--transition-speed) ease;
+    }
+
+    .mode-toggle:hover {
+      border-color: var(--accent-border);
+      box-shadow: 0 0 16px var(--accent-soft);
+    }
+
+    .mode-slider {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      width: calc(50% - 4px);
+      height: calc(100% - 8px);
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
+      border-radius: 10px;
+      box-shadow: 0 0 20px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.08);
+      transition: transform var(--transition-speed) cubic-bezier(0.4, 0, 0.2, 1),
+                  background var(--transition-speed) ease,
+                  border-color var(--transition-speed) ease,
+                  box-shadow var(--transition-speed) ease;
+      pointer-events: none;
+    }
+
+    [data-mode="multi"] .mode-slider {
+      transform: translateX(100%);
+    }
+
+    .mode-btn {
+      padding: 8px 20px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border-radius: 10px;
+      position: relative;
+      z-index: 1;
+      transition: color var(--transition-speed) ease;
+      white-space: nowrap;
+    }
+
+    .mode-btn.active {
+      color: var(--accent);
+    }
+
+    .mode-btn small {
+      display: block;
+      font-size: 10px;
+      font-weight: 400;
+      opacity: 0.6;
+      margin-top: 1px;
+    }
+
+    /* Action Buttons */
+    .action-buttons {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn-action {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 28px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn-action::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .btn-start {
+      background: linear-gradient(135deg, #00FF88 0%, #00CC6A 100%);
+      color: #001A0E;
+      box-shadow: 0 0 24px rgba(0, 255, 136, 0.35), inset 0 1px 0 rgba(255,255,255,0.2);
+    }
+
+    .btn-start:hover {
+      box-shadow: 0 0 36px rgba(0, 255, 136, 0.5), inset 0 1px 0 rgba(255,255,255,0.3);
+      transform: translateY(-1px);
+    }
+
+    .btn-stop {
+      background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
+      color: #fff;
+      box-shadow: 0 0 24px rgba(239, 68, 68, 0.35), inset 0 1px 0 rgba(255,255,255,0.15);
+    }
+
+    .btn-stop:hover {
+      box-shadow: 0 0 36px rgba(239, 68, 68, 0.5), inset 0 1px 0 rgba(255,255,255,0.2);
+      transform: translateY(-1px);
+    }
+
+    .btn-action svg { width: 16px; height: 16px; }
+
+    /* Main Layout */
+    .main-layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 220px;
+      background: var(--bg-glass);
+      backdrop-filter: blur(24px) saturate(1.3);
+      -webkit-backdrop-filter: blur(24px) saturate(1.3);
+      border-right: 1px solid var(--border-glass);
+      padding: 20px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all var(--transition-speed) ease;
+      position: relative;
+    }
+
+    .nav-item svg {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      transition: color var(--transition-speed) ease, filter var(--transition-speed) ease;
+    }
+
+    .nav-item:hover {
+      background: var(--accent-hover);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: var(--accent-border);
+      box-shadow: 0 0 20px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .nav-item.active svg {
+      filter: drop-shadow(0 0 6px var(--accent-glow));
+    }
+
+    /* Content Area */
+    .content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 20px 24px;
+      gap: 20px;
+    }
+
+    /* Stat Cards */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 14px;
+      flex-shrink: 0;
+    }
+
+    .stat-card {
+      background: var(--bg-glass);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius-md);
+      padding: 18px 20px;
+      position: relative;
+      overflow: hidden;
+      transition: all var(--transition-speed) ease;
+      cursor: default;
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+    }
+
+    .stat-card::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      border: 1px solid var(--accent-border);
+      opacity: 0;
+      transition: opacity var(--transition-speed) ease, box-shadow var(--transition-speed) ease;
+      pointer-events: none;
+    }
+
+    .stat-card:hover {
+      background: var(--bg-glass-hover);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .stat-card:hover::after {
+      opacity: 1;
+      box-shadow: 0 0 24px var(--accent-soft);
+    }
+
+    .stat-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .stat-icon {
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
+      color: var(--accent);
+      transition: all var(--transition-speed) ease;
+    }
+
+    .stat-icon svg { width: 18px; height: 18px; }
+
+    .stat-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      transition: color var(--transition-speed) ease;
+    }
+
+    .stat-card.success .stat-icon { background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.4); color: var(--success); }
+    .stat-card.error .stat-icon { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.4); color: var(--error); }
+    .stat-card.uploading .stat-icon { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
+
+    /* Page Container */
+    .page {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .page.active { display: flex; }
+
+    /* Glass Panel */
+    .glass-panel {
+      background: var(--bg-glass);
+      backdrop-filter: blur(24px) saturate(1.3);
+      -webkit-backdrop-filter: blur(24px) saturate(1.3);
+      border: 1px solid var(--border-glass);
+      border-radius: var(--radius-lg);
+      position: relative;
+      overflow: hidden;
+      transition: border-color var(--transition-speed) ease;
+    }
+
+    .glass-panel::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 10%, rgba(255,255,255,0.06) 50%, transparent 90%);
+    }
+
+    /* Dashboard Console */
+    .console-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .console-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+      flex-shrink: 0;
+    }
+
+    .slot-tabs {
+      display: flex;
+      gap: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .slot-tabs::-webkit-scrollbar { display: none; }
+
+    .slot-tab {
+      padding: 7px 16px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all var(--transition-speed) ease;
+      white-space: nowrap;
+    }
+
+    .slot-tab:hover {
+      background: var(--accent-hover);
+      color: var(--text-primary);
+    }
+
+    .slot-tab.active {
+      background: var(--accent-soft);
+      border-color: var(--accent-border);
+      color: var(--accent);
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    .console-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-console {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 14px;
+      border: 1px solid var(--border-glass);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.3);
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-console:hover {
+      border-color: var(--accent-border);
+      color: var(--accent);
+      background: var(--accent-hover);
+    }
+
+    .btn-console svg { width: 14px; height: 14px; }
+
+    .console-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.8;
+      min-height: 0;
+    }
+
+    .console-body::-webkit-scrollbar { width: 6px; }
+    .console-body::-webkit-scrollbar-track { background: transparent; }
+    .console-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+
+    .log-line { white-space: nowrap; }
+    .log-time { color: var(--text-muted); }
+    .log-success { color: var(--success); }
+    .log-error { color: var(--error); }
+    .log-info { color: var(--info); }
+
+    /* AutoLogin Page */
+    .autologin-layout {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      min-height: 0;
+    }
+
+    .autologin-panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .panel-section {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .panel-title {
+      font-size: 15px;
+      font-weight: 600;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .panel-title svg {
+      width: 18px;
+      height: 18px;
+      color: var(--accent);
+      transition: color var(--transition-speed) ease;
+    }
+
+    .panel-body {
+      padding: 22px;
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      letter-spacing: 0.02em;
+    }
+
+    .form-input {
+      padding: 11px 14px;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border-glass);
+      border-radius: 10px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 13px;
+      transition: all var(--transition-speed) ease;
+      outline: none;
+    }
+
+    .form-input:focus {
+      border-color: var(--accent-border);
+      box-shadow: 0 0 16px var(--accent-soft);
+    }
+
+    .form-input::placeholder { color: var(--text-muted); }
+
+    .form-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .form-checkbox input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+      cursor: pointer;
+      transition: accent-color var(--transition-speed) ease;
+    }
+
+    .btn-save {
+      padding: 11px 24px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
+      border-radius: 10px;
+      color: var(--accent);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition-speed) ease;
+      align-self: flex-start;
+      box-shadow: 0 0 16px var(--accent-soft);
+    }
+
+    .btn-save:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 0 24px var(--accent-glow);
+      transform: translateY(-1px);
+    }
+
+    .form-textarea {
+      flex: 1;
+      min-height: 200px;
+      padding: 14px;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border-glass);
+      border-radius: 10px;
+      color: var(--text-primary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      line-height: 1.7;
+      resize: none;
+      outline: none;
+      transition: all var(--transition-speed) ease;
+    }
+
+    .form-textarea:focus {
+      border-color: var(--accent-border);
+      box-shadow: 0 0 16px var(--accent-soft);
+    }
+
+    .format-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    .autologin-actions {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-shrink: 0;
+    }
+
+    .btn-glow {
+      padding: 14px 48px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: all 0.25s ease;
+      position: relative;
+    }
+
+    .btn-glow-start {
+      background: linear-gradient(135deg, #00FF88, #00CC6A);
+      color: #001A0E;
+      box-shadow: 0 0 32px rgba(0, 255, 136, 0.4), inset 0 1px 0 rgba(255,255,255,0.2);
+    }
+
+    .btn-glow-start:hover {
+      box-shadow: 0 0 48px rgba(0, 255, 136, 0.6);
+      transform: translateY(-2px);
+    }
+
+    .btn-glow-stop {
+      background: linear-gradient(135deg, #EF4444, #DC2626);
+      color: #fff;
+      box-shadow: 0 0 32px rgba(239, 68, 68, 0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+    }
+
+    .btn-glow-stop:hover {
+      box-shadow: 0 0 48px rgba(239, 68, 68, 0.6);
+      transform: translateY(-2px);
+    }
+
+    /* Accounts Table */
+    .table-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .table-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .btn-add {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 18px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
+      border-radius: 10px;
+      color: var(--accent);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition-speed) ease;
+    }
+
+    .btn-add:hover {
+      box-shadow: 0 0 20px var(--accent-glow);
+      transform: translateY(-1px);
+    }
+
+    .btn-add svg { width: 16px; height: 16px; }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .data-table th {
+      text-align: left;
+      padding: 12px 22px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .data-table td {
+      padding: 14px 22px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.15s ease;
+    }
+
+    .data-table tr:hover td {
+      background: var(--accent-hover);
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .status-badge::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .status-active { background: rgba(34, 197, 94, 0.12); color: var(--success); border: 1px solid rgba(34, 197, 94, 0.3); }
+    .status-active::before { background: var(--success); box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
+    .status-idle { background: rgba(107, 114, 128, 0.12); color: var(--info); border: 1px solid rgba(107, 114, 128, 0.3); }
+    .status-idle::before { background: var(--info); }
+    .status-failed { background: rgba(239, 68, 68, 0.12); color: var(--error); border: 1px solid rgba(239, 68, 68, 0.3); }
+    .status-failed::before { background: var(--error); box-shadow: 0 0 8px rgba(239, 68, 68, 0.5); }
+
+    .btn-delete {
+      padding: 6px 14px;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 8px;
+      color: var(--error);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .btn-delete:hover {
+      background: rgba(239, 68, 68, 0.2);
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.3);
+    }
+
+    .table-scroll {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    /* Titles Editor */
+    .editor-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 22px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .btn-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 16px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-glass);
+      border-radius: 8px;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all var(--transition-speed) ease;
+    }
+
+    .btn-toolbar:hover {
+      border-color: var(--accent-border);
+      color: var(--accent);
+      background: var(--accent-hover);
+    }
+
+    .btn-toolbar svg { width: 14px; height: 14px; }
+
+    .editor-container {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    .line-numbers {
+      padding: 16px 0;
+      background: rgba(0, 0, 0, 0.25);
+      border-right: 1px solid var(--border-subtle);
+      text-align: right;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--text-muted);
+      user-select: none;
+      overflow: hidden;
+      min-width: 48px;
+    }
+
+    .line-numbers span {
+      display: block;
+      padding: 0 12px;
+    }
+
+    .editor-textarea {
+      flex: 1;
+      padding: 16px 18px;
+      background: transparent;
+      border: none;
+      color: var(--text-primary);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      resize: none;
+      outline: none;
+    }
+
+    /* Statistics Page */
+    .stats-layout {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 20px;
+      min-height: 0;
+    }
+
+    .chart-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 30px;
+    }
+
+    .chart-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 24px;
+      color: var(--text-secondary);
+    }
+
+    .circular-chart {
+      position: relative;
+      width: 180px;
+      height: 180px;
+    }
+
+    .circular-chart svg {
+      transform: rotate(-90deg);
+      width: 100%;
+      height: 100%;
+    }
+
+    .chart-bg {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.06);
+      stroke-width: 10;
+    }
+
+    .chart-progress {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 10;
+      stroke-linecap: round;
+      transition: stroke var(--transition-speed) ease;
+      filter: drop-shadow(0 0 8px var(--accent-glow));
+    }
+
+    .chart-center {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .chart-percent {
+      font-size: 36px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--accent);
+      transition: color var(--transition-speed) ease;
+    }
+
+    .chart-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .chart-legend {
+      margin-top: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+
+    .legend-left {
+      display: flex;
+      align-items: center;
+    }
+
+    /* Settings Page */
+    .settings-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      padding: 22px;
+    }
+
+    .settings-card {
+      padding: 22px;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+    }
+
+    .settings-card h3 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: var(--accent);
+      transition: color var(--transition-speed) ease;
+    }
+
+    /* Progress bar accent */
+    .progress-bar {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 2px;
+      box-shadow: 0 0 8px var(--accent-glow);
+      transition: width 0.5s ease, background var(--transition-speed) ease, box-shadow var(--transition-speed) ease;
+    }
+
+    /* Scrollbar global */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+  </style>
+</head>
+<body data-mode="single">
+  <div class="app">
+    <!-- Window Title Bar -->
+    <div class="titlebar">
+      <div class="titlebar-left">
+        <img src="assets/logo.svg" alt="" width="16" height="16">
+        <span>YouTube Zaliver</span>
+      </div>
+      <div class="window-controls">
+        <button class="window-btn minimize" aria-label="Minimize"></button>
+        <button class="window-btn maximize" aria-label="Maximize"></button>
+        <button class="window-btn close" aria-label="Close"></button>
+      </div>
+    </div>
+
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="brand">
+        <img src="assets/logo.svg" alt="YouTube Zaliver" class="brand-logo">
+        <span class="brand-name">YouTube Zaliver</span>
+      </div>
+
+      <div class="topbar-center">
+        <div class="mode-toggle" id="modeToggle">
+          <div class="mode-slider"></div>
+          <button class="mode-btn active" data-mode="single">Single Upload</button>
+          <button class="mode-btn" data-mode="multi">Multi Upload<small>up to 10 videos</small></button>
+        </div>
+      </div>
+
+      <div class="action-buttons">
+        <button class="btn-action btn-start" id="btnStart">
+          <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+          Start
+        </button>
+        <button class="btn-action btn-stop" id="btnStop">
+          <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="1"/></svg>
+          Stop
+        </button>
+      </div>
+    </header>
+
+    <div class="main-layout">
+      <!-- Sidebar -->
+      <nav class="sidebar">
+        <div class="nav-item active" data-page="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Dashboard
+        </div>
+        <div class="nav-item" data-page="autologin">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+          AutoLogin
+        </div>
+        <div class="nav-item" data-page="accounts">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Accounts
+        </div>
+        <div class="nav-item" data-page="titles">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          Titles
+        </div>
+        <div class="nav-item" data-page="statistics">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+          Statistics
+        </div>
+        <div class="nav-item" data-page="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </div>
+      </nav>
+
+      <!-- Content -->
+      <main class="content">
+        <!-- Stat Cards -->
+        <div class="stats-row">
+          <div class="stat-card">
+            <div class="stat-header">
+              <div class="stat-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+              </div>
+            </div>
+            <div class="stat-label">Videos</div>
+            <div class="stat-value" id="statVideos">24</div>
+            <div class="progress-bar"><div class="progress-fill" style="width: 60%"></div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-header">
+              <div class="stat-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              </div>
+            </div>
+            <div class="stat-label">Accounts</div>
+            <div class="stat-value" id="statAccounts">12</div>
+            <div class="progress-bar"><div class="progress-fill" style="width: 40%"></div></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-header">
+              <div class="stat-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              </div>
+            </div>
+            <div class="stat-label">Channels</div>
+            <div class="stat-value" id="statChannels">8</div>
+            <div class="progress-bar"><div class="progress-fill" style="width: 33%"></div></div>
+          </div>
+          <div class="stat-card success">
+            <div class="stat-header">
+              <div class="stat-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              </div>
+            </div>
+            <div class="stat-label">Successful</div>
+            <div class="stat-value" id="statSuccess">156</div>
+          </div>
+          <div class="stat-card error">
+            <div class="stat-header">
+              <div class="stat-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </div>
+            </div>
+            <div class="stat-label">Failed</div>
+            <div class="stat-value" id="statFailed">3</div>
+          </div>
+          <div class="stat-card uploading">
+            <div class="stat-header">
+              <div class="stat-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+              </div>
+            </div>
+            <div class="stat-label">Uploading</div>
+            <div class="stat-value" id="statUploading">2</div>
+          </div>
+        </div>
+
+        <!-- Dashboard Page -->
+        <div class="page active" id="page-dashboard">
+          <div class="glass-panel console-panel">
+            <div class="console-header">
+              <div class="slot-tabs" id="slotTabs"></div>
+              <div class="console-controls">
+                <button class="btn-console" id="btnPause">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                  Pause
+                </button>
+                <button class="btn-console" id="btnClear">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  Clear Logs
+                </button>
+                <button class="btn-console active-scroll" id="btnAutoScroll">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/></svg>
+                  Auto Scroll
+                </button>
+              </div>
+            </div>
+            <div class="console-body" id="consoleBody"></div>
+          </div>
+        </div>
+
+        <!-- AutoLogin Page -->
+        <div class="page" id="page-autologin">
+          <div class="autologin-layout">
+            <div class="autologin-panels">
+              <div class="glass-panel panel-section">
+                <div class="panel-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                  Settings
+                </div>
+                <div class="panel-body">
+                  <div class="form-group">
+                    <label class="form-label">Dolphin Token</label>
+                    <input type="text" class="form-input" placeholder="Enter Dolphin Anty API token" value="dolphin_xxxxxxxxxxxxxxxx">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Local API URL</label>
+                    <input type="text" class="form-input" placeholder="http://localhost:3001" value="http://localhost:3001">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Cloud API URL</label>
+                    <input type="text" class="form-input" placeholder="https://dolphin-anty-api.com" value="https://dolphin-anty-api.com">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">2FA Website URL</label>
+                    <input type="text" class="form-input" placeholder="https://2fa.live" value="https://2fa.live">
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Delay Between Accounts (ms)</label>
+                    <input type="number" class="form-input" placeholder="5000" value="5000">
+                  </div>
+                  <label class="form-checkbox">
+                    <input type="checkbox" checked>
+                    Skip Already Successful
+                  </label>
+                  <button class="btn-save">Save Settings</button>
+                </div>
+              </div>
+              <div class="glass-panel panel-section">
+                <div class="panel-title">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                  Accounts (accounts.txt)
+                </div>
+                <div class="panel-body">
+                  <textarea class="form-textarea" placeholder="Enter accounts, one per line...">user1@gmail.com|password123|JBSWY3DPEHPK3PXP|192.168.1.1:8080:user:pass:HTTP
+user2@gmail.com|securepass456|TOTPSECRETKEY2|10.0.0.5:3128:proxy:proxy1:HTTP
+user3@gmail.com|mypassword789|ABCDEFGHIJKLMNOP|proxy.example.com:1080:admin:secret:SOCKS5</textarea>
+                  <div class="format-hint">Format: EMAIL|PASSWORD|TOTP_SECRET|HOST:PORT:LOGIN:PASS:HTTP</div>
+                  <button class="btn-save">Save accounts.txt</button>
+                </div>
+              </div>
+            </div>
+            <div class="autologin-actions">
+              <button class="btn-glow btn-glow-start">START</button>
+              <button class="btn-glow btn-glow-stop">STOP</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Accounts Page -->
+        <div class="page" id="page-accounts">
+          <div class="glass-panel" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+            <div class="table-header">
+              <span class="table-title">Browser Accounts</span>
+              <button class="btn-add" id="btnAddAccount">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add Account
+              </button>
+            </div>
+            <div class="table-scroll">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Browser ID</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="accountsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Titles Page -->
+        <div class="page" id="page-titles">
+          <div class="glass-panel" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+            <div class="editor-toolbar">
+              <button class="btn-toolbar" id="btnImportTxt">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Import TXT
+              </button>
+              <button class="btn-toolbar" id="btnClearTitles">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                Clear
+              </button>
+              <button class="btn-toolbar" id="btnShuffle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                Shuffle
+              </button>
+            </div>
+            <div class="editor-container">
+              <div class="line-numbers" id="lineNumbers"></div>
+              <textarea class="editor-textarea" id="titlesEditor" spellcheck="false">Amazing Tech Review 2026 - Must Watch!
+How I Gained 10K Subscribers in 30 Days
+Ultimate Gaming Setup Tour | 4K HDR
+Top 10 Productivity Tips for Content Creators
+Behind the Scenes: My YouTube Workflow
+React vs Vue vs Svelte - Honest Comparison
+Day in the Life of a Full-Time YouTuber
+I Tried Every AI Tool So You Don't Have To
+Building a $10K/Month Side Hustle Online
+The Truth About YouTube Algorithm in 2026</textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- Statistics Page -->
+        <div class="page" id="page-statistics">
+          <div class="stats-layout">
+            <div class="glass-panel" style="display:flex;flex-direction:column;min-height:0;">
+              <div class="table-header">
+                <span class="table-title">Channel Analytics</span>
+              </div>
+              <div class="table-scroll">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Channel Name</th>
+                      <th>Subscribers</th>
+                      <th>Views</th>
+                      <th>Last Upload</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="statsTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="glass-panel chart-panel">
+              <div class="chart-title">Success Rate</div>
+              <div class="circular-chart">
+                <svg viewBox="0 0 100 100">
+                  <circle class="chart-bg" cx="50" cy="50" r="42"/>
+                  <circle class="chart-progress" cx="50" cy="50" r="42" id="chartCircle"
+                    stroke-dasharray="263.89" stroke-dashoffset="23.75"/>
+                </svg>
+                <div class="chart-center">
+                  <div class="chart-percent" id="chartPercent">91%</div>
+                  <div class="chart-label">Success Rate</div>
+                </div>
+              </div>
+              <div class="chart-legend">
+                <div class="legend-item">
+                  <div class="legend-left"><div class="legend-dot" style="background:var(--success)"></div>Successful</div>
+                  <span>156</span>
+                </div>
+                <div class="legend-item">
+                  <div class="legend-left"><div class="legend-dot" style="background:var(--error)"></div>Failed</div>
+                  <span>3</span>
+                </div>
+                <div class="legend-item">
+                  <div class="legend-left"><div class="legend-dot" style="background:var(--info)"></div>Idle</div>
+                  <span>12</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings Page -->
+        <div class="page" id="page-settings">
+          <div class="glass-panel" style="flex:1;">
+            <div class="panel-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              Application Settings
+            </div>
+            <div class="settings-grid">
+              <div class="settings-card">
+                <h3>Upload Configuration</h3>
+                <div class="form-group" style="margin-bottom:14px">
+                  <label class="form-label">Default Upload Mode</label>
+                  <select class="form-input">
+                    <option>Single Upload</option>
+                    <option>Multi Upload</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin-bottom:14px">
+                  <label class="form-label">Max Concurrent Uploads</label>
+                  <input type="number" class="form-input" value="10">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Upload Timeout (seconds)</label>
+                  <input type="number" class="form-input" value="300">
+                </div>
+              </div>
+              <div class="settings-card">
+                <h3>Appearance</h3>
+                <div class="form-group" style="margin-bottom:14px">
+                  <label class="form-label">Theme</label>
+                  <select class="form-input">
+                    <option>Dark (Default)</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin-bottom:14px">
+                  <label class="form-label">Accent Animation Speed</label>
+                  <input type="range" class="form-input" min="200" max="600" value="400" id="animSpeed">
+                </div>
+                <label class="form-checkbox">
+                  <input type="checkbox" checked>
+                  Enable glass reflections
+                </label>
+              </div>
+              <div class="settings-card">
+                <h3>Notifications</h3>
+                <label class="form-checkbox" style="margin-bottom:12px">
+                  <input type="checkbox" checked>
+                  Upload completion alerts
+                </label>
+                <label class="form-checkbox" style="margin-bottom:12px">
+                  <input type="checkbox" checked>
+                  Error notifications
+                </label>
+                <label class="form-checkbox">
+                  <input type="checkbox">
+                  Sound effects
+                </label>
+              </div>
+              <div class="settings-card">
+                <h3>Advanced</h3>
+                <div class="form-group" style="margin-bottom:14px">
+                  <label class="form-label">Log Retention (days)</label>
+                  <input type="number" class="form-input" value="30">
+                </div>
+                <div class="form-group" style="margin-bottom:14px">
+                  <label class="form-label">Thread Pool Size</label>
+                  <input type="number" class="form-input" value="4">
+                </div>
+                <button class="btn-save">Save Settings</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    // Mode Toggle
+    const modeBtns = document.querySelectorAll('.mode-btn');
+    modeBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        document.body.dataset.mode = mode;
+        modeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+        updateSlotTabs(mode);
+      });
+    });
+
+    // Navigation
+    const navItems = document.querySelectorAll('.nav-item');
+    const pages = document.querySelectorAll('.page');
+    navItems.forEach(item => {
+      item.addEventListener('click', () => {
+        const page = item.dataset.page;
+        navItems.forEach(n => n.classList.toggle('active', n.dataset.page === page));
+        pages.forEach(p => p.classList.toggle('active', p.id === `page-${page}`));
+      });
+    });
+
+    // Slot Tabs
+    const slotTabsEl = document.getElementById('slotTabs');
+    let activeSlot = 0;
+
+    function updateSlotTabs(mode) {
+      const count = mode === 'multi' ? 10 : 1;
+      slotTabsEl.innerHTML = '';
+      for (let i = 0; i < count; i++) {
+        const tab = document.createElement('button');
+        tab.className = 'slot-tab' + (i === activeSlot ? ' active' : '');
+        tab.textContent = `Slot ${i + 1}`;
+        tab.addEventListener('click', () => {
+          activeSlot = i;
+          slotTabsEl.querySelectorAll('.slot-tab').forEach((t, j) => t.classList.toggle('active', j === i));
+          renderLogs(i);
+        });
+        slotTabsEl.appendChild(tab);
+      }
+      if (activeSlot >= count) activeSlot = 0;
+      renderLogs(activeSlot);
+    }
+
+    // Console Logs
+    const sampleLogs = [
+      { time: '12:01:11', msg: 'Thread Started', type: 'info' },
+      { time: '12:01:13', msg: 'Browser Opened', type: 'info' },
+      { time: '12:01:15', msg: 'Connected', type: 'info' },
+      { time: '12:01:18', msg: 'Uploading Video', type: 'info' },
+      { time: '12:01:31', msg: 'Filling Title', type: 'info' },
+      { time: '12:01:34', msg: 'Filling Description', type: 'info' },
+      { time: '12:01:37', msg: 'Uploading Thumbnail', type: 'info' },
+      { time: '12:01:45', msg: 'Publishing', type: 'info' },
+      { time: '12:01:50', msg: 'Upload Successful', type: 'success' },
+    ];
+
+    const slotLogs = {};
+    for (let i = 0; i < 10; i++) {
+      slotLogs[i] = i === 0 ? [...sampleLogs] : [
+        { time: '12:00:01', msg: 'Slot initialized', type: 'info' },
+      ];
+    }
+
+    const consoleBody = document.getElementById('consoleBody');
+    let autoScroll = true;
+
+    function renderLogs(slot) {
+      const logs = slotLogs[slot] || [];
+      consoleBody.innerHTML = logs.map(l =>
+        `<div class="log-line"><span class="log-time">[${l.time}]</span> <span class="log-${l.type}">${l.msg}</span></div>`
+      ).join('');
+      if (autoScroll) consoleBody.scrollTop = consoleBody.scrollHeight;
+    }
+
+    document.getElementById('btnClear').addEventListener('click', () => {
+      slotLogs[activeSlot] = [];
+      renderLogs(activeSlot);
+    });
+
+    document.getElementById('btnAutoScroll').addEventListener('click', (e) => {
+      autoScroll = !autoScroll;
+      e.currentTarget.style.color = autoScroll ? 'var(--accent)' : '';
+    });
+
+    let paused = false;
+    document.getElementById('btnPause').addEventListener('click', (e) => {
+      paused = !paused;
+      e.currentTarget.querySelector('svg').innerHTML = paused
+        ? '<polygon points="5,3 19,12 5,21"/>'
+        : '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+      e.currentTarget.childNodes[1].textContent = paused ? ' Resume' : ' Pause';
+    });
+
+    // Simulate live logging
+    const liveMessages = [
+      'Checking proxy connection...',
+      'Navigating to YouTube Studio...',
+      'Selecting video file...',
+      'Processing metadata...',
+      'Waiting for upload...',
+      'Verifying upload status...',
+    ];
+
+    setInterval(() => {
+      if (paused) return;
+      const now = new Date();
+      const time = now.toTimeString().slice(0, 8);
+      const msg = liveMessages[Math.floor(Math.random() * liveMessages.length)];
+      const type = Math.random() > 0.9 ? (Math.random() > 0.5 ? 'success' : 'error') : 'info';
+      slotLogs[activeSlot].push({ time, msg, type });
+      if (slotLogs[activeSlot].length > 100) slotLogs[activeSlot].shift();
+      renderLogs(activeSlot);
+    }, 4000);
+
+    // Accounts Table
+    const accountsData = [
+      { id: 1, browserId: 'BR-7F3A2C91', status: 'active' },
+      { id: 2, browserId: 'BR-8E4B1D72', status: 'active' },
+      { id: 3, browserId: 'BR-9A5C3E83', status: 'idle' },
+      { id: 4, browserId: 'BR-1B6D4F94', status: 'active' },
+      { id: 5, browserId: 'BR-2C7E5A05', status: 'failed' },
+      { id: 6, browserId: 'BR-3D8F6B16', status: 'idle' },
+      { id: 7, browserId: 'BR-4E9G7C27', status: 'active' },
+      { id: 8, browserId: 'BR-5F0H8D38', status: 'idle' },
+    ];
+
+    function renderAccounts() {
+      const tbody = document.getElementById('accountsTableBody');
+      tbody.innerHTML = accountsData.map(a => `
+        <tr>
+          <td>${a.id}</td>
+          <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${a.browserId}</td>
+          <td><span class="status-badge status-${a.status}">${a.status.charAt(0).toUpperCase() + a.status.slice(1)}</span></td>
+          <td><button class="btn-delete" data-id="${a.id}">Delete</button></td>
+        </tr>
+      `).join('');
+      tbody.querySelectorAll('.btn-delete').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = parseInt(btn.dataset.id);
+          const idx = accountsData.findIndex(a => a.id === id);
+          if (idx > -1) { accountsData.splice(idx, 1); renderAccounts(); }
+        });
+      });
+    }
+
+    document.getElementById('btnAddAccount').addEventListener('click', () => {
+      const id = accountsData.length + 1;
+      const hex = Math.random().toString(16).slice(2, 10).toUpperCase();
+      accountsData.push({ id, browserId: `BR-${hex}`, status: 'idle' });
+      renderAccounts();
+    });
+
+    // Statistics Table
+    const statsData = [
+      { name: 'TechVault Pro', subs: '142K', views: '8.2M', last: '2 hours ago', status: 'success' },
+      { name: 'GameZone Elite', subs: '89K', views: '4.1M', last: '5 hours ago', status: 'success' },
+      { name: 'Creative Minds', subs: '56K', views: '2.8M', last: '1 day ago', status: 'idle' },
+      { name: 'Daily Vlog Hub', subs: '234K', views: '12.5M', last: '3 hours ago', status: 'success' },
+      { name: 'Code Academy', subs: '78K', views: '3.6M', last: '6 hours ago', status: 'failed' },
+      { name: 'Music Beats', subs: '167K', views: '6.9M', last: '12 hours ago', status: 'success' },
+      { name: 'Fitness First', subs: '45K', views: '1.9M', last: '2 days ago', status: 'idle' },
+      { name: 'Travel Diaries', subs: '198K', views: '9.4M', last: '4 hours ago', status: 'success' },
+    ];
+
+    function renderStats() {
+      document.getElementById('statsTableBody').innerHTML = statsData.map((s, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td style="font-weight:500">${s.name}</td>
+          <td>${s.subs}</td>
+          <td>${s.views}</td>
+          <td style="color:var(--text-secondary)">${s.last}</td>
+          <td><span class="status-badge status-${s.status === 'success' ? 'active' : s.status === 'failed' ? 'failed' : 'idle'}">${s.status.charAt(0).toUpperCase() + s.status.slice(1)}</span></td>
+        </tr>
+      `).join('');
+    }
+
+    // Titles Editor Line Numbers
+    const titlesEditor = document.getElementById('titlesEditor');
+    const lineNumbers = document.getElementById('lineNumbers');
+
+    function updateLineNumbers() {
+      const lines = titlesEditor.value.split('\n').length;
+      lineNumbers.innerHTML = Array.from({ length: lines }, (_, i) => `<span>${i + 1}</span>`).join('');
+    }
+
+    titlesEditor.addEventListener('input', updateLineNumbers);
+    titlesEditor.addEventListener('scroll', () => { lineNumbers.scrollTop = titlesEditor.scrollTop; });
+
+    document.getElementById('btnClearTitles').addEventListener('click', () => {
+      titlesEditor.value = '';
+      updateLineNumbers();
+    });
+
+    document.getElementById('btnShuffle').addEventListener('click', () => {
+      const lines = titlesEditor.value.split('\n').filter(l => l.trim());
+      for (let i = lines.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [lines[i], lines[j]] = [lines[j], lines[i]];
+      }
+      titlesEditor.value = lines.join('\n');
+      updateLineNumbers();
+    });
+
+    document.getElementById('btnImportTxt').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.txt';
+      input.onchange = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (ev) => { titlesEditor.value = ev.target.result; updateLineNumbers(); };
+          reader.readAsText(file);
+        }
+      };
+      input.click();
+    });
+
+    // Animation speed control
+    document.getElementById('animSpeed').addEventListener('input', (e) => {
+      document.documentElement.style.setProperty('--transition-speed', e.target.value + 'ms');
+    });
+
+    // Init
+    updateSlotTabs('single');
+    renderAccounts();
+    renderStats();
+    updateLineNumbers();
+  </script>
+</body>
+</html>

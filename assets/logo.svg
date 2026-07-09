@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="hexGrad" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="50%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <polygon points="32,4 56,18 56,46 32,60 8,46 8,18" fill="none" stroke="url(#hexGrad)" stroke-width="2.5" filter="url(#glow)"/>
+  <polygon points="32,10 50,20.5 50,43.5 32,54 14,43.5 14,20.5" fill="rgba(139,92,246,0.12)"/>
+  <line x1="18" y1="46" x2="46" y2="18" stroke="url(#hexGrad)" stroke-width="3" stroke-linecap="round" filter="url(#glow)"/>
+</svg>
