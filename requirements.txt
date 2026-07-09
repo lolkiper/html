@@ -1,0 +1,1 @@
+# dnconsole adb Ч внешний adb не нужен
