@@ -94,7 +94,7 @@ class AppConfig:
     dolphin_token: str
     dolphin_profile_id: str
     headless: bool = False
-    parallel_workers: int = 1
+    parallel_workers: int = 5
 
     @classmethod
     def load(cls, force_chromium: bool = False) -> AppConfig:
@@ -103,7 +103,7 @@ class AppConfig:
             data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
 
         use_dolphin = bool(data.get("USE_DOLPHIN", True)) and not force_chromium
-        workers = int(data.get("PARALLEL_WORKERS", 1))
+        workers = int(data.get("PARALLEL_WORKERS", 5))
         return cls(
             use_dolphin=use_dolphin,
             dolphin_api_url=str(data.get("DOLPHIN_API_URL", "http://localhost:3001")),
@@ -757,39 +757,41 @@ def _profile_key(account: Account, default_profile_id: str) -> str:
     return account.profile_id or default_profile_id or account.login
 
 
-def partition_parallel_waves(
+def split_accounts_for_workers(
     accounts: list[Account],
     workers: int,
     use_dolphin: bool,
     default_profile_id: str,
 ) -> list[list[Account]]:
-    """Разбивает аккаунты на волны: в одной волне не дублируется profile_id (Dolphin)."""
-    if workers <= 1:
-        return [[account] for account in accounts]
+    """Делит аккаунты между браузерами: у каждого своя очередь, без пересечений."""
+    if not accounts:
+        return []
 
-    waves: list[list[Account]] = []
-    remaining = list(accounts)
-    while remaining:
-        wave: list[Account] = []
-        used_profiles: set[str] = set()
-        idx = 0
-        while idx < len(remaining) and len(wave) < workers:
-            account = remaining[idx]
-            key = (
-                _profile_key(account, default_profile_id)
-                if use_dolphin
-                else account.login
-            )
-            if key in used_profiles:
-                idx += 1
-                continue
-            wave.append(account)
-            used_profiles.add(key)
-            remaining.pop(idx)
-        if not wave:
-            wave.append(remaining.pop(0))
-        waves.append(wave)
-    return waves
+    worker_count = min(max(1, workers), len(accounts))
+    buckets: list[list[Account]] = [[] for _ in range(worker_count)]
+
+    if use_dolphin:
+        # Один profile_id — только один браузер; аккаунты с тем же профилем идут в его очередь
+        profile_to_worker: dict[str, int] = {}
+        next_worker = 0
+        for account in accounts:
+            key = _profile_key(account, default_profile_id)
+            if key not in profile_to_worker:
+                profile_to_worker[key] = next_worker % worker_count
+                next_worker += 1
+            buckets[profile_to_worker[key]].append(account)
+    else:
+        for idx, account in enumerate(accounts):
+            buckets[idx % worker_count].append(account)
+
+    return [bucket for bucket in buckets if bucket]
+
+
+def log_worker_split(buckets: list[list[Account]]) -> None:
+    logging.info("Разделение аккаунтов по браузерам:")
+    for worker_no, bucket in enumerate(buckets, start=1):
+        logins = ", ".join(account.login for account in bucket)
+        logging.info("  Браузер %s (%s шт.): %s", worker_no, len(bucket), logins)
 
 
 def process_account_isolated(account: Account, config: AppConfig, headless: bool) -> int:
@@ -834,13 +836,35 @@ def process_account_isolated(account: Account, config: AppConfig, headless: bool
     raise RuntimeError("unreachable")
 
 
-def _parallel_worker(account: Account, config: AppConfig, headless: bool) -> int:
-    return process_account_isolated(account, config, headless)
+def _browser_worker(
+    worker_no: int,
+    accounts: list[Account],
+    config: AppConfig,
+    headless: bool,
+) -> int:
+    """Один браузер обрабатывает только свою очередь аккаунтов."""
+    failures = 0
+    logging.info(
+        "Браузер %s стартовал — %s аккаунт(ов): %s",
+        worker_no,
+        len(accounts),
+        ", ".join(account.login for account in accounts),
+    )
+    for account in accounts:
+        try:
+            process_account_isolated(account, config, headless)
+            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+        except Exception as exc:
+            failures += 1
+            msg = f"{account.login}: {exc}"
+            logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
+            log_line(ERRORS_FILE, msg)
+    logging.info("Браузер %s завершил работу.", worker_no)
+    return failures
 
 
 def run_parallel(accounts: list[Account], config: AppConfig, headless: bool, workers: int) -> int:
-    failures = 0
-    waves = partition_parallel_waves(
+    buckets = split_accounts_for_workers(
         accounts,
         workers,
         config.use_dolphin,
@@ -853,51 +877,31 @@ def run_parallel(accounts: list[Account], config: AppConfig, headless: bool, wor
         })
         if unique_profiles < workers:
             logging.warning(
-                "Dolphin: уникальных профилей %s — параллельность ограничена. "
-                "Добавьте ID в profiles.txt (по одному на аккаунт).",
+                "Dolphin: уникальных профилей %s — одновременно активно %s браузер(ов). "
+                "Добавьте разные ID в profiles.txt (по одному на аккаунт).",
                 unique_profiles,
+                len(buckets),
             )
 
+    log_worker_split(buckets)
     logging.info(
-        "Параллельный режим: %s воркер(ов), %s волн.",
-        workers,
-        len(waves),
+        "Параллельный режим: до %s браузер(ов), каждый со своей очередью аккаунтов.",
+        len(buckets),
     )
 
-    for wave_no, wave in enumerate(waves, start=1):
-        if len(wave) == 1:
-            account = wave[0]
+    failures = 0
+    with ThreadPoolExecutor(max_workers=len(buckets)) as executor:
+        futures = {
+            executor.submit(_browser_worker, worker_no, bucket, config, headless): worker_no
+            for worker_no, bucket in enumerate(buckets, start=1)
+        }
+        for future in as_completed(futures):
+            worker_no = futures[future]
             try:
-                _parallel_worker(account, config, headless)
+                failures += future.result()
             except Exception as exc:
                 failures += 1
-                msg = f"{account.login}: {exc}"
-                logging.error("Ошибка: %s", msg)
-                log_line(ERRORS_FILE, msg)
-            else:
-                jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
-            continue
-
-        logins = ", ".join(acc.login for acc in wave)
-        logging.info("Волна %s/%s — %s аккаунт(ов): %s", wave_no, len(waves), len(wave), logins)
-
-        with ThreadPoolExecutor(max_workers=len(wave)) as executor:
-            futures = {
-                executor.submit(_parallel_worker, account, config, headless): account
-                for account in wave
-            }
-            for future in as_completed(futures):
-                account = futures[future]
-                try:
-                    future.result()
-                except Exception as exc:
-                    failures += 1
-                    msg = f"{account.login}: {exc}"
-                    logging.error("Ошибка: %s", msg)
-                    log_line(ERRORS_FILE, msg)
-
-        if wave_no < len(waves):
-            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                logging.error("[Браузер %s] Критическая ошибка: %s", worker_no, exc)
 
     return failures
 
