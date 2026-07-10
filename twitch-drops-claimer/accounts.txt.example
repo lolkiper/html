@@ -1,0 +1,3 @@
+# Формат: login:password (по одному аккаунту на строку)
+# user1@example.com:password123
+# twitch_login:secretpass
