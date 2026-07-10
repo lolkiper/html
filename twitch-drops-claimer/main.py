@@ -481,114 +481,127 @@ def ensure_account_session(page: Page, account: Account) -> None:
     jitter_sleep(0.4, 0.7)
 
 
-def _expand_to_campaign_section(title: Locator) -> Locator | None:
-    """От заголовка поднимаемся до самого большого контейнера вкладки кампании."""
-    best: Locator | None = None
-    best_len = 0
+def _find_campaign_root(page: Page) -> Locator:
+    """JS: минимальный контейнер с заголовком SO2 JumbleRumble + кейсами."""
+    found = page.evaluate(
+        """() => {
+            const titleRe = /SO2\\s*JumbleRumble|JumbleRumble\\s*:\\s*Major/i;
+            for (const el of document.querySelectorAll('h1,h2,h3,h4,div,span,p')) {
+                const t = (el.textContent || '').trim();
+                if (t.length > 120 || t.length < 8) continue;
+                if (!titleRe.test(t)) continue;
+                let node = el;
+                for (let depth = 0; depth < 14 && node; depth++) {
+                    const text = (node.innerText || '');
+                    const lower = text.toLowerCase();
+                    if (text.length > 6000) { node = node.parentElement; continue; }
+                    const hasTitle = titleRe.test(text);
+                    const hasCrate = lower.includes('jumble rumble') || lower.includes('jumblerumble');
+                    const hasAbout = lower.includes('about this drop');
+                    if (hasTitle && hasCrate && (hasAbout || lower.includes('crate'))) {
+                        node.setAttribute('data-farm-jumblerumble', '1');
+                        return true;
+                    }
+                    node = node.parentElement;
+                }
+            }
+            return false;
+        }"""
+    )
+    if found:
+        return page.locator('[data-farm-jumblerumble="1"]')
+    return page.locator('[data-farm-jumblerumble="1"]').filter(has_text="__none__")
 
-    for level in range(1, 16):
-        parent = title.locator(f"xpath=ancestor::*[{level}]")
-        if not parent.count():
-            break
-        try:
-            text = parent.first.inner_text(timeout=2000)
-        except PlaywrightTimeout:
-            continue
-        lower = text.lower()
-        if not CAMPAIGN_TITLE_REGEX.search(text):
-            continue
-        has_claim = "claim now" in lower or "получить сейчас" in lower
-        has_crates = "jumble rumble" in lower or "jumblerumble" in lower
-        has_about = "about this drop" in lower
-        if (has_claim or has_crates or has_about) and len(text) < 15_000:
-            if len(text) > best_len:
-                best = parent.first
-                best_len = len(text)
-        elif len(text) > best_len and len(text) < 8000 and "jumble" in lower:
-            best = parent.first
-            best_len = len(text)
-    return best
 
-
-def _inside_campaign_box(btn: Locator, campaign: Locator) -> bool:
+def _is_jumblerumble_claim_button(btn: Locator) -> bool:
+    """Кнопка должна быть на карточке Jumble Rumble Crate, не на другой игре."""
     try:
-        cb = campaign.bounding_box()
-        bb = btn.bounding_box()
-        if not cb or not bb:
-            return True
-        margin = 8
-        return (
-            bb["x"] >= cb["x"] - margin
-            and bb["y"] >= cb["y"] - margin
-            and bb["x"] + bb["width"] <= cb["x"] + cb["width"] + margin
-            and bb["y"] + bb["height"] <= cb["y"] + cb["height"] + margin
+        card = btn.locator(
+            "xpath=ancestor::*[contains(translate(., 'JUMBLE', 'jumble'), 'jumble')][1]"
         )
+        if not card.count():
+            return False
+        text = card.first.inner_text(timeout=2000).lower()
+        return "jumble" in text and ("crate" in text or "rumble" in text)
     except Exception:
-        return True
+        return False
 
 
 def find_standoff_campaign(page: Page) -> Locator:
-    """Ищет только секцию SO2 JumbleRumble: Major (вся вкладка целиком)."""
-    for scroll_pass in range(15):
-        titles = page.get_by_text(CAMPAIGN_TITLE_REGEX)
-        for i in range(titles.count()):
-            title = titles.nth(i)
+    """Ищет секцию JumbleRumble — мягкая прокрутка, без листания всей страницы."""
+    page.evaluate("window.scrollTo(0, 0)")
+    page.wait_for_timeout(200)
+    jitter_sleep(0.2, 0.4)
+
+    for scroll_pass in range(6):
+        page.evaluate(
+            """() => document.querySelectorAll('[data-farm-jumblerumble]').forEach(
+                el => el.removeAttribute('data-farm-jumblerumble')
+            )"""
+        )
+        campaign = _find_campaign_root(page)
+        if campaign.count():
             try:
-                if not title.is_visible():
-                    continue
-            except Exception:
-                continue
-            container = _expand_to_campaign_section(title)
-            if container:
-                snippet = ""
-                try:
-                    snippet = container.inner_text(timeout=3000)[:120].replace("\n", " ")
-                except PlaywrightTimeout:
-                    pass
+                snippet = campaign.first.inner_text(timeout=3000)[:100].replace("\n", " ")
                 logging.info(
-                    "Секция SO2 JumbleRumble найдена (проход %s): %s...",
+                    "Секция SO2 JumbleRumble (проход %s): %s...",
                     scroll_pass + 1,
                     snippet,
                 )
-                container.scroll_into_view_if_needed()
-                return container
+                campaign.first.scroll_into_view_if_needed()
+                return campaign.first
+            except PlaywrightTimeout:
+                pass
 
-        page.mouse.wheel(0, 800)
-        page.wait_for_timeout(100)
+        if scroll_pass < 5:
+            page.mouse.wheel(0, 350)
+            page.wait_for_timeout(150)
 
-    screenshot = BASE_DIR / "debug_drops_not_found.png"
+    shot = BASE_DIR / "debug_drops_not_found.png"
     try:
-        page.screenshot(path=str(screenshot), full_page=True)
-        logging.error("Скрин сохранён: %s", screenshot)
+        page.screenshot(path=str(shot), full_page=True)
+        logging.error("Скрин: %s", shot)
     except Exception:
         pass
-
-    raise RuntimeError(
-        "Секция «SO2 JumbleRumble: Major» не найдена. "
-        "Скрипт забирает награды только из этой кампании."
-    )
+    raise RuntimeError("Секция SO2 JumbleRumble не найдена на странице Drops.")
 
 
-def scroll_campaign_rewards(campaign: Locator) -> None:
-    """Горизонтальная прокрутка ряда кейсов внутри кампании."""
+def reset_campaign_horizontal_scroll(campaign: Locator) -> None:
     try:
         campaign.evaluate(
             """(el) => {
-                const nodes = [el, ...el.querySelectorAll('*')];
-                for (const node of nodes) {
-                    if (node.scrollWidth > node.clientWidth + 20) {
-                        node.scrollLeft += Math.min(320, node.scrollWidth - node.clientLeft);
-                    }
+                for (const node of [el, ...el.querySelectorAll('*')]) {
+                    if (node.scrollWidth > node.clientWidth + 10) node.scrollLeft = 0;
                 }
             }"""
         )
     except Exception:
         pass
-    jitter_sleep(0.15, 0.3)
 
 
-def claim_buttons_in_campaign(campaign: Locator, page: Page) -> list[Locator]:
-    """Кнопки Claim только внутри секции SO2 JumbleRumble."""
+def scroll_campaign_rewards(campaign: Locator, step: int = 260) -> None:
+    """Только горизонтальная прокрутка ряда кейсов внутри кампании."""
+    try:
+        campaign.evaluate(
+            """(el, step) => {
+                for (const node of [el, ...el.querySelectorAll('*')]) {
+                    if (node.scrollWidth > node.clientWidth + 10) {
+                        node.scrollLeft = Math.min(
+                            node.scrollLeft + step,
+                            node.scrollWidth - node.clientWidth
+                        );
+                    }
+                }
+            }""",
+            step,
+        )
+    except Exception:
+        pass
+    jitter_sleep(0.12, 0.25)
+
+
+def claim_buttons_in_campaign(campaign: Locator) -> list[Locator]:
+    """Claim Now только внутри контейнера JumbleRumble — без поиска по всей странице."""
     result: list[Locator] = []
     seen: set[str] = set()
 
@@ -597,10 +610,7 @@ def claim_buttons_in_campaign(campaign: Locator, page: Page) -> list[Locator]:
         campaign.get_by_role("button", name=re.compile(r"получить\s*сейчас", re.IGNORECASE)),
         campaign.locator('button:has-text("Claim Now")'),
         campaign.locator('button:has-text("Получить сейчас")'),
-        campaign.locator('[data-a-target*="claim"]'),
         campaign.locator("button").filter(has_text=CAMPAIGN_CLAIM_BTN_REGEX),
-        page.get_by_role("button", name=re.compile(r"claim\s*now", re.IGNORECASE)),
-        page.locator('button:has-text("Claim Now")'),
     ]
 
     for src in sources:
@@ -609,47 +619,50 @@ def claim_buttons_in_campaign(campaign: Locator, page: Page) -> list[Locator]:
             try:
                 if not btn.is_visible():
                     continue
-                if not _inside_campaign_box(btn, campaign):
+                if not _is_jumblerumble_claim_button(btn):
                     continue
                 label = btn.inner_text(timeout=1500).strip().lower()
                 if not any(t in label for t in CLAIM_TEXTS):
                     continue
                 box = btn.bounding_box()
-                key = f"{box['x']:.0f}:{box['y']:.0f}" if box else label
+                if not box:
+                    continue
+                key = f"{box['x']:.0f}:{box['y']:.0f}"
                 if key in seen:
                     continue
                 seen.add(key)
                 result.append(btn)
-            except PlaywrightTimeout:
-                continue
-            except Exception:
+            except (PlaywrightTimeout, Exception):
                 continue
     return result
 
 
 def claim_standoff_drops(page: Page) -> int:
     campaign = find_standoff_campaign(page)
-    campaign.scroll_into_view_if_needed()
-    jitter_sleep(0.4, 0.7)
+    jitter_sleep(0.3, 0.5)
     dismiss_email_verification(page)
 
+    lower = campaign.inner_text(timeout=5000).lower()
+    if "jumble" not in lower:
+        raise RuntimeError("Контейнер кампании не содержит JumbleRumble — отмена.")
+
+    reset_campaign_horizontal_scroll(campaign)
     claimed = 0
     seen: set[str] = set()
+    no_new_streak = 0
 
-    for pass_num in range(12):
-        scroll_campaign_rewards(campaign)
-        buttons = claim_buttons_in_campaign(campaign, page)
-        new_clicks = 0
-
+    for pass_num in range(16):
+        buttons = claim_buttons_in_campaign(campaign)
         if pass_num == 0:
             logging.info("Кнопок Claim в JumbleRumble: %s", len(buttons))
 
+        new_clicks = 0
         for btn in buttons:
             try:
-                if not btn.is_visible():
-                    continue
                 box = btn.bounding_box()
-                key = f"{box['x']:.0f}:{box['y']:.0f}" if box else str(pass_num)
+                if not box:
+                    continue
+                key = f"{box['x']:.0f}:{box['y']:.0f}"
                 if key in seen:
                     continue
                 btn.scroll_into_view_if_needed()
@@ -657,34 +670,32 @@ def claim_standoff_drops(page: Page) -> int:
                 seen.add(key)
                 claimed += 1
                 new_clicks += 1
-                logging.info("Награда JumbleRumble получена (%s).", claimed)
+                logging.info("JumbleRumble Claim (%s): %s", claimed, key)
                 jitter_sleep(*CLAIM_DELAY_RANGE)
                 dismiss_email_verification(page)
             except PlaywrightTimeout:
-                logging.warning("Таймаут клика Claim в секции JumbleRumble.")
+                logging.warning("Таймаут клика Claim.")
             except Exception as exc:
                 logging.warning("Ошибка клика: %s", exc)
 
+        if new_clicks == 0:
+            no_new_streak += 1
+        else:
+            no_new_streak = 0
+
         scroll_campaign_rewards(campaign)
-        if new_clicks == 0 and pass_num >= 2:
+        if no_new_streak >= 4:
             break
 
     if claimed == 0:
-        logging.info("В секции SO2 JumbleRumble нет доступных кнопок Claim Now.")
+        try:
+            page.screenshot(path=str(BASE_DIR / "debug_no_claim_buttons.png"))
+        except Exception:
+            pass
+        logging.info("В JumbleRumble нет доступных Claim Now.")
     else:
-        logging.info("Всего получено в SO2 JumbleRumble: %s.", claimed)
+        logging.info("Всего получено в JumbleRumble: %s.", claimed)
     return claimed
-
-
-def scroll_inventory(page: Page) -> None:
-    logging.info("Прокрутка страницы Drops...")
-    jitter_sleep(0.3, 0.5)
-    for _ in range(8):
-        page.mouse.wheel(0, 900)
-        page.wait_for_timeout(random.randint(100, 160))
-    page.evaluate("window.scrollTo(0, 0)")
-    page.wait_for_timeout(random.randint(120, 200))
-    jitter_sleep(0.2, 0.4)
 
 
 def logout(page: Page) -> None:
@@ -719,7 +730,6 @@ def process_account_on_page(page: Page, account: Account) -> int:
     dismiss_email_verification(page)
     wait_until_logged_in(page, timeout_sec=5.0)
 
-    scroll_inventory(page)
     claimed = claim_standoff_drops(page)
     logging.info("Получено наград Standoff: %s", claimed)
 
