@@ -235,7 +235,7 @@ def human_fill(locator: Locator, text: str, timeout_ms: int = DEFAULT_TIMEOUT_MS
     jitter_sleep(*DELAY_AFTER_TYPE)
 
 
-def wait_until_logged_in(page: Page, timeout_sec: float = 60.0) -> None:
+def wait_until_logged_in(page: Page, timeout_sec: float = 10.0) -> None:
     """Ждём, пока форма входа исчезнет и появится меню пользователя."""
     logging.info("Ожидание завершения авторизации (до %.0f сек)...", timeout_sec)
     deadline = time.time() + timeout_sec
@@ -482,8 +482,11 @@ def ensure_account_session(page: Page, account: Account) -> None:
 
 
 def _expand_to_campaign_section(title: Locator) -> Locator | None:
-    """От заголовка кампании поднимаемся до контейнера всей вкладки (кейсы + Claim)."""
-    for level in range(1, 14):
+    """От заголовка поднимаемся до самого большого контейнера вкладки кампании."""
+    best: Locator | None = None
+    best_len = 0
+
+    for level in range(1, 16):
         parent = title.locator(f"xpath=ancestor::*[{level}]")
         if not parent.count():
             break
@@ -497,10 +500,31 @@ def _expand_to_campaign_section(title: Locator) -> Locator | None:
         has_claim = "claim now" in lower or "получить сейчас" in lower
         has_crates = "jumble rumble" in lower or "jumblerumble" in lower
         has_about = "about this drop" in lower
-        # Контейнер одной кампании, не вся страница inventory
-        if (has_claim or has_crates or has_about) and len(text) < 12_000:
-            return parent.first
-    return None
+        if (has_claim or has_crates or has_about) and len(text) < 15_000:
+            if len(text) > best_len:
+                best = parent.first
+                best_len = len(text)
+        elif len(text) > best_len and len(text) < 8000 and "jumble" in lower:
+            best = parent.first
+            best_len = len(text)
+    return best
+
+
+def _inside_campaign_box(btn: Locator, campaign: Locator) -> bool:
+    try:
+        cb = campaign.bounding_box()
+        bb = btn.bounding_box()
+        if not cb or not bb:
+            return True
+        margin = 8
+        return (
+            bb["x"] >= cb["x"] - margin
+            and bb["y"] >= cb["y"] - margin
+            and bb["x"] + bb["width"] <= cb["x"] + cb["width"] + margin
+            and bb["y"] + bb["height"] <= cb["y"] + cb["height"] + margin
+        )
+    except Exception:
+        return True
 
 
 def find_standoff_campaign(page: Page) -> Locator:
@@ -563,29 +587,62 @@ def scroll_campaign_rewards(campaign: Locator) -> None:
     jitter_sleep(0.15, 0.3)
 
 
-def claim_buttons_in_campaign(campaign: Locator) -> list[Locator]:
-    """Только кнопки Claim внутри контейнера SO2 JumbleRumble."""
-    buttons = campaign.locator("button").filter(has_text=CAMPAIGN_CLAIM_BTN_REGEX)
+def claim_buttons_in_campaign(campaign: Locator, page: Page) -> list[Locator]:
+    """Кнопки Claim только внутри секции SO2 JumbleRumble."""
     result: list[Locator] = []
-    for i in range(buttons.count()):
-        btn = buttons.nth(i)
-        try:
-            label = btn.inner_text(timeout=1500).strip().lower()
-        except PlaywrightTimeout:
-            continue
-        if any(text in label for text in CLAIM_TEXTS):
-            result.append(btn)
+    seen: set[str] = set()
+
+    sources = [
+        campaign.get_by_role("button", name=re.compile(r"claim\s*now", re.IGNORECASE)),
+        campaign.get_by_role("button", name=re.compile(r"получить\s*сейчас", re.IGNORECASE)),
+        campaign.locator('button:has-text("Claim Now")'),
+        campaign.locator('button:has-text("Получить сейчас")'),
+        campaign.locator('[data-a-target*="claim"]'),
+        campaign.locator("button").filter(has_text=CAMPAIGN_CLAIM_BTN_REGEX),
+        page.get_by_role("button", name=re.compile(r"claim\s*now", re.IGNORECASE)),
+        page.locator('button:has-text("Claim Now")'),
+    ]
+
+    for src in sources:
+        for i in range(src.count()):
+            btn = src.nth(i)
+            try:
+                if not btn.is_visible():
+                    continue
+                if not _inside_campaign_box(btn, campaign):
+                    continue
+                label = btn.inner_text(timeout=1500).strip().lower()
+                if not any(t in label for t in CLAIM_TEXTS):
+                    continue
+                box = btn.bounding_box()
+                key = f"{box['x']:.0f}:{box['y']:.0f}" if box else label
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append(btn)
+            except PlaywrightTimeout:
+                continue
+            except Exception:
+                continue
     return result
 
 
 def claim_standoff_drops(page: Page) -> int:
     campaign = find_standoff_campaign(page)
+    campaign.scroll_into_view_if_needed()
+    jitter_sleep(0.4, 0.7)
+    dismiss_email_verification(page)
+
     claimed = 0
     seen: set[str] = set()
 
-    for pass_num in range(10):
-        buttons = claim_buttons_in_campaign(campaign)
+    for pass_num in range(12):
+        scroll_campaign_rewards(campaign)
+        buttons = claim_buttons_in_campaign(campaign, page)
         new_clicks = 0
+
+        if pass_num == 0:
+            logging.info("Кнопок Claim в JumbleRumble: %s", len(buttons))
 
         for btn in buttons:
             try:
@@ -609,7 +666,7 @@ def claim_standoff_drops(page: Page) -> int:
                 logging.warning("Ошибка клика: %s", exc)
 
         scroll_campaign_rewards(campaign)
-        if new_clicks == 0 and pass_num > 0:
+        if new_clicks == 0 and pass_num >= 2:
             break
 
     if claimed == 0:
@@ -660,7 +717,7 @@ def process_account_on_page(page: Page, account: Account) -> int:
     navigate(page, DROPS_URL)
     dismiss_overlays(page)
     dismiss_email_verification(page)
-    wait_until_logged_in(page, timeout_sec=20.0)
+    wait_until_logged_in(page, timeout_sec=5.0)
 
     scroll_inventory(page)
     claimed = claim_standoff_drops(page)
