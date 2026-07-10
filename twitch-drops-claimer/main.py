@@ -40,7 +40,16 @@ from dolphin_client import DolphinClient, DolphinConfig
 
 DROPS_URL = "https://www.twitch.tv/drops/inventory"
 DEFAULT_TIMEOUT_MS = 60_000
-CLAIM_DELAY_RANGE = (1.0, 2.0)
+CLAIM_DELAY_RANGE = (1.5, 2.5)
+
+# Паузы (секунды) — имитация человека, даём Twitch время отрисовать UI
+DELAY_AFTER_NAV = (2.5, 4.5)
+DELAY_AFTER_CLICK = (1.0, 2.0)
+DELAY_AFTER_TYPE = (0.8, 1.5)
+DELAY_AFTER_LOGIN = (4.0, 6.0)
+DELAY_AFTER_LOGOUT = (2.5, 4.0)
+DELAY_BETWEEN_ACCOUNTS = (5.0, 8.0)
+TYPE_DELAY_MS = (70, 140)
 CLAIM_TEXTS = (
     "получить сейчас",
     "claim now",
@@ -213,6 +222,45 @@ def jitter_sleep(lo: float, hi: float) -> None:
     time.sleep(random.uniform(lo, hi))
 
 
+def human_fill(locator: Locator, text: str, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> None:
+    """Ввод текста посимвольно — Twitch иногда не принимает мгновенный fill()."""
+    field = locator.first
+    wait_visible(field, timeout_ms)
+    field.click()
+    jitter_sleep(0.4, 0.9)
+    field.fill("")
+    jitter_sleep(0.3, 0.6)
+    field.press_sequentially(text, delay=random.randint(*TYPE_DELAY_MS))
+    jitter_sleep(*DELAY_AFTER_TYPE)
+
+
+def wait_until_logged_in(page: Page, timeout_sec: float = 90.0) -> None:
+    """Ждём, пока форма входа исчезнет и появится меню пользователя."""
+    logging.info("Ожидание завершения авторизации (до %.0f сек)...", timeout_sec)
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if is_logged_in(page) and not login_form_visible(page):
+            jitter_sleep(*DELAY_AFTER_LOGIN)
+            if is_logged_in(page) and not login_form_visible(page):
+                try:
+                    page.wait_for_load_state("networkidle", timeout=20_000)
+                except PlaywrightTimeout:
+                    pass
+                logging.info("Сессия Twitch подтверждена.")
+                return
+        jitter_sleep(0.8, 1.5)
+    raise RuntimeError("Таймаут: авторизация не завершилась")
+
+
+def navigate(page: Page, url: str) -> None:
+    page.goto(url, wait_until="domcontentloaded")
+    try:
+        page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    except PlaywrightTimeout:
+        logging.warning("networkidle таймаут на %s — продолжаем после паузы.", url)
+    jitter_sleep(*DELAY_AFTER_NAV)
+
+
 def wait_visible(locator: Locator, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> None:
     locator.first.wait_for(state="visible", timeout=timeout_ms)
 
@@ -221,7 +269,9 @@ def safe_click(locator: Locator, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> None:
     target = locator.first
     wait_visible(target, timeout_ms)
     target.scroll_into_view_if_needed(timeout=timeout_ms)
+    jitter_sleep(0.3, 0.7)
     target.click(timeout=timeout_ms)
+    jitter_sleep(*DELAY_AFTER_CLICK)
 
 
 def dismiss_overlays(page: Page) -> None:
@@ -292,34 +342,33 @@ def is_logged_in(page: Page) -> bool:
 
 def open_login_form(page: Page) -> None:
     if login_form_visible(page):
+        jitter_sleep(1.0, 2.0)
         return
     login_btn = page.locator('button[data-a-target="login-button"]')
     if login_btn.count() and login_btn.first.is_visible():
         safe_click(login_btn)
+        jitter_sleep(1.5, 2.5)
         return
     logging.info("Открываю страницу входа Twitch...")
-    page.goto("https://www.twitch.tv/login", wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    navigate(page, "https://www.twitch.tv/login")
 
 
 def perform_login(page: Page, account: Account) -> None:
     logging.info("Вход в аккаунт %s...", account.login)
     dismiss_overlays(page)
     open_login_form(page)
+    jitter_sleep(1.0, 2.0)
 
     username = page.locator(
         'input[name="login-username"], input#login-username, input[autocomplete="username"]'
     )
-    wait_visible(username, timeout_ms=30_000)
-    username.first.click()
-    username.first.fill("")
-    username.first.fill(account.login)
+    human_fill(username, account.login, timeout_ms=30_000)
 
     password = page.locator(
         'input[name="password"], input#password-input, input[type="password"]'
     )
     if password.count() and password.first.is_visible():
-        password.first.fill(account.password)
+        human_fill(password, account.password, timeout_ms=30_000)
     else:
         next_btn = page.locator(
             'button[data-a-target="passport-login-button"], '
@@ -328,19 +377,28 @@ def perform_login(page: Page, account: Account) -> None:
         )
         if next_btn.count():
             safe_click(next_btn)
-        wait_visible(password, timeout_ms=30_000)
-        password.first.fill(account.password)
+            jitter_sleep(1.5, 2.5)
+        human_fill(password, account.password, timeout_ms=30_000)
 
+    jitter_sleep(1.0, 2.0)
     submit = page.locator(
-        'button[data-a-target="passport-login-button"], '
-        'button[type="submit"]:has-text("Log In"), '
-        'button[type="submit"]:has-text("Войти"), '
-        'button[type="submit"]:has-text("Conectează-te"), '
-        'button[type="submit"]:has-text("Sign In")'
+        'button[data-a-target="passport-login-button"]:not([disabled]), '
+        'button[type="submit"]:has-text("Log In"):not([disabled]), '
+        'button[type="submit"]:has-text("Войти"):not([disabled]), '
+        'button[type="submit"]:has-text("Conectează-te"):not([disabled]), '
+        'button[type="submit"]:has-text("Sign In"):not([disabled])'
     )
+    if not submit.count():
+        submit = page.locator(
+            'button[data-a-target="passport-login-button"], '
+            'button[type="submit"]:has-text("Log In"), '
+            'button[type="submit"]:has-text("Войти"), '
+            'button[type="submit"]:has-text("Conectează-te"), '
+            'button[type="submit"]:has-text("Sign In")'
+        )
     safe_click(submit, timeout_ms=30_000)
 
-    wait_visible(page.locator('button[data-a-target="user-menu-toggle"]'), timeout_ms=60_000)
+    wait_until_logged_in(page)
     logging.info("Логин %s выполнен.", account.login)
 
 
@@ -361,6 +419,8 @@ def ensure_account_session(page: Page, account: Account) -> None:
         perform_login(page, account)
     else:
         raise RuntimeError(f"Не удалось переключиться на аккаунт {account.login}")
+
+    jitter_sleep(2.0, 3.5)
 
 
 def find_standoff_campaign(page: Page) -> Locator:
@@ -462,11 +522,13 @@ def claim_standoff_drops(page: Page) -> int:
 
 def scroll_inventory(page: Page) -> None:
     logging.info("Прокрутка страницы Drops...")
+    jitter_sleep(1.5, 2.5)
     for _ in range(8):
         page.mouse.wheel(0, 900)
-        page.wait_for_timeout(400)
+        page.wait_for_timeout(random.randint(500, 800))
     page.evaluate("window.scrollTo(0, 0)")
-    page.wait_for_timeout(300)
+    page.wait_for_timeout(random.randint(600, 1000))
+    jitter_sleep(1.0, 2.0)
 
 
 def logout(page: Page) -> None:
@@ -483,6 +545,7 @@ def logout(page: Page) -> None:
         )
     )
     page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    jitter_sleep(*DELAY_AFTER_LOGOUT)
     logging.info("Выход выполнен.")
 
 
@@ -490,18 +553,14 @@ def process_account_on_page(page: Page, account: Account) -> int:
     page.set_default_timeout(DEFAULT_TIMEOUT_MS)
     logging.info("=== Аккаунт %s (строка %s) ===", account.login, account.line_no)
 
-    page.goto(DROPS_URL, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    navigate(page, DROPS_URL)
     dismiss_overlays(page)
 
     ensure_account_session(page, account)
 
-    page.goto(DROPS_URL, wait_until="domcontentloaded")
-    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    navigate(page, DROPS_URL)
     dismiss_overlays(page)
-
-    if not is_logged_in(page):
-        raise RuntimeError(f"После входа аккаунт {account.login} не авторизован на Twitch")
+    wait_until_logged_in(page, timeout_sec=30.0)
 
     scroll_inventory(page)
     claimed = claim_standoff_drops(page)
@@ -528,7 +587,7 @@ def run_chromium(pw: Playwright, accounts: list[Account], headless: bool) -> int
             page = context.new_page()
             try:
                 process_account_on_page(page, account)
-                jitter_sleep(2.0, 4.0)
+                jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
             except Exception as exc:
                 failures += 1
                 msg = f"{account.login}: {exc}"
@@ -568,7 +627,7 @@ def run_dolphin(pw: Playwright, accounts: list[Account], config: AppConfig) -> i
             for account in group:
                 try:
                     process_account_on_page(page, account)
-                    jitter_sleep(2.0, 4.0)
+                    jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
                 except Exception as exc:
                     failures += 1
                     msg = f"{account.login}: {exc}"
