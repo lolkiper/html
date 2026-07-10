@@ -20,7 +20,9 @@ import logging
 import random
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -92,6 +94,7 @@ class AppConfig:
     dolphin_token: str
     dolphin_profile_id: str
     headless: bool = False
+    parallel_workers: int = 1
 
     @classmethod
     def load(cls, force_chromium: bool = False) -> AppConfig:
@@ -100,12 +103,14 @@ class AppConfig:
             data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
 
         use_dolphin = bool(data.get("USE_DOLPHIN", True)) and not force_chromium
+        workers = int(data.get("PARALLEL_WORKERS", 1))
         return cls(
             use_dolphin=use_dolphin,
             dolphin_api_url=str(data.get("DOLPHIN_API_URL", "http://localhost:3001")),
             dolphin_token=str(data.get("DOLPHIN_TOKEN", "")),
             dolphin_profile_id=str(data.get("DOLPHIN_PROFILE_ID", "")),
             headless=bool(data.get("HEADLESS", False)),
+            parallel_workers=max(1, workers),
         )
 
 
@@ -118,10 +123,14 @@ def setup_logging() -> None:
     )
 
 
+_LOG_LOCK = threading.Lock()
+
+
 def log_line(path: Path, message: str) -> None:
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(f"[{stamp}] {message}\n")
+    with _LOG_LOCK:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"[{stamp}] {message}\n")
 
 
 def ensure_setup(app_config: AppConfig) -> bool:
@@ -744,6 +753,155 @@ def get_page(context: BrowserContext) -> Page:
     return context.new_page()
 
 
+def _profile_key(account: Account, default_profile_id: str) -> str:
+    return account.profile_id or default_profile_id or account.login
+
+
+def partition_parallel_waves(
+    accounts: list[Account],
+    workers: int,
+    use_dolphin: bool,
+    default_profile_id: str,
+) -> list[list[Account]]:
+    """Разбивает аккаунты на волны: в одной волне не дублируется profile_id (Dolphin)."""
+    if workers <= 1:
+        return [[account] for account in accounts]
+
+    waves: list[list[Account]] = []
+    remaining = list(accounts)
+    while remaining:
+        wave: list[Account] = []
+        used_profiles: set[str] = set()
+        idx = 0
+        while idx < len(remaining) and len(wave) < workers:
+            account = remaining[idx]
+            key = (
+                _profile_key(account, default_profile_id)
+                if use_dolphin
+                else account.login
+            )
+            if key in used_profiles:
+                idx += 1
+                continue
+            wave.append(account)
+            used_profiles.add(key)
+            remaining.pop(idx)
+        if not wave:
+            wave.append(remaining.pop(0))
+        waves.append(wave)
+    return waves
+
+
+def process_account_isolated(account: Account, config: AppConfig, headless: bool) -> int:
+    """Один аккаунт в отдельном браузере (свой Playwright-поток)."""
+    with sync_playwright() as pw:
+        if config.use_dolphin:
+            profile_id = account.profile_id or config.dolphin_profile_id
+            if not profile_id:
+                raise ValueError(f"Нет profile_id для аккаунта {account.login}")
+            if not config.dolphin_token:
+                raise ValueError("DOLPHIN_TOKEN не задан в config.json")
+
+            dolphin = DolphinClient(
+                DolphinConfig(api_url=config.dolphin_api_url, token=config.dolphin_token)
+            )
+            browser: Browser | None = None
+            try:
+                browser, context = dolphin.connect(pw, profile_id)
+                page = get_page(context)
+                return process_account_on_page(page, account)
+            finally:
+                if browser:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                dolphin.stop_profile(profile_id)
+        else:
+            browser = pw.chromium.launch(headless=headless)
+            try:
+                context = browser.new_context(
+                    viewport={"width": 1280, "height": 720},
+                    locale="ru-RU",
+                )
+                page = context.new_page()
+                try:
+                    return process_account_on_page(page, account)
+                finally:
+                    context.close()
+            finally:
+                browser.close()
+    raise RuntimeError("unreachable")
+
+
+def _parallel_worker(account: Account, config: AppConfig, headless: bool) -> int:
+    return process_account_isolated(account, config, headless)
+
+
+def run_parallel(accounts: list[Account], config: AppConfig, headless: bool, workers: int) -> int:
+    failures = 0
+    waves = partition_parallel_waves(
+        accounts,
+        workers,
+        config.use_dolphin,
+        config.dolphin_profile_id,
+    )
+
+    if config.use_dolphin and workers > 1:
+        unique_profiles = len({
+            _profile_key(acc, config.dolphin_profile_id) for acc in accounts
+        })
+        if unique_profiles < workers:
+            logging.warning(
+                "Dolphin: уникальных профилей %s — параллельность ограничена. "
+                "Добавьте ID в profiles.txt (по одному на аккаунт).",
+                unique_profiles,
+            )
+
+    logging.info(
+        "Параллельный режим: %s воркер(ов), %s волн.",
+        workers,
+        len(waves),
+    )
+
+    for wave_no, wave in enumerate(waves, start=1):
+        if len(wave) == 1:
+            account = wave[0]
+            try:
+                _parallel_worker(account, config, headless)
+            except Exception as exc:
+                failures += 1
+                msg = f"{account.login}: {exc}"
+                logging.error("Ошибка: %s", msg)
+                log_line(ERRORS_FILE, msg)
+            else:
+                jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+            continue
+
+        logins = ", ".join(acc.login for acc in wave)
+        logging.info("Волна %s/%s — %s аккаунт(ов): %s", wave_no, len(waves), len(wave), logins)
+
+        with ThreadPoolExecutor(max_workers=len(wave)) as executor:
+            futures = {
+                executor.submit(_parallel_worker, account, config, headless): account
+                for account in wave
+            }
+            for future in as_completed(futures):
+                account = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    failures += 1
+                    msg = f"{account.login}: {exc}"
+                    logging.error("Ошибка: %s", msg)
+                    log_line(ERRORS_FILE, msg)
+
+        if wave_no < len(waves):
+            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+
+    return failures
+
+
 def run_chromium(pw: Playwright, accounts: list[Account], headless: bool) -> int:
     failures = 0
     browser = pw.chromium.launch(headless=headless)
@@ -810,10 +968,17 @@ def run_dolphin(pw: Playwright, accounts: list[Account], config: AppConfig) -> i
     return failures
 
 
-def run(force_chromium: bool, headless: bool | None, limit: int | None) -> int:
+def run(
+    force_chromium: bool,
+    headless: bool | None,
+    limit: int | None,
+    workers: int | None,
+) -> int:
     app_config = AppConfig.load(force_chromium=force_chromium)
     if headless is None:
         headless = app_config.headless
+    parallel_workers = workers if workers is not None else app_config.parallel_workers
+    parallel_workers = max(1, parallel_workers)
 
     if not ensure_setup(app_config):
         return 1
@@ -829,13 +994,21 @@ def run(force_chromium: bool, headless: bool | None, limit: int | None) -> int:
         accounts = accounts[:limit]
 
     mode = "Dolphin Anty" if app_config.use_dolphin else "Chromium"
-    logging.info("Режим: %s. К обработке: %s аккаунт(ов).", mode, len(accounts))
-
-    with sync_playwright() as pw:
-        if app_config.use_dolphin:
-            failures = run_dolphin(pw, accounts, app_config)
-        else:
-            failures = run_chromium(pw, accounts, headless)
+    if parallel_workers > 1:
+        logging.info(
+            "Режим: %s, параллельно %s браузер(ов). К обработке: %s аккаунт(ов).",
+            mode,
+            parallel_workers,
+            len(accounts),
+        )
+        failures = run_parallel(accounts, app_config, headless, parallel_workers)
+    else:
+        logging.info("Режим: %s. К обработке: %s аккаунт(ов).", mode, len(accounts))
+        with sync_playwright() as pw:
+            if app_config.use_dolphin:
+                failures = run_dolphin(pw, accounts, app_config)
+            else:
+                failures = run_chromium(pw, accounts, headless)
 
     logging.info("Готово. Успешно: %s, ошибок: %s.", len(accounts) - failures, failures)
     return 0 if failures == 0 else 2
@@ -861,8 +1034,22 @@ def main() -> None:
         default=None,
         help="Обработать только первые N аккаунтов",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Сколько браузеров запускать параллельно (или PARALLEL_WORKERS в config.json)",
+    )
     args = parser.parse_args()
-    sys.exit(run(force_chromium=args.chromium, headless=args.headless, limit=args.limit))
+    sys.exit(
+        run(
+            force_chromium=args.chromium,
+            headless=args.headless,
+            limit=args.limit,
+            workers=args.workers,
+        )
+    )
 
 
 if __name__ == "__main__":

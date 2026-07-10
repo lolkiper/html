@@ -2,5 +2,6 @@
   "USE_DOLPHIN": true,
   "DOLPHIN_API_URL": "http://localhost:3001",
   "DOLPHIN_TOKEN": "ВСТАВЬ_СЮДА_ТОКЕН_DOLPHIN",
-  "DOLPHIN_PROFILE_ID": "819465082"
+  "DOLPHIN_PROFILE_ID": "819465082",
+  "PARALLEL_WORKERS": 1
 }
