@@ -235,7 +235,7 @@ def human_fill(locator: Locator, text: str, timeout_ms: int = DEFAULT_TIMEOUT_MS
     jitter_sleep(*DELAY_AFTER_TYPE)
 
 
-def wait_until_logged_in(page: Page, timeout_sec: float = 10.0) -> None:
+def wait_until_logged_in(page: Page, timeout_sec: float = 3.0) -> None:
     """Ждём, пока форма входа исчезнет и появится меню пользователя."""
     logging.info("Ожидание завершения авторизации (до %.0f сек)...", timeout_sec)
     deadline = time.time() + timeout_sec
