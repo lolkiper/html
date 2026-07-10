@@ -977,7 +977,7 @@ def get_page(context: BrowserContext) -> Page:
     return context.new_page()
 
 
-def get_page(context: BrowserContext) -> Page:
+def split_accounts_for_workers(
     accounts: list[Account],
     workers: int,
 ) -> list[list[Account]]:
@@ -1002,18 +1002,7 @@ def log_worker_split(buckets: list[list[Account]], worker_profiles: list[str] | 
         logging.info("  Браузер %s (%s шт.%s): %s", worker_no, len(bucket), profile_hint, logins)
 
 
-def _open_dolphin_session(
-    worker_no: int,
-    dolphin: DolphinClient,
-    pw: Playwright,
-    profile_id: str,
-) -> tuple[Browser, Page]:
-    logging.info("[Браузер %s] Запуск профиля Dolphin %s", worker_no, profile_id)
-    browser, context = dolphin.connect(pw, profile_id)
-    return browser, get_page(context)
-
-
-def _browser_worker(
+def split_accounts_for_workers(
     worker_no: int,
     accounts: list[Account],
     config: AppConfig,
