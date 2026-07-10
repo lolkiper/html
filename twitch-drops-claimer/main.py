@@ -56,6 +56,8 @@ PROFILES_FILE = BASE_DIR / "profiles.txt"
 CONFIG_FILE = BASE_DIR / "config.json"
 ERRORS_FILE = BASE_DIR / "errors.txt"
 SUCCESS_FILE = BASE_DIR / "success_log.txt"
+ACCOUNTS_EXAMPLE = BASE_DIR / "accounts.txt.example"
+CONFIG_EXAMPLE = BASE_DIR / "config.json.example"
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,59 @@ def log_line(path: Path, message: str) -> None:
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with path.open("a", encoding="utf-8") as fh:
         fh.write(f"[{stamp}] {message}\n")
+
+
+def ensure_setup(app_config: AppConfig) -> bool:
+    """Проверяет наличие обязательных файлов; создаёт из .example при первом запуске."""
+    ok = True
+
+    if not CONFIG_FILE.exists():
+        if CONFIG_EXAMPLE.exists():
+            CONFIG_FILE.write_text(CONFIG_EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
+            logging.error(
+                "Создан config.json из примера. Откройте файл и вставьте DOLPHIN_TOKEN и DOLPHIN_PROFILE_ID."
+            )
+        else:
+            logging.error("Не найден config.json — скопируйте config.json.example → config.json")
+        ok = False
+
+    if app_config.use_dolphin and CONFIG_FILE.exists():
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        token = str(cfg.get("DOLPHIN_TOKEN", ""))
+        profile = str(cfg.get("DOLPHIN_PROFILE_ID", ""))
+        if not token or token.startswith("ВСТАВЬ"):
+            logging.error("В config.json укажите реальный DOLPHIN_TOKEN.")
+            ok = False
+        if not profile or profile.startswith("ВСТАВЬ"):
+            logging.error("В config.json укажите DOLPHIN_PROFILE_ID (ID профиля Dolphin).")
+            ok = False
+
+    if not ACCOUNTS_FILE.exists():
+        if ACCOUNTS_EXAMPLE.exists():
+            ACCOUNTS_FILE.write_text(ACCOUNTS_EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
+            logging.error(
+                "Создан accounts.txt из примера.\n"
+                "Откройте файл и добавьте строки: логин:пароль\n"
+                "Затем снова запустите: python main.py"
+            )
+        else:
+            logging.error(
+                "Файл accounts.txt не найден в папке:\n  %s\n"
+                "Создайте accounts.txt (формат: login:password, одна строка — один аккаунт).",
+                ACCOUNTS_FILE,
+            )
+        ok = False
+
+    return ok
+
+
+def count_account_lines() -> int:
+    if not ACCOUNTS_FILE.exists():
+        return 0
+    return len([
+        ln for ln in ACCOUNTS_FILE.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.strip().startswith("#") and ":" in ln
+    ])
 
 
 def parse_accounts(path: Path, profile_ids: list[str]) -> list[Account]:
@@ -429,11 +484,10 @@ def run(force_chromium: bool, headless: bool | None, limit: int | None) -> int:
     if headless is None:
         headless = app_config.headless
 
-    profile_ids = load_profile_ids(
-        app_config.dolphin_profile_id,
-        len([ln for ln in ACCOUNTS_FILE.read_text(encoding="utf-8").splitlines()
-             if ln.strip() and not ln.strip().startswith("#") and ":" in ln]),
-    )
+    if not ensure_setup(app_config):
+        return 1
+
+    profile_ids = load_profile_ids(app_config.dolphin_profile_id, count_account_lines())
     accounts = parse_accounts(ACCOUNTS_FILE, profile_ids)
 
     if not accounts:
