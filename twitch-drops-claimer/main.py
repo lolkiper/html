@@ -425,7 +425,9 @@ def dismiss_overlays(page: Page) -> None:
 def login_form_visible(page: Page) -> bool:
     selectors = [
         '[data-a-target="passport-login-modal"]',
+        'input[data-a-target="login-username-input"]',
         'input[name="login-username"]',
+        'input[name="username"]',
         'input#login-username',
         'input[autocomplete="username"]',
         'form input[type="password"]',
@@ -464,6 +466,17 @@ def open_login_form(page: Page) -> None:
     if login_form_visible(page):
         jitter_sleep(0.2, 0.4)
         return
+
+    if "/login" in page.url.lower():
+        logging.info("Уже на странице входа Twitch: %s", page.url)
+        username = page.locator(
+            'input[data-a-target="login-username-input"], '
+            'input[name="login-username"], input#login-username, '
+            'input[name="username"], input[autocomplete="username"]'
+        )
+        wait_visible(username, timeout_ms=20_000)
+        return
+
     login_btn = page.locator('button[data-a-target="login-button"]')
     if login_btn.count() and login_btn.first.is_visible():
         safe_click(login_btn)
@@ -480,11 +493,14 @@ def perform_login(page: Page, account: Account) -> None:
     jitter_sleep(0.2, 0.4)
 
     username = page.locator(
-        'input[name="login-username"], input#login-username, input[autocomplete="username"]'
+        'input[data-a-target="login-username-input"], '
+        'input[name="login-username"], input#login-username, '
+        'input[name="username"], input[autocomplete="username"]'
     )
     human_fill(username, account.login, timeout_ms=30_000)
 
     password = page.locator(
+        'input[data-a-target="login-password-input"], '
         'input[name="password"], input#password-input, input[type="password"]'
     )
     if password.count() and password.first.is_visible():
@@ -518,12 +534,38 @@ def perform_login(page: Page, account: Account) -> None:
         )
     safe_click(submit, timeout_ms=30_000)
 
-    wait_until_logged_in(page)
+    wait_until_logged_in(page, timeout_sec=8.0)
     logging.info("Логин %s выполнен.", account.login)
 
 
-def go_to_drops_inventory(page: Page) -> None:
+def navigate_to_drops_or_login(page: Page) -> None:
+    """Открывает Drops; без сессии Twitch перенаправит на /login — это ожидаемо."""
     logging.info("Переход на %s", DROPS_URL)
+    navigate(page, DROPS_URL)
+    dismiss_overlays(page)
+    url = page.url
+    if "/login" in url.lower() or login_form_visible(page):
+        logging.info(
+            "Twitch открыл страницу входа (%s) — входим отсюда, затем снова Drops.",
+            url,
+        )
+    elif "drops" in url.lower() or "inventory" in url.lower():
+        logging.info("Страница Drops открыта: %s", url)
+    else:
+        logging.info("Текущий URL: %s", url)
+
+
+def go_to_drops_inventory(page: Page) -> None:
+    """После входа — открыть Drops. Без сессии — откроется /login."""
+    navigate_to_drops_or_login(page)
+
+
+def ensure_on_drops_when_logged_in(page: Page) -> None:
+    if not is_logged_in(page):
+        return
+    if "drops" in page.url.lower() and "inventory" in page.url.lower():
+        return
+    logging.info("После входа возвращаемся на Drops...")
     navigate(page, DROPS_URL)
     dismiss_overlays(page)
 
@@ -553,13 +595,15 @@ def ensure_account_session(page: Page, account: Account) -> None:
         force_logout_state(page)
 
     if not is_logged_in(page):
-        go_to_drops_inventory(page)
+        navigate_to_drops_or_login(page)
         perform_login(page, account)
+        ensure_on_drops_when_logged_in(page)
     else:
         force_logout_state(page)
         if not is_logged_in(page):
-            go_to_drops_inventory(page)
+            navigate_to_drops_or_login(page)
             perform_login(page, account)
+            ensure_on_drops_when_logged_in(page)
         else:
             raise RuntimeError(f"Не удалось переключиться на аккаунт {account.login}")
 
@@ -889,13 +933,9 @@ def process_account_on_page(page: Page, account: Account) -> int:
     page.set_default_timeout(DEFAULT_TIMEOUT_MS)
     logging.info("=== Аккаунт %s (строка %s) ===", account.login, account.line_no)
 
-    navigate(page, DROPS_URL)
-    dismiss_overlays(page)
-
+    navigate_to_drops_or_login(page)
     ensure_account_session(page, account)
-
-    navigate(page, DROPS_URL)
-    dismiss_overlays(page)
+    ensure_on_drops_when_logged_in(page)
     dismiss_email_verification(page)
     wait_until_logged_in(page, timeout_sec=2.0)
 
@@ -1113,7 +1153,7 @@ def _browser_worker(
             finally:
                 browser.close()
 
-    logging.info("Браузер %s завершил работу.", worker_no)
+    logging.info("Браузер %s завершил очередь аккаунтов.", worker_no)
     return failures
 
 
