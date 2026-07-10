@@ -228,6 +228,25 @@ def load_profile_ids(default_profile_id: str, account_count: int) -> list[str]:
     return ids[:account_count]
 
 
+def load_worker_profile_ids(workers: int, default_profile_id: str) -> list[str]:
+    """Один ID Dolphin на браузер (первые N строк profiles.txt)."""
+    workers = max(1, workers)
+    if PROFILES_FILE.exists():
+        ids = [
+            line.strip()
+            for line in PROFILES_FILE.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        if ids:
+            return [ids[i % len(ids)] for i in range(workers)]
+
+    if not default_profile_id:
+        raise ValueError(
+            "Укажите DOLPHIN_PROFILE_ID в config.json или добавьте ID в profiles.txt"
+        )
+    return [default_profile_id] * workers
+
+
 def jitter_sleep(lo: float, hi: float) -> None:
     time.sleep(random.uniform(lo, hi))
 
@@ -958,45 +977,29 @@ def get_page(context: BrowserContext) -> Page:
     return context.new_page()
 
 
-def _profile_key(account: Account, default_profile_id: str) -> str:
-    return account.profile_id or default_profile_id or account.login
-
-
-def split_accounts_for_workers(
+def get_page(context: BrowserContext) -> Page:
     accounts: list[Account],
     workers: int,
-    use_dolphin: bool,
-    default_profile_id: str,
 ) -> list[list[Account]]:
-    """Делит аккаунты между браузерами: у каждого своя очередь, без пересечений."""
+    """Делит аккаунты по кругу: у каждого браузера примерно одинаковая очередь."""
     if not accounts:
         return []
 
     worker_count = min(max(1, workers), len(accounts))
     buckets: list[list[Account]] = [[] for _ in range(worker_count)]
-
-    if use_dolphin:
-        # Один profile_id — только один браузер; аккаунты с тем же профилем идут в его очередь
-        profile_to_worker: dict[str, int] = {}
-        next_worker = 0
-        for account in accounts:
-            key = _profile_key(account, default_profile_id)
-            if key not in profile_to_worker:
-                profile_to_worker[key] = next_worker % worker_count
-                next_worker += 1
-            buckets[profile_to_worker[key]].append(account)
-    else:
-        for idx, account in enumerate(accounts):
-            buckets[idx % worker_count].append(account)
-
+    for idx, account in enumerate(accounts):
+        buckets[idx % worker_count].append(account)
     return [bucket for bucket in buckets if bucket]
 
 
-def log_worker_split(buckets: list[list[Account]]) -> None:
+def log_worker_split(buckets: list[list[Account]], worker_profiles: list[str] | None = None) -> None:
     logging.info("Разделение аккаунтов по браузерам:")
     for worker_no, bucket in enumerate(buckets, start=1):
         logins = ", ".join(account.login for account in bucket)
-        logging.info("  Браузер %s (%s шт.): %s", worker_no, len(bucket), logins)
+        profile_hint = ""
+        if worker_profiles and worker_no <= len(worker_profiles):
+            profile_hint = f", профиль {worker_profiles[worker_no - 1]}"
+        logging.info("  Браузер %s (%s шт.%s): %s", worker_no, len(bucket), profile_hint, logins)
 
 
 def _open_dolphin_session(
@@ -1015,8 +1018,9 @@ def _browser_worker(
     accounts: list[Account],
     config: AppConfig,
     headless: bool,
+    dolphin_profile_id: str | None = None,
 ) -> int:
-    """Один браузер на воркер: между аккаунтами только logout, закрытие в конце очереди."""
+    """Один браузер Dolphin/Chromium на воркер, один профиль, много Twitch-аккаунтов."""
     failures = 0
     logging.info(
         "Браузер %s стартовал — %s аккаунт(ов): %s",
@@ -1027,6 +1031,9 @@ def _browser_worker(
 
     with sync_playwright() as pw:
         if config.use_dolphin:
+            profile_id = dolphin_profile_id or config.dolphin_profile_id
+            if not profile_id:
+                raise ValueError(f"[Браузер {worker_no}] Нет profile_id Dolphin")
             if not config.dolphin_token:
                 raise ValueError("DOLPHIN_TOKEN не задан в config.json")
 
@@ -1035,11 +1042,9 @@ def _browser_worker(
             )
             browser: Browser | None = None
             page: Page | None = None
-            active_profile_id: str | None = None
 
-            def close_dolphin_session(shutdown_profile: bool = True) -> None:
-                nonlocal browser, page, active_profile_id
-                profile_to_stop = active_profile_id if shutdown_profile else None
+            def shutdown_session() -> None:
+                nonlocal browser, page
                 if browser:
                     try:
                         browser.disconnect()
@@ -1050,56 +1055,45 @@ def _browser_worker(
                             pass
                     browser = None
                     page = None
-                if profile_to_stop:
-                    dolphin.stop_profile(profile_to_stop)
-                    jitter_sleep(0.8, 1.4)
-                if shutdown_profile:
-                    active_profile_id = None
+                dolphin.stop_profile(profile_id)
+                jitter_sleep(0.8, 1.4)
 
-            def ensure_dolphin_page(profile_id: str) -> Page:
-                nonlocal browser, page, active_profile_id
-                if (
-                    profile_id == active_profile_id
-                    and is_page_alive(page)
-                    and browser is not None
-                ):
-                    assert page is not None
-                    return page
-
-                close_dolphin_session(shutdown_profile=True)
-                browser, page = _open_dolphin_session(worker_no, dolphin, pw, profile_id)
-                active_profile_id = profile_id
+            def open_session() -> Page:
+                nonlocal browser, page
+                logging.info(
+                    "[Браузер %s] Запуск профиля Dolphin %s (один на всю очередь)",
+                    worker_no,
+                    profile_id,
+                )
+                browser, context = dolphin.connect(pw, profile_id)
+                page = get_page(context)
                 return page
 
-            def run_account(account: Account, profile_id: str) -> None:
-                nonlocal page
-                page = ensure_dolphin_page(profile_id)
-                process_account_on_page(page, account)
-
             try:
+                page = open_session()
                 for account in accounts:
-                    profile_id = account.profile_id or config.dolphin_profile_id
-                    if not profile_id:
-                        failures += 1
-                        msg = f"{account.login}: нет profile_id"
-                        logging.error("[Браузер %s] %s", worker_no, msg)
-                        log_line(ERRORS_FILE, msg)
-                        continue
-
                     try:
-                        run_account(account, profile_id)
+                        if not is_page_alive(page):
+                            logging.warning(
+                                "[Браузер %s] Вкладка закрыта — переподключение...",
+                                worker_no,
+                            )
+                            shutdown_session()
+                            page = open_session()
+                        process_account_on_page(page, account)
                         jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
                     except Exception as exc:
                         page_dead = not is_page_alive(page)
                         if page_dead or is_session_lost_error(exc):
                             logging.warning(
-                                "[Браузер %s] Сессия потеряна у %s — перезапуск браузера...",
+                                "[Браузер %s] Сессия потеряна у %s — переподключение...",
                                 worker_no,
                                 account.login,
                             )
-                            close_dolphin_session(shutdown_profile=True)
                             try:
-                                run_account(account, profile_id)
+                                shutdown_session()
+                                page = open_session()
+                                process_account_on_page(page, account)
                                 jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
                                 continue
                             except Exception as retry_exc:
@@ -1110,14 +1104,31 @@ def _browser_worker(
                         logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
                         log_line(ERRORS_FILE, msg)
                         if page_dead or is_session_lost_error(exc):
-                            close_dolphin_session(shutdown_profile=True)
+                            try:
+                                shutdown_session()
+                                page = open_session()
+                            except Exception as reopen_exc:
+                                logging.error(
+                                    "[Браузер %s] Не удалось переподключиться: %s",
+                                    worker_no,
+                                    reopen_exc,
+                                )
+                                break
                         else:
                             logging.info(
-                                "[Браузер %s] Браузер остаётся открыт — следующий аккаунт.",
+                                "[Браузер %s] Браузер открыт — следующий аккаунт.",
                                 worker_no,
                             )
             finally:
-                close_dolphin_session(shutdown_profile=True)
+                if browser:
+                    try:
+                        browser.disconnect()
+                    except Exception:
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
+                dolphin.stop_profile(profile_id)
         else:
             browser = pw.chromium.launch(headless=headless)
             try:
@@ -1158,37 +1169,40 @@ def _browser_worker(
 
 
 def run_parallel(accounts: list[Account], config: AppConfig, headless: bool, workers: int) -> int:
-    buckets = split_accounts_for_workers(
-        accounts,
-        workers,
-        config.use_dolphin,
-        config.dolphin_profile_id,
-    )
-
-    if config.use_dolphin and workers > 1:
-        unique_profiles = len({
-            _profile_key(acc, config.dolphin_profile_id) for acc in accounts
-        })
-        if unique_profiles < workers:
+    buckets = split_accounts_for_workers(accounts, workers)
+    worker_profiles: list[str] | None = None
+    if config.use_dolphin:
+        worker_profiles = load_worker_profile_ids(workers, config.dolphin_profile_id)
+        if len(set(worker_profiles)) < len(worker_profiles):
             logging.warning(
-                "Dolphin: уникальных профилей %s — одновременно активно %s браузер(ов). "
-                "Добавьте разные ID в profiles.txt (по одному на аккаунт).",
-                unique_profiles,
-                len(buckets),
+                "В profiles.txt меньше уникальных ID (%s), чем браузеров (%s) — профили повторяются.",
+                len(set(worker_profiles)),
+                len(worker_profiles),
             )
 
-    log_worker_split(buckets)
+    log_worker_split(buckets, worker_profiles)
     logging.info(
-        "Параллельный режим: до %s браузер(ов), каждый со своей очередью аккаунтов.",
+        "Параллельный режим: %s браузер(ов), аккаунты делятся по кругу.",
         len(buckets),
     )
 
     failures = 0
     with ThreadPoolExecutor(max_workers=len(buckets)) as executor:
-        futures = {
-            executor.submit(_browser_worker, worker_no, bucket, config, headless): worker_no
-            for worker_no, bucket in enumerate(buckets, start=1)
-        }
+        futures = {}
+        for worker_no, bucket in enumerate(buckets, start=1):
+            profile_id = None
+            if worker_profiles:
+                profile_id = worker_profiles[worker_no - 1]
+            futures[
+                executor.submit(
+                    _browser_worker,
+                    worker_no,
+                    bucket,
+                    config,
+                    headless,
+                    profile_id,
+                )
+            ] = worker_no
         for future in as_completed(futures):
             worker_no = futures[future]
             try:
