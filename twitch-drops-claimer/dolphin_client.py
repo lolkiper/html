@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 import requests
 from playwright.sync_api import Browser, BrowserContext, Playwright
 
 logger = logging.getLogger(__name__)
+
+START_RETRIES = 5
+START_RETRY_BASE_SEC = 2.0
 
 
 @dataclass(frozen=True)
@@ -28,30 +32,57 @@ class DolphinClient:
 
     def start_profile(self, profile_id: str) -> tuple[int, str]:
         url = f"{self.config.api_url.rstrip('/')}/v1.0/browser_profiles/{profile_id}/start"
-        response = requests.get(
-            url,
-            params={"automation": 1},
-            headers=self.config.headers,
-            timeout=120,
-        )
-        response.raise_for_status()
-        data = response.json()
+        last_error: Exception | None = None
 
-        automation = data.get("automation") or {}
-        port = automation.get("port")
-        ws_endpoint = automation.get("wsEndpoint")
+        for attempt in range(1, START_RETRIES + 1):
+            try:
+                response = requests.get(
+                    url,
+                    params={"automation": 1},
+                    headers=self.config.headers,
+                    timeout=120,
+                )
+                if response.status_code >= 500:
+                    raise requests.HTTPError(
+                        f"{response.status_code} Server Error: {response.reason} for url: {response.url}",
+                        response=response,
+                    )
+                response.raise_for_status()
+                data = response.json()
 
-        if not port or not ws_endpoint:
-            raise RuntimeError(f"Dolphin не вернул automation port/wsEndpoint: {data}")
+                automation = data.get("automation") or {}
+                port = automation.get("port")
+                ws_endpoint = automation.get("wsEndpoint")
 
-        if str(ws_endpoint).startswith("ws://"):
-            cdp_url = ws_endpoint
-        else:
-            cdp_url = f"ws://127.0.0.1:{port}{ws_endpoint}"
+                if not port or not ws_endpoint:
+                    raise RuntimeError(f"Dolphin не вернул automation port/wsEndpoint: {data}")
 
-        self._active_profile_id = profile_id
-        logger.info("Профиль Dolphin %s запущен (port=%s).", profile_id, port)
-        return port, cdp_url
+                if str(ws_endpoint).startswith("ws://"):
+                    cdp_url = ws_endpoint
+                else:
+                    cdp_url = f"ws://127.0.0.1:{port}{ws_endpoint}"
+
+                self._active_profile_id = profile_id
+                logger.info("Профиль Dolphin %s запущен (port=%s).", profile_id, port)
+                return port, cdp_url
+            except (requests.RequestException, RuntimeError) as exc:
+                last_error = exc
+                if attempt >= START_RETRIES:
+                    break
+                wait_sec = START_RETRY_BASE_SEC * attempt
+                logger.warning(
+                    "Dolphin start %s не удался (%s), повтор %s/%s через %.0f сек...",
+                    profile_id,
+                    exc,
+                    attempt,
+                    START_RETRIES,
+                    wait_sec,
+                )
+                self.stop_profile(profile_id)
+                time.sleep(wait_sec)
+
+        assert last_error is not None
+        raise last_error
 
     def stop_profile(self, profile_id: str | None = None) -> None:
         pid = profile_id or self._active_profile_id

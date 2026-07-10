@@ -264,13 +264,66 @@ def wait_until_logged_in(page: Page, timeout_sec: float = 3.0) -> None:
     raise RuntimeError("Таймаут: авторизация не завершилась")
 
 
-def navigate(page: Page, url: str) -> None:
-    page.goto(url, wait_until="domcontentloaded")
+def is_page_alive(page: Page | None) -> bool:
+    if page is None:
+        return False
     try:
-        page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
-    except PlaywrightTimeout:
-        logging.warning("networkidle таймаут на %s — продолжаем после паузы.", url)
-    jitter_sleep(*DELAY_AFTER_NAV)
+        if page.is_closed():
+            return False
+        page.evaluate("() => 1")
+        return True
+    except Exception:
+        return False
+
+
+def is_session_lost_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return (
+        "has been closed" in msg
+        or "target page" in msg
+        or "target closed" in msg
+        or "browser has been closed" in msg
+    )
+
+
+def navigate(page: Page, url: str, retries: int = 3) -> None:
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            page.goto(url, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+            except PlaywrightTimeout:
+                logging.warning("networkidle таймаут на %s — продолжаем после паузы.", url)
+            jitter_sleep(*DELAY_AFTER_NAV)
+            return
+        except Exception as exc:
+            last_exc = exc
+            err = str(exc)
+            retryable = any(
+                token in err
+                for token in (
+                    "ERR_TUNNEL_CONNECTION_FAILED",
+                    "ERR_ABORTED",
+                    "ERR_CONNECTION",
+                    "ERR_PROXY",
+                    "ERR_NETWORK",
+                    "net::",
+                )
+            )
+            if retryable and attempt < retries:
+                logging.warning(
+                    "Сетевая ошибка на %s (%s), повтор %s/%s...",
+                    url,
+                    exc,
+                    attempt,
+                    retries,
+                )
+                jitter_sleep(1.5, 3.0)
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
 
 
 def wait_visible(locator: Locator, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> None:
@@ -469,6 +522,17 @@ def perform_login(page: Page, account: Account) -> None:
     logging.info("Логин %s выполнен.", account.login)
 
 
+def force_logout_state(page: Page) -> None:
+    """Жёсткий сброс сессии Twitch перед входом в другой аккаунт."""
+    try:
+        page.context.clear_cookies()
+    except Exception as exc:
+        logging.warning("Не удалось очистить cookies: %s", exc)
+    navigate(page, "https://www.twitch.tv/login")
+    jitter_sleep(0.4, 0.8)
+    dismiss_overlays(page)
+
+
 def ensure_account_session(page: Page, account: Account) -> None:
     """Сброс чужой сессии и вход под нужным аккаунтом."""
     dismiss_overlays(page)
@@ -480,12 +544,20 @@ def ensure_account_session(page: Page, account: Account) -> None:
             dismiss_overlays(page)
             jitter_sleep(0.2, 0.4)
         except Exception as exc:
-            logging.warning("Выход не удался (%s), продолжаем вход.", exc)
+            logging.warning("Выход не удался (%s), принудительный сброс сессии.", exc)
+
+    if is_logged_in(page):
+        logging.warning("Сессия всё ещё активна — очистка cookies и /login")
+        force_logout_state(page)
 
     if not is_logged_in(page):
         perform_login(page, account)
     else:
-        raise RuntimeError(f"Не удалось переключиться на аккаунт {account.login}")
+        force_logout_state(page)
+        if not is_logged_in(page):
+            perform_login(page, account)
+        else:
+            raise RuntimeError(f"Не удалось переключиться на аккаунт {account.login}")
 
     jitter_sleep(0.4, 0.7)
 
@@ -794,6 +866,17 @@ def log_worker_split(buckets: list[list[Account]]) -> None:
         logging.info("  Браузер %s (%s шт.): %s", worker_no, len(bucket), logins)
 
 
+def _open_dolphin_session(
+    worker_no: int,
+    dolphin: DolphinClient,
+    pw: Playwright,
+    profile_id: str,
+) -> tuple[Browser, Page]:
+    logging.info("[Браузер %s] Запуск профиля Dolphin %s", worker_no, profile_id)
+    browser, context = dolphin.connect(pw, profile_id)
+    return browser, get_page(context)
+
+
 def _browser_worker(
     worker_no: int,
     accounts: list[Account],
@@ -835,6 +918,26 @@ def _browser_worker(
                     jitter_sleep(0.8, 1.4)
                     active_profile_id = None
 
+            def ensure_dolphin_page(profile_id: str) -> Page:
+                nonlocal browser, page, active_profile_id
+                if (
+                    profile_id == active_profile_id
+                    and is_page_alive(page)
+                    and browser is not None
+                ):
+                    assert page is not None
+                    return page
+
+                close_dolphin_session()
+                browser, page = _open_dolphin_session(worker_no, dolphin, pw, profile_id)
+                active_profile_id = profile_id
+                return page
+
+            def run_account(account: Account, profile_id: str) -> None:
+                nonlocal page
+                page = ensure_dolphin_page(profile_id)
+                process_account_on_page(page, account)
+
             try:
                 for account in accounts:
                     profile_id = account.profile_id or config.dolphin_profile_id
@@ -846,25 +949,29 @@ def _browser_worker(
                         continue
 
                     try:
-                        if profile_id != active_profile_id:
-                            close_dolphin_session()
-                            logging.info(
-                                "[Браузер %s] Запуск профиля Dolphin %s",
-                                worker_no,
-                                profile_id,
-                            )
-                            browser, context = dolphin.connect(pw, profile_id)
-                            page = get_page(context)
-                            active_profile_id = profile_id
-
-                        assert page is not None
-                        process_account_on_page(page, account)
+                        run_account(account, profile_id)
                         jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
                     except Exception as exc:
+                        if is_session_lost_error(exc) or not is_page_alive(page):
+                            logging.warning(
+                                "[Браузер %s] Сессия потеряна у %s — перезапуск браузера...",
+                                worker_no,
+                                account.login,
+                            )
+                            close_dolphin_session()
+                            try:
+                                run_account(account, profile_id)
+                                jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                                continue
+                            except Exception as retry_exc:
+                                exc = retry_exc
+
                         failures += 1
                         msg = f"{account.login}: {exc}"
                         logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
                         log_line(ERRORS_FILE, msg)
+                        if is_session_lost_error(exc):
+                            close_dolphin_session()
             finally:
                 close_dolphin_session()
         else:
@@ -877,9 +984,24 @@ def _browser_worker(
                 page = context.new_page()
                 for account in accounts:
                     try:
+                        if not is_page_alive(page):
+                            page = context.new_page()
                         process_account_on_page(page, account)
                         jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
                     except Exception as exc:
+                        if is_session_lost_error(exc):
+                            logging.warning(
+                                "[Браузер %s] Вкладка закрыта — новая для %s",
+                                worker_no,
+                                account.login,
+                            )
+                            try:
+                                page = context.new_page()
+                                process_account_on_page(page, account)
+                                jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                                continue
+                            except Exception as retry_exc:
+                                exc = retry_exc
                         failures += 1
                         msg = f"{account.login}: {exc}"
                         logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
