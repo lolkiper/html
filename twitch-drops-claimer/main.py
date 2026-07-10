@@ -481,81 +481,121 @@ def ensure_account_session(page: Page, account: Account) -> None:
     jitter_sleep(0.4, 0.7)
 
 
-def _find_campaign_root(page: Page) -> Locator:
-    """JS: минимальный контейнер с заголовком SO2 JumbleRumble + кейсами."""
-    found = page.evaluate(
+def _find_campaign_root(page: Page) -> tuple[Locator, int]:
+    """JS: контейнер JumbleRumble, внутри которого есть кнопки Claim Now."""
+    info = page.evaluate(
         """() => {
+            document.querySelectorAll('[data-farm-jumblerumble]').forEach(
+                el => el.removeAttribute('data-farm-jumblerumble')
+            );
             const titleRe = /SO2\\s*JumbleRumble|JumbleRumble\\s*:\\s*Major/i;
-            for (const el of document.querySelectorAll('h1,h2,h3,h4,div,span,p')) {
+            const isClaimLabel = (t) => /claim\\s*now/i.test(t) || /получить\\s*сейчас/i.test(t);
+
+            const titleEls = [...document.querySelectorAll('*')].filter(el => {
                 const t = (el.textContent || '').trim();
-                if (t.length > 120 || t.length < 8) continue;
-                if (!titleRe.test(t)) continue;
-                let node = el;
-                for (let depth = 0; depth < 14 && node; depth++) {
-                    const text = (node.innerText || '');
-                    const lower = text.toLowerCase();
-                    if (text.length > 6000) { node = node.parentElement; continue; }
-                    const hasTitle = titleRe.test(text);
-                    const hasCrate = lower.includes('jumble rumble') || lower.includes('jumblerumble');
-                    const hasAbout = lower.includes('about this drop');
-                    if (hasTitle && hasCrate && (hasAbout || lower.includes('crate'))) {
-                        node.setAttribute('data-farm-jumblerumble', '1');
-                        return true;
+                return t.length >= 8 && t.length < 100 && titleRe.test(t);
+            });
+
+            let best = null;
+            let bestArea = Infinity;
+            let bestClaims = 0;
+
+            for (const titleEl of titleEls) {
+                let node = titleEl;
+                for (let d = 0; d < 22 && node; d++) {
+                    const full = (node.innerText || '');
+                    const lower = full.toLowerCase();
+                    if (!titleRe.test(full) || !lower.includes('jumble')) {
+                        node = node.parentElement;
+                        continue;
+                    }
+                    const claimEls = [...node.querySelectorAll('button, [role=button], a, div')]
+                        .filter(el => isClaimLabel((el.textContent || '').trim()));
+                    if (claimEls.length === 0) {
+                        node = node.parentElement;
+                        continue;
+                    }
+                    const rect = node.getBoundingClientRect();
+                    const area = rect.width * rect.height;
+                    if (area > 500 && area < bestArea) {
+                        best = node;
+                        bestArea = area;
+                        bestClaims = claimEls.length;
                     }
                     node = node.parentElement;
                 }
             }
-            return false;
+
+            if (best) {
+                best.setAttribute('data-farm-jumblerumble', '1');
+                return { found: true, claims: bestClaims };
+            }
+            return { found: false, claims: 0 };
         }"""
     )
-    if found:
-        return page.locator('[data-farm-jumblerumble="1"]')
-    return page.locator('[data-farm-jumblerumble="1"]').filter(has_text="__none__")
+    loc = page.locator('[data-farm-jumblerumble="1"]')
+    if info.get("found") and loc.count():
+        return loc, int(info.get("claims", 0))
+    return page.locator('[data-farm-jumblerumble="1"]').filter(has_text="__none__"), 0
 
 
-def _is_jumblerumble_claim_button(btn: Locator) -> bool:
-    """Кнопка должна быть на карточке Jumble Rumble Crate, не на другой игре."""
-    try:
-        card = btn.locator(
-            "xpath=ancestor::*[contains(translate(., 'JUMBLE', 'jumble'), 'jumble')][1]"
-        )
-        if not card.count():
-            return False
-        text = card.first.inner_text(timeout=2000).lower()
-        return "jumble" in text and ("crate" in text or "rumble" in text)
-    except Exception:
-        return False
+def _collect_claim_targets(campaign: Locator) -> list[dict]:
+    """Собирает координаты Claim Now внутри контейнера кампании (JS — надёжнее для Twitch)."""
+    return campaign.evaluate(
+        """(root) => {
+            const isClaim = (t) => /claim\\s*now/i.test(t) || /получить\\s*сейчас/i.test(t);
+            const out = [];
+            const nodes = root.querySelectorAll('button, [role=button], a, div, span, p');
+            for (const el of nodes) {
+                const label = (el.textContent || '').trim();
+                if (!isClaim(label)) continue;
+                if (label.length > 60) continue;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+                const r = el.getBoundingClientRect();
+                if (r.width < 20 || r.height < 10) continue;
+                const kids = [...el.querySelectorAll('button, [role=button], a')]
+                    .filter(c => isClaim((c.textContent || '').trim()));
+                if (kids.length > 0 && el.tagName !== 'BUTTON' && el.getAttribute('role') !== 'button') continue;
+                out.push({
+                    key: Math.round(r.x) + ':' + Math.round(r.y),
+                    x: r.x + r.width / 2,
+                    y: r.y + r.height / 2,
+                    label: label.slice(0, 30),
+                });
+            }
+            const seen = new Set();
+            return out.filter(p => { if (seen.has(p.key)) return false; seen.add(p.key); return true; });
+        }"""
+    )
 
 
 def find_standoff_campaign(page: Page) -> Locator:
-    """Ищет секцию JumbleRumble — мягкая прокрутка, без листания всей страницы."""
+    """Ищет секцию JumbleRumble — без прокрутки всей страницы."""
     page.evaluate("window.scrollTo(0, 0)")
-    page.wait_for_timeout(200)
+    page.wait_for_timeout(150)
     jitter_sleep(0.2, 0.4)
 
     for scroll_pass in range(6):
-        page.evaluate(
-            """() => document.querySelectorAll('[data-farm-jumblerumble]').forEach(
-                el => el.removeAttribute('data-farm-jumblerumble')
-            )"""
-        )
-        campaign = _find_campaign_root(page)
+        campaign, claim_count = _find_campaign_root(page)
         if campaign.count():
             try:
                 snippet = campaign.first.inner_text(timeout=3000)[:100].replace("\n", " ")
                 logging.info(
-                    "Секция SO2 JumbleRumble (проход %s): %s...",
+                    "JumbleRumble найден (проход %s, Claim в DOM: %s): %s...",
                     scroll_pass + 1,
+                    claim_count,
                     snippet,
                 )
                 campaign.first.scroll_into_view_if_needed()
+                page.wait_for_timeout(300)
                 return campaign.first
             except PlaywrightTimeout:
                 pass
 
         if scroll_pass < 5:
-            page.mouse.wheel(0, 350)
-            page.wait_for_timeout(150)
+            page.mouse.wheel(0, 320)
+            page.wait_for_timeout(120)
 
     shot = BASE_DIR / "debug_drops_not_found.png"
     try:
@@ -600,41 +640,6 @@ def scroll_campaign_rewards(campaign: Locator, step: int = 260) -> None:
     jitter_sleep(0.12, 0.25)
 
 
-def claim_buttons_in_campaign(campaign: Locator) -> list[Locator]:
-    """Claim Now только внутри контейнера JumbleRumble — без поиска по всей странице."""
-    result: list[Locator] = []
-    seen: set[str] = set()
-
-    sources = [
-        campaign.get_by_role("button", name=re.compile(r"claim\s*now", re.IGNORECASE)),
-        campaign.get_by_role("button", name=re.compile(r"получить\s*сейчас", re.IGNORECASE)),
-        campaign.locator('button:has-text("Claim Now")'),
-        campaign.locator('button:has-text("Получить сейчас")'),
-        campaign.locator("button").filter(has_text=CAMPAIGN_CLAIM_BTN_REGEX),
-    ]
-
-    for src in sources:
-        for i in range(src.count()):
-            btn = src.nth(i)
-            try:
-                if not btn.is_visible():
-                    continue
-                if not _is_jumblerumble_claim_button(btn):
-                    continue
-                label = btn.inner_text(timeout=1500).strip().lower()
-                if not any(t in label for t in CLAIM_TEXTS):
-                    continue
-                box = btn.bounding_box()
-                if not box:
-                    continue
-                key = f"{box['x']:.0f}:{box['y']:.0f}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                result.append(btn)
-            except (PlaywrightTimeout, Exception):
-                continue
-    return result
 
 
 def claim_standoff_drops(page: Page) -> int:
@@ -652,31 +657,25 @@ def claim_standoff_drops(page: Page) -> int:
     no_new_streak = 0
 
     for pass_num in range(16):
-        buttons = claim_buttons_in_campaign(campaign)
+        targets = _collect_claim_targets(campaign)
         if pass_num == 0:
-            logging.info("Кнопок Claim в JumbleRumble: %s", len(buttons))
+            logging.info("Кнопок Claim в JumbleRumble: %s", len(targets))
 
         new_clicks = 0
-        for btn in buttons:
+        for t in targets:
+            key = t["key"]
+            if key in seen:
+                continue
             try:
-                box = btn.bounding_box()
-                if not box:
-                    continue
-                key = f"{box['x']:.0f}:{box['y']:.0f}"
-                if key in seen:
-                    continue
-                btn.scroll_into_view_if_needed()
-                btn.click(timeout=DEFAULT_TIMEOUT_MS)
+                page.mouse.click(t["x"], t["y"])
                 seen.add(key)
                 claimed += 1
                 new_clicks += 1
-                logging.info("JumbleRumble Claim (%s): %s", claimed, key)
+                logging.info("JumbleRumble Claim (%s) @ %s", claimed, key)
                 jitter_sleep(*CLAIM_DELAY_RANGE)
                 dismiss_email_verification(page)
-            except PlaywrightTimeout:
-                logging.warning("Таймаут клика Claim.")
             except Exception as exc:
-                logging.warning("Ошибка клика: %s", exc)
+                logging.warning("Ошибка клика @ %s: %s", key, exc)
 
         if new_clicks == 0:
             no_new_streak += 1
