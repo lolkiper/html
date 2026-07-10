@@ -53,11 +53,13 @@ TYPE_DELAY_MS = (14, 28)
 CLAIM_TEXTS = (
     "получить сейчас",
     "claim now",
-    "claim reward",
-    "revendică",
-    "revendica",
-    "redeem",
 )
+# Только эта кампания — не трогаем другие игры на странице
+CAMPAIGN_TITLE_REGEX = re.compile(
+    r"SO2\s*JumbleRumble|JumbleRumble\s*:\s*Major",
+    re.IGNORECASE,
+)
+CAMPAIGN_CLAIM_BTN_REGEX = re.compile(r"claim now|получить сейчас", re.IGNORECASE)
 
 
 def get_base_dir() -> Path:
@@ -480,51 +482,57 @@ def ensure_account_session(page: Page, account: Account) -> None:
     jitter_sleep(0.4, 0.7)
 
 
+def _expand_to_campaign_section(title: Locator) -> Locator | None:
+    """От заголовка кампании поднимаемся до контейнера всей вкладки (кейсы + Claim)."""
+    for level in range(1, 14):
+        parent = title.locator(f"xpath=ancestor::*[{level}]")
+        if not parent.count():
+            break
+        try:
+            text = parent.first.inner_text(timeout=2000)
+        except PlaywrightTimeout:
+            continue
+        lower = text.lower()
+        if not CAMPAIGN_TITLE_REGEX.search(text):
+            continue
+        has_claim = "claim now" in lower or "получить сейчас" in lower
+        has_crates = "jumble rumble" in lower or "jumblerumble" in lower
+        has_about = "about this drop" in lower
+        # Контейнер одной кампании, не вся страница inventory
+        if (has_claim or has_crates or has_about) and len(text) < 12_000:
+            return parent.first
+    return None
+
+
 def find_standoff_campaign(page: Page) -> Locator:
-    """Ищет блок кампании Standoff/SO2 с прокруткой страницы."""
-    pattern = re.compile(r"standoff|so2", re.IGNORECASE)
-    selectors = (
-        '[data-a-target="drops-list-item"]',
-        '[class*="drops"]',
-        '[class*="Drop"]',
-        'article',
-        'div[role="listitem"]',
-        'li',
-    )
-
+    """Ищет только секцию SO2 JumbleRumble: Major (вся вкладка целиком)."""
     for scroll_pass in range(15):
-        for sel in selectors:
-            cards = page.locator(sel).filter(has_text=pattern)
-            count = cards.count()
-            for i in range(count):
-                card = cards.nth(i)
-                try:
-                    text = card.inner_text(timeout=3000)
-                except PlaywrightTimeout:
+        titles = page.get_by_text(CAMPAIGN_TITLE_REGEX)
+        for i in range(titles.count()):
+            title = titles.nth(i)
+            try:
+                if not title.is_visible():
                     continue
-                if pattern.search(text):
-                    logging.info(
-                        "Кампания Standoff/SO2 найдена (проход %s): %.80s...",
-                        scroll_pass + 1,
-                        text.replace("\n", " "),
-                    )
-                    card.scroll_into_view_if_needed()
-                    return card
-
-        text_hit = page.get_by_text(pattern)
-        if text_hit.count():
-            card = text_hit.first.locator("xpath=ancestor::article[1]")
-            if not card.count():
-                card = text_hit.first.locator("xpath=ancestor::div[contains(@class,'drop') or contains(@class,'Drop')][1]")
-            if card.count():
-                card.scroll_into_view_if_needed()
-                logging.info("Кампания найдена через get_by_text (проход %s).", scroll_pass + 1)
-                return card
+            except Exception:
+                continue
+            container = _expand_to_campaign_section(title)
+            if container:
+                snippet = ""
+                try:
+                    snippet = container.inner_text(timeout=3000)[:120].replace("\n", " ")
+                except PlaywrightTimeout:
+                    pass
+                logging.info(
+                    "Секция SO2 JumbleRumble найдена (проход %s): %s...",
+                    scroll_pass + 1,
+                    snippet,
+                )
+                container.scroll_into_view_if_needed()
+                return container
 
         page.mouse.wheel(0, 800)
         page.wait_for_timeout(100)
 
-    # Диагностика: сохранить скрин при отладке
     screenshot = BASE_DIR / "debug_drops_not_found.png"
     try:
         page.screenshot(path=str(screenshot), full_page=True)
@@ -533,47 +541,82 @@ def find_standoff_campaign(page: Page) -> Locator:
         pass
 
     raise RuntimeError(
-        "Кампания Standoff 2 / SO2 не найдена. "
-        "Проверьте, что аккаунт залогинен и на странице есть активная кампания."
+        "Секция «SO2 JumbleRumble: Major» не найдена. "
+        "Скрипт забирает награды только из этой кампании."
     )
 
 
-def claim_buttons_in_campaign(campaign: Locator) -> Iterable[Locator]:
-    buttons = campaign.locator("button, a[role='button']")
+def scroll_campaign_rewards(campaign: Locator) -> None:
+    """Горизонтальная прокрутка ряда кейсов внутри кампании."""
+    try:
+        campaign.evaluate(
+            """(el) => {
+                const nodes = [el, ...el.querySelectorAll('*')];
+                for (const node of nodes) {
+                    if (node.scrollWidth > node.clientWidth + 20) {
+                        node.scrollLeft += Math.min(320, node.scrollWidth - node.clientLeft);
+                    }
+                }
+            }"""
+        )
+    except Exception:
+        pass
+    jitter_sleep(0.15, 0.3)
+
+
+def claim_buttons_in_campaign(campaign: Locator) -> list[Locator]:
+    """Только кнопки Claim внутри контейнера SO2 JumbleRumble."""
+    buttons = campaign.locator("button").filter(has_text=CAMPAIGN_CLAIM_BTN_REGEX)
+    result: list[Locator] = []
     for i in range(buttons.count()):
         btn = buttons.nth(i)
         try:
-            label = btn.inner_text(timeout=2000).strip().lower()
+            label = btn.inner_text(timeout=1500).strip().lower()
         except PlaywrightTimeout:
             continue
         if any(text in label for text in CLAIM_TEXTS):
-            yield btn
+            result.append(btn)
+    return result
 
 
 def claim_standoff_drops(page: Page) -> int:
-    claimed = 0
     campaign = find_standoff_campaign(page)
-    buttons = list(claim_buttons_in_campaign(campaign))
+    claimed = 0
+    seen: set[str] = set()
 
-    if not buttons:
-        logging.info("Кнопок «Получить сейчас» / «Claim now» в кампании Standoff нет.")
-        return 0
+    for pass_num in range(10):
+        buttons = claim_buttons_in_campaign(campaign)
+        new_clicks = 0
 
-    logging.info("Найдено кнопок для получения: %s", len(buttons))
-    for btn in buttons:
-        try:
-            if not btn.is_visible():
-                continue
-            btn.scroll_into_view_if_needed()
-            btn.click(timeout=DEFAULT_TIMEOUT_MS)
-            claimed += 1
-            logging.info("Награда получена (%s/%s).", claimed, len(buttons))
-            jitter_sleep(*CLAIM_DELAY_RANGE)
-        except PlaywrightTimeout:
-            logging.warning("Таймаут при клике по кнопке получения награды.")
-        except Exception as exc:
-            logging.warning("Ошибка клика: %s", exc)
+        for btn in buttons:
+            try:
+                if not btn.is_visible():
+                    continue
+                box = btn.bounding_box()
+                key = f"{box['x']:.0f}:{box['y']:.0f}" if box else str(pass_num)
+                if key in seen:
+                    continue
+                btn.scroll_into_view_if_needed()
+                btn.click(timeout=DEFAULT_TIMEOUT_MS)
+                seen.add(key)
+                claimed += 1
+                new_clicks += 1
+                logging.info("Награда JumbleRumble получена (%s).", claimed)
+                jitter_sleep(*CLAIM_DELAY_RANGE)
+                dismiss_email_verification(page)
+            except PlaywrightTimeout:
+                logging.warning("Таймаут клика Claim в секции JumbleRumble.")
+            except Exception as exc:
+                logging.warning("Ошибка клика: %s", exc)
 
+        scroll_campaign_rewards(campaign)
+        if new_clicks == 0 and pass_num > 0:
+            break
+
+    if claimed == 0:
+        logging.info("В секции SO2 JumbleRumble нет доступных кнопок Claim Now.")
+    else:
+        logging.info("Всего получено в SO2 JumbleRumble: %s.", claimed)
     return claimed
 
 
