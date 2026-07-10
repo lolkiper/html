@@ -522,15 +522,20 @@ def perform_login(page: Page, account: Account) -> None:
     logging.info("Логин %s выполнен.", account.login)
 
 
+def go_to_drops_inventory(page: Page) -> None:
+    logging.info("Переход на %s", DROPS_URL)
+    navigate(page, DROPS_URL)
+    dismiss_overlays(page)
+
+
 def force_logout_state(page: Page) -> None:
     """Жёсткий сброс сессии Twitch перед входом в другой аккаунт."""
     try:
         page.context.clear_cookies()
     except Exception as exc:
         logging.warning("Не удалось очистить cookies: %s", exc)
-    navigate(page, "https://www.twitch.tv/login")
+    go_to_drops_inventory(page)
     jitter_sleep(0.4, 0.8)
-    dismiss_overlays(page)
 
 
 def ensure_account_session(page: Page, account: Account) -> None:
