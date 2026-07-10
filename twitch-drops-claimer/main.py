@@ -549,14 +549,16 @@ def ensure_account_session(page: Page, account: Account) -> None:
         jitter_sleep(0.2, 0.4)
 
     if is_logged_in(page):
-        logging.warning("Сессия всё ещё активна — очистка cookies и /login")
+        logging.warning("Сессия всё ещё активна — очистка cookies и Drops")
         force_logout_state(page)
 
     if not is_logged_in(page):
+        go_to_drops_inventory(page)
         perform_login(page, account)
     else:
         force_logout_state(page)
         if not is_logged_in(page):
+            go_to_drops_inventory(page)
             perform_login(page, account)
         else:
             raise RuntimeError(f"Не удалось переключиться на аккаунт {account.login}")
@@ -787,23 +789,57 @@ def _logout_via_ui(page: Page) -> bool:
 
     logging.info("Выход из Twitch через меню...")
     try:
-        dismiss_overlays(page)
+        go_to_drops_inventory(page)
+        page.evaluate("window.scrollTo(0, 0)")
+        jitter_sleep(0.2, 0.4)
+
+        for _ in range(3):
+            dismiss_overlays(page)
+            dismiss_email_verification(page)
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            jitter_sleep(0.1, 0.2)
+
         menu = page.locator('button[data-a-target="user-menu-toggle"]')
-        if menu.count():
-            menu.first.click(timeout=10_000)
-            jitter_sleep(0.2, 0.4)
+        if not menu.count():
+            logging.warning("Кнопка меню пользователя не найдена.")
+            return not is_logged_in(page)
+
+        menu_btn = menu.first
+        menu_btn.scroll_into_view_if_needed(timeout=5000)
+        jitter_sleep(0.15, 0.3)
+        menu_btn.click(timeout=10_000)
+        jitter_sleep(0.3, 0.5)
 
         logout_btn = page.locator(
             'button[data-a-target="dropdown-logout"], '
+            'button[data-a-target="logout-button"], '
             'button:has-text("Log Out"), button:has-text("Выйти"), '
-            'button:has-text("Deconectare"), button[data-a-target="logout-button"]'
+            'button:has-text("Deconectare"), '
+            'a[data-a-target="dropdown-logout"]'
         )
-        if logout_btn.count():
-            logout_btn.first.click(timeout=10_000)
-            jitter_sleep(*DELAY_AFTER_LOGOUT)
-        else:
-            return False
+        clicked = False
+        for idx in range(logout_btn.count()):
+            candidate = logout_btn.nth(idx)
+            try:
+                if candidate.is_visible():
+                    candidate.click(timeout=10_000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
 
+        if not clicked:
+            logging.warning("Кнопка Log Out в меню не найдена.")
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return not is_logged_in(page)
+
+        jitter_sleep(*DELAY_AFTER_LOGOUT)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=10_000)
         except PlaywrightTimeout:
@@ -811,7 +847,7 @@ def _logout_via_ui(page: Page) -> bool:
         return not is_logged_in(page)
     except Exception as exc:
         logging.warning("UI-выход не удался: %s", exc)
-        return False
+        return not is_logged_in(page)
 
 
 def twitch_logout_keep_browser(page: Page) -> None:
@@ -823,13 +859,13 @@ def twitch_logout_keep_browser(page: Page) -> None:
     logging.info("Выход из Twitch (браузер остаётся открытым)...")
     if _logout_via_ui(page):
         logging.info("Выход из Twitch выполнен, браузер открыт.")
+        go_to_drops_inventory(page)
         return
 
     logging.warning("Меню не сработало — очистка cookies без закрытия браузера...")
     try:
         page.context.clear_cookies()
-        navigate(page, "https://www.twitch.tv/login", retries=2)
-        dismiss_overlays(page)
+        go_to_drops_inventory(page)
     except Exception as exc:
         logging.warning("Очистка cookies не удалась: %s", exc)
 
@@ -837,6 +873,7 @@ def twitch_logout_keep_browser(page: Page) -> None:
         logging.warning("Сессия Twitch может остаться активной — браузер не закрывался.")
     else:
         logging.info("Сессия Twitch сброшена через cookies, браузер открыт.")
+        go_to_drops_inventory(page)
 
 
 def logout(page: Page) -> None:
