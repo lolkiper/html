@@ -1002,7 +1002,7 @@ def log_worker_split(buckets: list[list[Account]], worker_profiles: list[str] | 
         logging.info("  Браузер %s (%s шт.%s): %s", worker_no, len(bucket), profile_hint, logins)
 
 
-def split_accounts_for_workers(
+def _browser_worker(
     worker_no: int,
     accounts: list[Account],
     config: AppConfig,
