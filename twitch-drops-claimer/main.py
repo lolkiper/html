@@ -727,7 +727,7 @@ def process_account_on_page(page: Page, account: Account) -> int:
     navigate(page, DROPS_URL)
     dismiss_overlays(page)
     dismiss_email_verification(page)
-    wait_until_logged_in(page, timeout_sec=5.0)
+    wait_until_logged_in(page, timeout_sec=2.0)
 
     claimed = claim_standoff_drops(page)
     logging.info("Получено наград Standoff: %s", claimed)
