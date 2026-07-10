@@ -41,7 +41,14 @@ from dolphin_client import DolphinClient, DolphinConfig
 DROPS_URL = "https://www.twitch.tv/drops/inventory"
 DEFAULT_TIMEOUT_MS = 60_000
 CLAIM_DELAY_RANGE = (1.0, 2.0)
-CLAIM_TEXTS = ("получить сейчас", "claim now")
+CLAIM_TEXTS = (
+    "получить сейчас",
+    "claim now",
+    "claim reward",
+    "revendică",
+    "revendica",
+    "redeem",
+)
 
 
 def get_base_dir() -> Path:
@@ -245,26 +252,67 @@ def dismiss_overlays(page: Page) -> None:
             break
 
 
+def login_form_visible(page: Page) -> bool:
+    selectors = [
+        '[data-a-target="passport-login-modal"]',
+        'input[name="login-username"]',
+        'input#login-username',
+        'input[autocomplete="username"]',
+        'form input[type="password"]',
+    ]
+    for sel in selectors:
+        loc = page.locator(sel)
+        if loc.count():
+            try:
+                if loc.first.is_visible():
+                    return True
+            except Exception:
+                pass
+    return False
+
+
 def is_logged_in(page: Page) -> bool:
-    if page.locator('button[data-a-target="user-menu-toggle"]').count():
+    if login_form_visible(page):
+        return False
+    login_btn = page.locator('button[data-a-target="login-button"]')
+    if login_btn.count():
         try:
-            return page.locator('button[data-a-target="user-menu-toggle"]').first.is_visible()
+            if login_btn.first.is_visible():
+                return False
+        except Exception:
+            pass
+    user_menu = page.locator('button[data-a-target="user-menu-toggle"]')
+    if user_menu.count():
+        try:
+            return user_menu.first.is_visible()
         except Exception:
             return False
-    return page.locator('button[data-a-target="login-button"]').count() == 0
+    return False
+
+
+def open_login_form(page: Page) -> None:
+    if login_form_visible(page):
+        return
+    login_btn = page.locator('button[data-a-target="login-button"]')
+    if login_btn.count() and login_btn.first.is_visible():
+        safe_click(login_btn)
+        return
+    logging.info("Открываю страницу входа Twitch...")
+    page.goto("https://www.twitch.tv/login", wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
 
 
 def perform_login(page: Page, account: Account) -> None:
     logging.info("Вход в аккаунт %s...", account.login)
-
-    login_btn = page.locator('button[data-a-target="login-button"]')
-    if login_btn.count() and login_btn.first.is_visible():
-        safe_click(login_btn)
+    dismiss_overlays(page)
+    open_login_form(page)
 
     username = page.locator(
         'input[name="login-username"], input#login-username, input[autocomplete="username"]'
     )
-    wait_visible(username)
+    wait_visible(username, timeout_ms=30_000)
+    username.first.click()
+    username.first.fill("")
     username.first.fill(account.login)
 
     password = page.locator(
@@ -275,49 +323,102 @@ def perform_login(page: Page, account: Account) -> None:
     else:
         next_btn = page.locator(
             'button[data-a-target="passport-login-button"], '
-            'button:has-text("Continue"), button:has-text("Продолжить")'
+            'button:has-text("Continue"), button:has-text("Продолжить"), '
+            'button:has-text("Continuă")'
         )
         if next_btn.count():
             safe_click(next_btn)
-        wait_visible(password)
+        wait_visible(password, timeout_ms=30_000)
         password.first.fill(account.password)
 
     submit = page.locator(
         'button[data-a-target="passport-login-button"], '
         'button[type="submit"]:has-text("Log In"), '
-        'button[type="submit"]:has-text("Войти")'
+        'button[type="submit"]:has-text("Войти"), '
+        'button[type="submit"]:has-text("Conectează-te"), '
+        'button[type="submit"]:has-text("Sign In")'
     )
-    safe_click(submit)
+    safe_click(submit, timeout_ms=30_000)
 
-    wait_visible(page.locator('button[data-a-target="user-menu-toggle"]'))
+    wait_visible(page.locator('button[data-a-target="user-menu-toggle"]'), timeout_ms=60_000)
     logging.info("Логин %s выполнен.", account.login)
 
 
+def ensure_account_session(page: Page, account: Account) -> None:
+    """Сброс чужой сессии и вход под нужным аккаунтом."""
+    dismiss_overlays(page)
+
+    if is_logged_in(page):
+        logging.info("Активна другая сессия — выход перед входом в %s", account.login)
+        try:
+            logout(page)
+            dismiss_overlays(page)
+            jitter_sleep(1.0, 2.0)
+        except Exception as exc:
+            logging.warning("Выход не удался (%s), продолжаем вход.", exc)
+
+    if not is_logged_in(page):
+        perform_login(page, account)
+    else:
+        raise RuntimeError(f"Не удалось переключиться на аккаунт {account.login}")
+
+
 def find_standoff_campaign(page: Page) -> Locator:
+    """Ищет блок кампании Standoff/SO2 с прокруткой страницы."""
     pattern = re.compile(r"standoff|so2", re.IGNORECASE)
-    candidates = page.locator(
-        '[data-a-target="drops-list-item"], [class*="drops"], article, div[role="listitem"]'
+    selectors = (
+        '[data-a-target="drops-list-item"]',
+        '[class*="drops"]',
+        '[class*="Drop"]',
+        'article',
+        'div[role="listitem"]',
+        'li',
     )
 
-    for i in range(candidates.count()):
-        card = candidates.nth(i)
-        try:
-            text = card.inner_text(timeout=5000)
-        except PlaywrightTimeout:
-            continue
-        if pattern.search(text):
-            logging.info("Кампания Standoff/SO2 найдена: %.80s...", text.replace("\n", " "))
-            card.scroll_into_view_if_needed()
-            return card
+    for scroll_pass in range(15):
+        for sel in selectors:
+            cards = page.locator(sel).filter(has_text=pattern)
+            count = cards.count()
+            for i in range(count):
+                card = cards.nth(i)
+                try:
+                    text = card.inner_text(timeout=3000)
+                except PlaywrightTimeout:
+                    continue
+                if pattern.search(text):
+                    logging.info(
+                        "Кампания Standoff/SO2 найдена (проход %s): %.80s...",
+                        scroll_pass + 1,
+                        text.replace("\n", " "),
+                    )
+                    card.scroll_into_view_if_needed()
+                    return card
 
-    fallback = page.locator("div, article, section").filter(has_text=pattern)
-    if fallback.count():
-        card = fallback.first
-        card.scroll_into_view_if_needed()
-        logging.info("Кампания найдена (fallback-селектор).")
-        return card
+        text_hit = page.get_by_text(pattern)
+        if text_hit.count():
+            card = text_hit.first.locator("xpath=ancestor::article[1]")
+            if not card.count():
+                card = text_hit.first.locator("xpath=ancestor::div[contains(@class,'drop') or contains(@class,'Drop')][1]")
+            if card.count():
+                card.scroll_into_view_if_needed()
+                logging.info("Кампания найдена через get_by_text (проход %s).", scroll_pass + 1)
+                return card
 
-    raise RuntimeError("Кампания Standoff 2 / SO2 не найдена на странице Drops.")
+        page.mouse.wheel(0, 800)
+        page.wait_for_timeout(500)
+
+    # Диагностика: сохранить скрин при отладке
+    screenshot = BASE_DIR / "debug_drops_not_found.png"
+    try:
+        page.screenshot(path=str(screenshot), full_page=True)
+        logging.error("Скрин сохранён: %s", screenshot)
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "Кампания Standoff 2 / SO2 не найдена. "
+        "Проверьте, что аккаунт залогинен и на странице есть активная кампания."
+    )
 
 
 def claim_buttons_in_campaign(campaign: Locator) -> Iterable[Locator]:
@@ -369,12 +470,16 @@ def scroll_inventory(page: Page) -> None:
 
 
 def logout(page: Page) -> None:
+    if not is_logged_in(page):
+        logging.info("Выход не требуется — сессия не активна.")
+        return
     logging.info("Выход из аккаунта...")
     safe_click(page.locator('button[data-a-target="user-menu-toggle"]'))
     safe_click(
         page.locator(
             'button[data-a-target="dropdown-logout"], '
-            'button:has-text("Log Out"), button:has-text("Выйти")'
+            'button:has-text("Log Out"), button:has-text("Выйти"), '
+            'button:has-text("Deconectare"), button[data-a-target="logout-button"]'
         )
     )
     page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
@@ -389,13 +494,14 @@ def process_account_on_page(page: Page, account: Account) -> int:
     page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
     dismiss_overlays(page)
 
+    ensure_account_session(page, account)
+
+    page.goto(DROPS_URL, wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    dismiss_overlays(page)
+
     if not is_logged_in(page):
-        perform_login(page, account)
-        page.goto(DROPS_URL, wait_until="domcontentloaded")
-        page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
-        dismiss_overlays(page)
-    else:
-        logging.info("Уже авторизован (проверьте, что это нужный аккаунт).")
+        raise RuntimeError(f"После входа аккаунт {account.login} не авторизован на Twitch")
 
     scroll_inventory(page)
     claimed = claim_standoff_drops(page)
