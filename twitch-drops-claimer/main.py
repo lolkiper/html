@@ -40,16 +40,16 @@ from dolphin_client import DolphinClient, DolphinConfig
 
 DROPS_URL = "https://www.twitch.tv/drops/inventory"
 DEFAULT_TIMEOUT_MS = 60_000
-CLAIM_DELAY_RANGE = (1.5, 2.5)
+CLAIM_DELAY_RANGE = (0.3, 0.5)
 
-# Паузы (секунды) — имитация человека, даём Twitch время отрисовать UI
-DELAY_AFTER_NAV = (2.5, 4.5)
-DELAY_AFTER_CLICK = (1.0, 2.0)
-DELAY_AFTER_TYPE = (0.8, 1.5)
-DELAY_AFTER_LOGIN = (4.0, 6.0)
-DELAY_AFTER_LOGOUT = (2.5, 4.0)
-DELAY_BETWEEN_ACCOUNTS = (5.0, 8.0)
-TYPE_DELAY_MS = (70, 140)
+# Паузы (секунды) — уменьшены в 5× от предыдущей версии
+DELAY_AFTER_NAV = (0.5, 0.9)
+DELAY_AFTER_CLICK = (0.2, 0.4)
+DELAY_AFTER_TYPE = (0.16, 0.3)
+DELAY_AFTER_LOGIN = (0.8, 1.2)
+DELAY_AFTER_LOGOUT = (0.5, 0.8)
+DELAY_BETWEEN_ACCOUNTS = (1.0, 1.6)
+TYPE_DELAY_MS = (14, 28)
 CLAIM_TEXTS = (
     "получить сейчас",
     "claim now",
@@ -227,28 +227,30 @@ def human_fill(locator: Locator, text: str, timeout_ms: int = DEFAULT_TIMEOUT_MS
     field = locator.first
     wait_visible(field, timeout_ms)
     field.click()
-    jitter_sleep(0.4, 0.9)
+    jitter_sleep(0.08, 0.18)
     field.fill("")
-    jitter_sleep(0.3, 0.6)
+    jitter_sleep(0.06, 0.12)
     field.press_sequentially(text, delay=random.randint(*TYPE_DELAY_MS))
     jitter_sleep(*DELAY_AFTER_TYPE)
 
 
-def wait_until_logged_in(page: Page, timeout_sec: float = 90.0) -> None:
+def wait_until_logged_in(page: Page, timeout_sec: float = 60.0) -> None:
     """Ждём, пока форма входа исчезнет и появится меню пользователя."""
     logging.info("Ожидание завершения авторизации (до %.0f сек)...", timeout_sec)
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
+        dismiss_email_verification(page)
         if is_logged_in(page) and not login_form_visible(page):
             jitter_sleep(*DELAY_AFTER_LOGIN)
+            dismiss_email_verification(page)
             if is_logged_in(page) and not login_form_visible(page):
                 try:
-                    page.wait_for_load_state("networkidle", timeout=20_000)
+                    page.wait_for_load_state("networkidle", timeout=15_000)
                 except PlaywrightTimeout:
                     pass
                 logging.info("Сессия Twitch подтверждена.")
                 return
-        jitter_sleep(0.8, 1.5)
+        jitter_sleep(0.16, 0.3)
     raise RuntimeError("Таймаут: авторизация не завершилась")
 
 
@@ -269,12 +271,67 @@ def safe_click(locator: Locator, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> None:
     target = locator.first
     wait_visible(target, timeout_ms)
     target.scroll_into_view_if_needed(timeout=timeout_ms)
-    jitter_sleep(0.3, 0.7)
+    jitter_sleep(0.06, 0.14)
     target.click(timeout=timeout_ms)
     jitter_sleep(*DELAY_AFTER_CLICK)
 
 
+def dismiss_email_verification(page: Page) -> bool:
+    """Закрывает модалку «Verify Your Email Address» — Remind me later или X."""
+    markers = (
+        "verify your email",
+        "verification code",
+        "подтвердите email",
+        "код подтверждения",
+        "verifică",
+    )
+    body = ""
+    try:
+        body = page.locator("body").inner_text(timeout=2000).lower()
+    except Exception:
+        pass
+
+    if not any(m in body for m in markers):
+        return False
+
+    logging.info("Обнаружено окно верификации email — закрываю...")
+    selectors = [
+        'button:has-text("Remind me later")',
+        'button:has-text("Напомнить позже")',
+        'button:has-text("Amintește-mi mai târziu")',
+        'button:has-text("Later")',
+        '[data-a-target="modal-close-button"]',
+        'div[role="dialog"] button[aria-label="Close"]',
+        'div[role="dialog"] button[aria-label="Закрыть"]',
+    ]
+    for sel in selectors:
+        btn = page.locator(sel)
+        if btn.count():
+            try:
+                if btn.first.is_visible():
+                    btn.first.click(timeout=5000)
+                    logging.info("Окно верификации закрыто: %s", sel)
+                    jitter_sleep(0.2, 0.4)
+                    return True
+            except PlaywrightTimeout:
+                pass
+
+    dialog = page.locator('div[role="dialog"]').filter(
+        has_text=re.compile(r"verify|verification|verific", re.IGNORECASE)
+    )
+    if dialog.count():
+        try:
+            dialog.first.locator("button").first.click(timeout=3000)
+            logging.info("Окно верификации закрыто через dialog.")
+            jitter_sleep(0.2, 0.4)
+            return True
+        except PlaywrightTimeout:
+            pass
+    return False
+
+
 def dismiss_overlays(page: Page) -> None:
+    dismiss_email_verification(page)
     selectors = [
         'button[data-a-target="consent-banner-accept"]',
         'button:has-text("Accept")',
@@ -295,7 +352,7 @@ def dismiss_overlays(page: Page) -> None:
                     btn.first.click(timeout=3000)
                     logging.info("Закрыт оверлей: %s", sel)
                     dismissed = True
-                    jitter_sleep(0.3, 0.8)
+                    jitter_sleep(0.06, 0.16)
                 except PlaywrightTimeout:
                     pass
         if not dismissed:
@@ -342,12 +399,12 @@ def is_logged_in(page: Page) -> bool:
 
 def open_login_form(page: Page) -> None:
     if login_form_visible(page):
-        jitter_sleep(1.0, 2.0)
+        jitter_sleep(0.2, 0.4)
         return
     login_btn = page.locator('button[data-a-target="login-button"]')
     if login_btn.count() and login_btn.first.is_visible():
         safe_click(login_btn)
-        jitter_sleep(1.5, 2.5)
+        jitter_sleep(0.3, 0.5)
         return
     logging.info("Открываю страницу входа Twitch...")
     navigate(page, "https://www.twitch.tv/login")
@@ -357,7 +414,7 @@ def perform_login(page: Page, account: Account) -> None:
     logging.info("Вход в аккаунт %s...", account.login)
     dismiss_overlays(page)
     open_login_form(page)
-    jitter_sleep(1.0, 2.0)
+    jitter_sleep(0.2, 0.4)
 
     username = page.locator(
         'input[name="login-username"], input#login-username, input[autocomplete="username"]'
@@ -377,10 +434,10 @@ def perform_login(page: Page, account: Account) -> None:
         )
         if next_btn.count():
             safe_click(next_btn)
-            jitter_sleep(1.5, 2.5)
+            jitter_sleep(0.3, 0.5)
         human_fill(password, account.password, timeout_ms=30_000)
 
-    jitter_sleep(1.0, 2.0)
+    jitter_sleep(0.2, 0.4)
     submit = page.locator(
         'button[data-a-target="passport-login-button"]:not([disabled]), '
         'button[type="submit"]:has-text("Log In"):not([disabled]), '
@@ -411,7 +468,7 @@ def ensure_account_session(page: Page, account: Account) -> None:
         try:
             logout(page)
             dismiss_overlays(page)
-            jitter_sleep(1.0, 2.0)
+            jitter_sleep(0.2, 0.4)
         except Exception as exc:
             logging.warning("Выход не удался (%s), продолжаем вход.", exc)
 
@@ -420,7 +477,7 @@ def ensure_account_session(page: Page, account: Account) -> None:
     else:
         raise RuntimeError(f"Не удалось переключиться на аккаунт {account.login}")
 
-    jitter_sleep(2.0, 3.5)
+    jitter_sleep(0.4, 0.7)
 
 
 def find_standoff_campaign(page: Page) -> Locator:
@@ -465,7 +522,7 @@ def find_standoff_campaign(page: Page) -> Locator:
                 return card
 
         page.mouse.wheel(0, 800)
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(100)
 
     # Диагностика: сохранить скрин при отладке
     screenshot = BASE_DIR / "debug_drops_not_found.png"
@@ -522,13 +579,13 @@ def claim_standoff_drops(page: Page) -> int:
 
 def scroll_inventory(page: Page) -> None:
     logging.info("Прокрутка страницы Drops...")
-    jitter_sleep(1.5, 2.5)
+    jitter_sleep(0.3, 0.5)
     for _ in range(8):
         page.mouse.wheel(0, 900)
-        page.wait_for_timeout(random.randint(500, 800))
+        page.wait_for_timeout(random.randint(100, 160))
     page.evaluate("window.scrollTo(0, 0)")
-    page.wait_for_timeout(random.randint(600, 1000))
-    jitter_sleep(1.0, 2.0)
+    page.wait_for_timeout(random.randint(120, 200))
+    jitter_sleep(0.2, 0.4)
 
 
 def logout(page: Page) -> None:
@@ -560,7 +617,8 @@ def process_account_on_page(page: Page, account: Account) -> int:
 
     navigate(page, DROPS_URL)
     dismiss_overlays(page)
-    wait_until_logged_in(page, timeout_sec=30.0)
+    dismiss_email_verification(page)
+    wait_until_logged_in(page, timeout_sec=20.0)
 
     scroll_inventory(page)
     claimed = claim_standoff_drops(page)
