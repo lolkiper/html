@@ -539,12 +539,9 @@ def ensure_account_session(page: Page, account: Account) -> None:
 
     if is_logged_in(page):
         logging.info("Активна другая сессия — выход перед входом в %s", account.login)
-        try:
-            logout(page)
-            dismiss_overlays(page)
-            jitter_sleep(0.2, 0.4)
-        except Exception as exc:
-            logging.warning("Выход не удался (%s), принудительный сброс сессии.", exc)
+        twitch_logout_keep_browser(page)
+        dismiss_overlays(page)
+        jitter_sleep(0.2, 0.4)
 
     if is_logged_in(page):
         logging.warning("Сессия всё ещё активна — очистка cookies и /login")
@@ -778,22 +775,72 @@ def claim_standoff_drops(page: Page) -> int:
     return claimed
 
 
-def logout(page: Page) -> None:
+def _logout_via_ui(page: Page) -> bool:
+    """Выход через меню Twitch. Возвращает True, если сессия сброшена."""
     if not is_logged_in(page):
-        logging.info("Выход не требуется — сессия не активна.")
-        return
-    logging.info("Выход из аккаунта...")
-    safe_click(page.locator('button[data-a-target="user-menu-toggle"]'))
-    safe_click(
-        page.locator(
+        return True
+
+    logging.info("Выход из Twitch через меню...")
+    try:
+        dismiss_overlays(page)
+        menu = page.locator('button[data-a-target="user-menu-toggle"]')
+        if menu.count():
+            menu.first.click(timeout=10_000)
+            jitter_sleep(0.2, 0.4)
+
+        logout_btn = page.locator(
             'button[data-a-target="dropdown-logout"], '
             'button:has-text("Log Out"), button:has-text("Выйти"), '
             'button:has-text("Deconectare"), button[data-a-target="logout-button"]'
         )
-    )
-    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
-    jitter_sleep(*DELAY_AFTER_LOGOUT)
-    logging.info("Выход выполнен.")
+        if logout_btn.count():
+            logout_btn.first.click(timeout=10_000)
+            jitter_sleep(*DELAY_AFTER_LOGOUT)
+        else:
+            return False
+
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except PlaywrightTimeout:
+            pass
+        return not is_logged_in(page)
+    except Exception as exc:
+        logging.warning("UI-выход не удался: %s", exc)
+        return False
+
+
+def twitch_logout_keep_browser(page: Page) -> None:
+    """Выход только из Twitch. Окно Dolphin/Chromium не закрывается."""
+    if not is_page_alive(page):
+        logging.warning("Страница недоступна — пропуск выхода из Twitch.")
+        return
+
+    logging.info("Выход из Twitch (браузер остаётся открытым)...")
+    if _logout_via_ui(page):
+        logging.info("Выход из Twitch выполнен, браузер открыт.")
+        return
+
+    logging.warning("Меню не сработало — очистка cookies без закрытия браузера...")
+    try:
+        page.context.clear_cookies()
+        navigate(page, "https://www.twitch.tv/login", retries=2)
+        dismiss_overlays(page)
+    except Exception as exc:
+        logging.warning("Очистка cookies не удалась: %s", exc)
+
+    if is_logged_in(page):
+        logging.warning("Сессия Twitch может остаться активной — браузер не закрывался.")
+    else:
+        logging.info("Сессия Twitch сброшена через cookies, браузер открыт.")
+
+
+def logout(page: Page) -> None:
+    if not is_logged_in(page):
+        logging.info("Выход не требуется — сессия не активна.")
+        return
+    twitch_logout_keep_browser(page)
+    if is_logged_in(page):
+        raise RuntimeError("Не удалось выйти из Twitch")
 
 
 def process_account_on_page(page: Page, account: Account) -> int:
@@ -813,15 +860,19 @@ def process_account_on_page(page: Page, account: Account) -> int:
     claimed = claim_standoff_drops(page)
     logging.info("Получено наград Standoff: %s", claimed)
 
-    logout(page)
+    twitch_logout_keep_browser(page)
     log_line(SUCCESS_FILE, f"{account.login}: OK, claimed={claimed}")
     logging.info("Аккаунт %s обработан успешно.", account.login)
     return claimed
 
 
 def get_page(context: BrowserContext) -> Page:
-    if context.pages:
-        return context.pages[0]
+    for page in context.pages:
+        try:
+            if not page.is_closed():
+                return page
+        except Exception:
+            continue
     return context.new_page()
 
 
@@ -904,18 +955,23 @@ def _browser_worker(
             page: Page | None = None
             active_profile_id: str | None = None
 
-            def close_dolphin_session() -> None:
+            def close_dolphin_session(shutdown_profile: bool = True) -> None:
                 nonlocal browser, page, active_profile_id
+                profile_to_stop = active_profile_id if shutdown_profile else None
                 if browser:
                     try:
-                        browser.close()
+                        browser.disconnect()
                     except Exception:
-                        pass
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
                     browser = None
                     page = None
-                if active_profile_id:
-                    dolphin.stop_profile(active_profile_id)
+                if profile_to_stop:
+                    dolphin.stop_profile(profile_to_stop)
                     jitter_sleep(0.8, 1.4)
+                if shutdown_profile:
                     active_profile_id = None
 
             def ensure_dolphin_page(profile_id: str) -> Page:
@@ -928,7 +984,7 @@ def _browser_worker(
                     assert page is not None
                     return page
 
-                close_dolphin_session()
+                close_dolphin_session(shutdown_profile=True)
                 browser, page = _open_dolphin_session(worker_no, dolphin, pw, profile_id)
                 active_profile_id = profile_id
                 return page
@@ -952,13 +1008,14 @@ def _browser_worker(
                         run_account(account, profile_id)
                         jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
                     except Exception as exc:
-                        if is_session_lost_error(exc) or not is_page_alive(page):
+                        page_dead = not is_page_alive(page)
+                        if page_dead or is_session_lost_error(exc):
                             logging.warning(
                                 "[Браузер %s] Сессия потеряна у %s — перезапуск браузера...",
                                 worker_no,
                                 account.login,
                             )
-                            close_dolphin_session()
+                            close_dolphin_session(shutdown_profile=True)
                             try:
                                 run_account(account, profile_id)
                                 jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
@@ -970,10 +1027,15 @@ def _browser_worker(
                         msg = f"{account.login}: {exc}"
                         logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
                         log_line(ERRORS_FILE, msg)
-                        if is_session_lost_error(exc):
-                            close_dolphin_session()
+                        if page_dead or is_session_lost_error(exc):
+                            close_dolphin_session(shutdown_profile=True)
+                        else:
+                            logging.info(
+                                "[Браузер %s] Браузер остаётся открыт — следующий аккаунт.",
+                                worker_no,
+                            )
             finally:
-                close_dolphin_session()
+                close_dolphin_session(shutdown_profile=True)
         else:
             browser = pw.chromium.launch(headless=headless)
             try:
@@ -1114,9 +1176,12 @@ def run_dolphin(pw: Playwright, accounts: list[Account], config: AppConfig) -> i
         finally:
             if browser:
                 try:
-                    browser.close()
+                    browser.disconnect()
                 except Exception:
-                    pass
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
             dolphin.stop_profile(profile_id)
 
     return failures
