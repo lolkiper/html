@@ -794,13 +794,23 @@ def log_worker_split(buckets: list[list[Account]]) -> None:
         logging.info("  Браузер %s (%s шт.): %s", worker_no, len(bucket), logins)
 
 
-def process_account_isolated(account: Account, config: AppConfig, headless: bool) -> int:
-    """Один аккаунт в отдельном браузере (свой Playwright-поток)."""
+def _browser_worker(
+    worker_no: int,
+    accounts: list[Account],
+    config: AppConfig,
+    headless: bool,
+) -> int:
+    """Один браузер на воркер: между аккаунтами только logout, закрытие в конце очереди."""
+    failures = 0
+    logging.info(
+        "Браузер %s стартовал — %s аккаунт(ов): %s",
+        worker_no,
+        len(accounts),
+        ", ".join(account.login for account in accounts),
+    )
+
     with sync_playwright() as pw:
         if config.use_dolphin:
-            profile_id = account.profile_id or config.dolphin_profile_id
-            if not profile_id:
-                raise ValueError(f"Нет profile_id для аккаунта {account.login}")
             if not config.dolphin_token:
                 raise ValueError("DOLPHIN_TOKEN не задан в config.json")
 
@@ -808,17 +818,55 @@ def process_account_isolated(account: Account, config: AppConfig, headless: bool
                 DolphinConfig(api_url=config.dolphin_api_url, token=config.dolphin_token)
             )
             browser: Browser | None = None
-            try:
-                browser, context = dolphin.connect(pw, profile_id)
-                page = get_page(context)
-                return process_account_on_page(page, account)
-            finally:
+            page: Page | None = None
+            active_profile_id: str | None = None
+
+            def close_dolphin_session() -> None:
+                nonlocal browser, page, active_profile_id
                 if browser:
                     try:
                         browser.close()
                     except Exception:
                         pass
-                dolphin.stop_profile(profile_id)
+                    browser = None
+                    page = None
+                if active_profile_id:
+                    dolphin.stop_profile(active_profile_id)
+                    jitter_sleep(0.8, 1.4)
+                    active_profile_id = None
+
+            try:
+                for account in accounts:
+                    profile_id = account.profile_id or config.dolphin_profile_id
+                    if not profile_id:
+                        failures += 1
+                        msg = f"{account.login}: нет profile_id"
+                        logging.error("[Браузер %s] %s", worker_no, msg)
+                        log_line(ERRORS_FILE, msg)
+                        continue
+
+                    try:
+                        if profile_id != active_profile_id:
+                            close_dolphin_session()
+                            logging.info(
+                                "[Браузер %s] Запуск профиля Dolphin %s",
+                                worker_no,
+                                profile_id,
+                            )
+                            browser, context = dolphin.connect(pw, profile_id)
+                            page = get_page(context)
+                            active_profile_id = profile_id
+
+                        assert page is not None
+                        process_account_on_page(page, account)
+                        jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                    except Exception as exc:
+                        failures += 1
+                        msg = f"{account.login}: {exc}"
+                        logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
+                        log_line(ERRORS_FILE, msg)
+            finally:
+                close_dolphin_session()
         else:
             browser = pw.chromium.launch(headless=headless)
             try:
@@ -827,38 +875,18 @@ def process_account_isolated(account: Account, config: AppConfig, headless: bool
                     locale="ru-RU",
                 )
                 page = context.new_page()
-                try:
-                    return process_account_on_page(page, account)
-                finally:
-                    context.close()
+                for account in accounts:
+                    try:
+                        process_account_on_page(page, account)
+                        jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                    except Exception as exc:
+                        failures += 1
+                        msg = f"{account.login}: {exc}"
+                        logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
+                        log_line(ERRORS_FILE, msg)
             finally:
                 browser.close()
-    raise RuntimeError("unreachable")
 
-
-def _browser_worker(
-    worker_no: int,
-    accounts: list[Account],
-    config: AppConfig,
-    headless: bool,
-) -> int:
-    """Один браузер обрабатывает только свою очередь аккаунтов."""
-    failures = 0
-    logging.info(
-        "Браузер %s стартовал — %s аккаунт(ов): %s",
-        worker_no,
-        len(accounts),
-        ", ".join(account.login for account in accounts),
-    )
-    for account in accounts:
-        try:
-            process_account_isolated(account, config, headless)
-            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
-        except Exception as exc:
-            failures += 1
-            msg = f"{account.login}: {exc}"
-            logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
-            log_line(ERRORS_FILE, msg)
     logging.info("Браузер %s завершил работу.", worker_no)
     return failures
 
