@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Twitch Drops claimer — последовательная обработка аккаунтов из accounts.txt.
+Twitch Drops claimer — Standoff 2 / SO2.
 
-Стек: Playwright (Chromium), стандартный браузер без антидетекта.
-Используйте только для аккаунтов, которыми вы владеете, и в рамках правил Twitch.
+Режимы браузера:
+  - Dolphin{anty}: USE_DOLPHIN=true в config.json (рекомендуется)
+  - Chromium:    python main.py --chromium
 
 Сборка:
   pip install -r requirements.txt
@@ -14,6 +15,7 @@ Twitch Drops claimer — последовательная обработка а�
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import random
 import re
@@ -29,14 +31,16 @@ from playwright.sync_api import (
     BrowserContext,
     Locator,
     Page,
+    Playwright,
     TimeoutError as PlaywrightTimeout,
     sync_playwright,
 )
 
+from dolphin_client import DolphinClient, DolphinConfig
+
 DROPS_URL = "https://www.twitch.tv/drops/inventory"
 DEFAULT_TIMEOUT_MS = 60_000
 CLAIM_DELAY_RANGE = (1.0, 2.0)
-CAMPAIGN_MARKERS = ("standoff", "so2")
 CLAIM_TEXTS = ("получить сейчас", "claim now")
 
 
@@ -48,6 +52,8 @@ def get_base_dir() -> Path:
 
 BASE_DIR = get_base_dir()
 ACCOUNTS_FILE = BASE_DIR / "accounts.txt"
+PROFILES_FILE = BASE_DIR / "profiles.txt"
+CONFIG_FILE = BASE_DIR / "config.json"
 ERRORS_FILE = BASE_DIR / "errors.txt"
 SUCCESS_FILE = BASE_DIR / "success_log.txt"
 
@@ -57,6 +63,31 @@ class Account:
     login: str
     password: str
     line_no: int
+    profile_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    use_dolphin: bool
+    dolphin_api_url: str
+    dolphin_token: str
+    dolphin_profile_id: str
+    headless: bool = False
+
+    @classmethod
+    def load(cls, force_chromium: bool = False) -> AppConfig:
+        data: dict = {}
+        if CONFIG_FILE.exists():
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+
+        use_dolphin = bool(data.get("USE_DOLPHIN", True)) and not force_chromium
+        return cls(
+            use_dolphin=use_dolphin,
+            dolphin_api_url=str(data.get("DOLPHIN_API_URL", "http://localhost:3001")),
+            dolphin_token=str(data.get("DOLPHIN_TOKEN", "")),
+            dolphin_profile_id=str(data.get("DOLPHIN_PROFILE_ID", "")),
+            headless=bool(data.get("HEADLESS", False)),
+        )
 
 
 def setup_logging() -> None:
@@ -74,7 +105,7 @@ def log_line(path: Path, message: str) -> None:
         fh.write(f"[{stamp}] {message}\n")
 
 
-def parse_accounts(path: Path) -> list[Account]:
+def parse_accounts(path: Path, profile_ids: list[str]) -> list[Account]:
     if not path.exists():
         raise FileNotFoundError(f"Файл аккаунтов не найден: {path}")
 
@@ -91,8 +122,29 @@ def parse_accounts(path: Path) -> list[Account]:
         if not login or not password:
             logging.warning("Строка %s пропущена: пустой логин или пароль", idx)
             continue
-        accounts.append(Account(login=login, password=password, line_no=idx))
+        profile_id = profile_ids[len(accounts)] if len(accounts) < len(profile_ids) else None
+        accounts.append(Account(login=login, password=password, line_no=idx, profile_id=profile_id))
     return accounts
+
+
+def load_profile_ids(default_profile_id: str, account_count: int) -> list[str]:
+    if not PROFILES_FILE.exists():
+        if not default_profile_id:
+            raise ValueError(
+                "Укажите DOLPHIN_PROFILE_ID в config.json или создайте profiles.txt"
+            )
+        return [default_profile_id] * account_count
+
+    ids = [
+        line.strip()
+        for line in PROFILES_FILE.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if not ids:
+        return [default_profile_id] * account_count
+    while len(ids) < account_count:
+        ids.append(ids[-1])
+    return ids[:account_count]
 
 
 def jitter_sleep(lo: float, hi: float) -> None:
@@ -160,7 +212,6 @@ def perform_login(page: Page, account: Account) -> None:
     wait_visible(username)
     username.first.fill(account.login)
 
-    # Twitch: иногда пароль на том же экране, иногда кнопка «Далее»
     password = page.locator(
         'input[name="password"], input#password-input, input[type="password"]'
     )
@@ -168,7 +219,8 @@ def perform_login(page: Page, account: Account) -> None:
         password.first.fill(account.password)
     else:
         next_btn = page.locator(
-            'button[data-a-target="passport-login-button"], button:has-text("Continue"), button:has-text("Продолжить")'
+            'button[data-a-target="passport-login-button"], '
+            'button:has-text("Continue"), button:has-text("Продолжить")'
         )
         if next_btn.count():
             safe_click(next_btn)
@@ -187,15 +239,9 @@ def perform_login(page: Page, account: Account) -> None:
 
 
 def find_standoff_campaign(page: Page) -> Locator:
-    """Находит контейнер кампании Standoff 2 / SO2 на странице Drops."""
     pattern = re.compile(r"standoff|so2", re.IGNORECASE)
-
-    # Карточки кампаний на inventory
     candidates = page.locator(
-        '[data-a-target="drops-list-item"], '
-        '[class*="drops"], '
-        'article, '
-        'div[role="listitem"]'
+        '[data-a-target="drops-list-item"], [class*="drops"], article, div[role="listitem"]'
     )
 
     for i in range(candidates.count()):
@@ -209,7 +255,6 @@ def find_standoff_campaign(page: Page) -> Locator:
             card.scroll_into_view_if_needed()
             return card
 
-    # Fallback: любой блок с текстом SO2 / Standoff
     fallback = page.locator("div, article, section").filter(has_text=pattern)
     if fallback.count():
         card = fallback.first
@@ -274,49 +319,123 @@ def logout(page: Page) -> None:
     safe_click(
         page.locator(
             'button[data-a-target="dropdown-logout"], '
-            'button:has-text("Log Out"), '
-            'button:has-text("Выйти")'
+            'button:has-text("Log Out"), button:has-text("Выйти")'
         )
     )
     page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
     logging.info("Выход выполнен.")
 
 
-def process_account(browser: Browser, account: Account, headless: bool) -> None:
-    context: BrowserContext = browser.new_context(
-        viewport={"width": 1280, "height": 720},
-        locale="ru-RU",
-    )
-    page = context.new_page()
+def process_account_on_page(page: Page, account: Account) -> int:
     page.set_default_timeout(DEFAULT_TIMEOUT_MS)
+    logging.info("=== Аккаунт %s (строка %s) ===", account.login, account.line_no)
 
-    try:
-        logging.info("=== Аккаунт %s (строка %s) ===", account.login, account.line_no)
+    page.goto(DROPS_URL, wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+    dismiss_overlays(page)
+
+    if not is_logged_in(page):
+        perform_login(page, account)
         page.goto(DROPS_URL, wait_until="domcontentloaded")
         page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
         dismiss_overlays(page)
+    else:
+        logging.info("Уже авторизован (проверьте, что это нужный аккаунт).")
 
-        if not is_logged_in(page):
-            perform_login(page, account)
-            page.goto(DROPS_URL, wait_until="domcontentloaded")
-            page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
-            dismiss_overlays(page)
-        else:
-            logging.info("Уже авторизован как %s.", account.login)
+    scroll_inventory(page)
+    claimed = claim_standoff_drops(page)
+    logging.info("Получено наград Standoff: %s", claimed)
 
-        scroll_inventory(page)
-        claimed = claim_standoff_drops(page)
-        logging.info("Получено наград Standoff: %s", claimed)
+    logout(page)
+    log_line(SUCCESS_FILE, f"{account.login}: OK, claimed={claimed}")
+    logging.info("Аккаунт %s обработан успешно.", account.login)
+    return claimed
 
-        logout(page)
-        log_line(SUCCESS_FILE, f"{account.login}: OK, claimed={claimed}")
-        logging.info("Аккаунт %s обработан успешно.", account.login)
+
+def get_page(context: BrowserContext) -> Page:
+    if context.pages:
+        return context.pages[0]
+    return context.new_page()
+
+
+def run_chromium(pw: Playwright, accounts: list[Account], headless: bool) -> int:
+    failures = 0
+    browser = pw.chromium.launch(headless=headless)
+    try:
+        for account in accounts:
+            context = browser.new_context(viewport={"width": 1280, "height": 720}, locale="ru-RU")
+            page = context.new_page()
+            try:
+                process_account_on_page(page, account)
+                jitter_sleep(2.0, 4.0)
+            except Exception as exc:
+                failures += 1
+                msg = f"{account.login}: {exc}"
+                logging.error("Ошибка: %s", msg)
+                log_line(ERRORS_FILE, msg)
+            finally:
+                context.close()
     finally:
-        context.close()
+        browser.close()
+    return failures
 
 
-def run(headless: bool, limit: int | None) -> int:
-    accounts = parse_accounts(ACCOUNTS_FILE)
+def run_dolphin(pw: Playwright, accounts: list[Account], config: AppConfig) -> int:
+    if not config.dolphin_token:
+        raise ValueError("DOLPHIN_TOKEN не задан в config.json")
+
+    dolphin = DolphinClient(
+        DolphinConfig(api_url=config.dolphin_api_url, token=config.dolphin_token)
+    )
+    failures = 0
+
+    # Группируем аккаунты по profile_id — один запуск профиля на группу
+    groups: dict[str, list[Account]] = {}
+    for acc in accounts:
+        pid = acc.profile_id or config.dolphin_profile_id
+        if not pid:
+            raise ValueError(f"Нет profile_id для аккаунта {acc.login}")
+        groups.setdefault(pid, []).append(acc)
+
+    for profile_id, group in groups.items():
+        browser: Browser | None = None
+        try:
+            logging.info("Запуск профиля Dolphin: %s (%s аккаунт(ов))", profile_id, len(group))
+            browser, context = dolphin.connect(pw, profile_id)
+            page = get_page(context)
+
+            for account in group:
+                try:
+                    process_account_on_page(page, account)
+                    jitter_sleep(2.0, 4.0)
+                except Exception as exc:
+                    failures += 1
+                    msg = f"{account.login}: {exc}"
+                    logging.error("Ошибка: %s", msg)
+                    log_line(ERRORS_FILE, msg)
+        finally:
+            if browser:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            dolphin.stop_profile(profile_id)
+
+    return failures
+
+
+def run(force_chromium: bool, headless: bool | None, limit: int | None) -> int:
+    app_config = AppConfig.load(force_chromium=force_chromium)
+    if headless is None:
+        headless = app_config.headless
+
+    profile_ids = load_profile_ids(
+        app_config.dolphin_profile_id,
+        len([ln for ln in ACCOUNTS_FILE.read_text(encoding="utf-8").splitlines()
+             if ln.strip() and not ln.strip().startswith("#") and ":" in ln]),
+    )
+    accounts = parse_accounts(ACCOUNTS_FILE, profile_ids)
+
     if not accounts:
         logging.error("В %s нет валидных аккаунтов.", ACCOUNTS_FILE)
         return 1
@@ -324,25 +443,14 @@ def run(headless: bool, limit: int | None) -> int:
     if limit is not None:
         accounts = accounts[:limit]
 
-    logging.info("К обработке: %s аккаунт(ов).", len(accounts))
-    failures = 0
+    mode = "Dolphin Anty" if app_config.use_dolphin else "Chromium"
+    logging.info("Режим: %s. К обработке: %s аккаунт(ов).", mode, len(accounts))
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=headless)
-
-        try:
-            for account in accounts:
-                try:
-                    process_account(browser, account, headless)
-                    jitter_sleep(2.0, 4.0)
-                except Exception as exc:
-                    failures += 1
-                    msg = f"{account.login}: {exc}"
-                    logging.error("Ошибка: %s", msg)
-                    log_line(ERRORS_FILE, msg)
-                    continue
-        finally:
-            browser.close()
+        if app_config.use_dolphin:
+            failures = run_dolphin(pw, accounts, app_config)
+        else:
+            failures = run_chromium(pw, accounts, headless)
 
     logging.info("Готово. Успешно: %s, ошибок: %s.", len(accounts) - failures, failures)
     return 0 if failures == 0 else 2
@@ -350,11 +458,17 @@ def run(headless: bool, limit: int | None) -> int:
 
 def main() -> None:
     setup_logging()
-    parser = argparse.ArgumentParser(description="Twitch Drops — Standoff 2 claimer")
+    parser = argparse.ArgumentParser(description="Twitch Drops — Standoff 2 (Dolphin / Chromium)")
+    parser.add_argument(
+        "--chromium",
+        action="store_true",
+        help="Использовать обычный Chromium вместо Dolphin",
+    )
     parser.add_argument(
         "--headless",
         action="store_true",
-        help="Запуск без окна браузера",
+        default=None,
+        help="Только для Chromium: без окна браузера",
     )
     parser.add_argument(
         "--limit",
@@ -363,7 +477,7 @@ def main() -> None:
         help="Обработать только первые N аккаунтов",
     )
     args = parser.parse_args()
-    sys.exit(run(headless=args.headless, limit=args.limit))
+    sys.exit(run(force_chromium=args.chromium, headless=args.headless, limit=args.limit))
 
 
 if __name__ == "__main__":
