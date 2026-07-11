@@ -57,7 +57,7 @@ CLAIM_TEXTS = (
 )
 # Только эта кампания — не трогаем другие игры на странице
 CAMPAIGN_TITLE_REGEX = re.compile(
-    r"SO2\s*JumbleRumble|JumbleRumble\s*:\s*Major",
+    r"SO2\s*JumbleRumble|JumbleRumble\s*:\s*Major(?:\s*2)?",
     re.IGNORECASE,
 )
 CAMPAIGN_CLAIM_BTN_REGEX = re.compile(r"claim now|получить сейчас", re.IGNORECASE)
@@ -636,7 +636,7 @@ def _find_campaign_root(page: Page) -> tuple[Locator, int]:
             document.querySelectorAll('[data-farm-jumblerumble]').forEach(
                 el => el.removeAttribute('data-farm-jumblerumble')
             );
-            const titleRe = /SO2\\s*JumbleRumble|JumbleRumble\\s*:\\s*Major/i;
+            const titleRe = /SO2\\s*JumbleRumble|JumbleRumble\\s*:\\s*Major(?:\\s*2)?/i;
             const isClaimLabel = (t) => /claim\\s*now/i.test(t) || /получить\\s*сейчас/i.test(t);
             const hasScroller = (node) => [...node.querySelectorAll('*')].some(
                 n => n.scrollWidth > n.clientWidth + 20
@@ -743,25 +743,78 @@ def _collect_claim_targets(campaign: Locator) -> list[dict]:
 
 
 def _get_campaign_scrollers(campaign: Locator) -> list[dict]:
-    """Все горизонтальные ряды с прокруткой внутри кампании."""
+    """Горизонтальные ряды с кейсами — In Progress (не заголовок Major 2)."""
     return campaign.evaluate(
         """(root) => {
-            const scrollers = [];
-            const seen = new Set();
-            for (const node of [root, ...root.querySelectorAll('*')]) {
-                const overflow = node.scrollWidth - node.clientWidth;
-                if (overflow < 30) continue;
-                const key = node.tagName + ':' + Math.round(node.getBoundingClientRect().y);
-                if (seen.has(key)) continue;
-                seen.add(key);
-                scrollers.push({
-                    key,
-                    overflow,
-                    y: node.getBoundingClientRect().y + node.getBoundingClientRect().height / 2,
-                });
+            const isClaim = (t) => /claim\\s*now/i.test(t) || /получить\\s*сейчас/i.test(t);
+            const rows = [];
+            const seenY = new Set();
+
+            const findScrollerBelow = (anchor, name) => {
+                let base = anchor;
+                for (let up = 0; up < 10 && base; up++, base = base.parentElement) {
+                    for (const node of base.querySelectorAll('*')) {
+                        const overflow = node.scrollWidth - node.clientWidth;
+                        if (overflow < 60) continue;
+                        const r = node.getBoundingClientRect();
+                        if (r.height < 70 || r.width < 280) continue;
+                        if (r.y < anchor.getBoundingClientRect().y - 5) continue;
+
+                        const text = (node.innerText || '').trim().toLowerCase();
+                        if (text.length < 15) continue;
+                        if (/^so2\\s*jumblerumble|jumblerumble\\s*:\\s*major/i.test(text) && !/crate|claim|%/i.test(text)) continue;
+                        if (/^major\\s*2$/i.test(text.trim())) continue;
+
+                        const hasReward = /crate|claim|connect|hour|час|%/i.test(text);
+                        if (!hasReward) continue;
+
+                        const yKey = Math.round(r.y / 25);
+                        if (seenY.has(yKey)) continue;
+                        seenY.add(yKey);
+                        rows.push({
+                            name,
+                            key: name + ':' + yKey,
+                            overflow,
+                            y: r.y + r.height / 2,
+                        });
+                    }
+                }
+            };
+
+            for (const el of root.querySelectorAll('*')) {
+                const t = (el.textContent || '').trim().toLowerCase();
+                if (t.length > 40) continue;
+                if (t === 'in progress' || t.startsWith('in progress')) {
+                    findScrollerBelow(el, 'In Progress');
+                }
             }
-            scrollers.sort((a, b) => a.y - b.y);
-            return scrollers;
+
+            if (rows.length === 0) {
+                let best = null;
+                let bestOverflow = 0;
+                for (const node of root.querySelectorAll('*')) {
+                    const overflow = node.scrollWidth - node.clientWidth;
+                    if (overflow < 80) continue;
+                    const r = node.getBoundingClientRect();
+                    if (r.height < 70 || r.width < 300) continue;
+                    const text = (node.innerText || '').toLowerCase();
+                    if (!/crate|claim|hour|час|%/i.test(text)) continue;
+                    if (/jumblerumble|major\\s*2/i.test(text) && !/crate/i.test(text)) continue;
+                    if (overflow > bestOverflow) {
+                        bestOverflow = overflow;
+                        best = {
+                            name: 'In Progress',
+                            key: 'main',
+                            overflow,
+                            y: r.y + r.height / 2,
+                        };
+                    }
+                }
+                if (best) rows.push(best);
+            }
+
+            rows.sort((a, b) => a.y - b.y);
+            return rows;
         }"""
     )
 
@@ -874,23 +927,24 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator) -> int:
     seen: set[str] = set()
     scrollers = _get_campaign_scrollers(campaign)
     if not scrollers:
-        scrollers = [{"key": "all", "overflow": 0, "y": 0}]
+        scrollers = [{"name": "In Progress", "key": "all", "overflow": 0, "y": 0}]
 
-    logging.info("Горизонтальных рядов в JumbleRumble: %s", len(scrollers))
+    logging.info("Рядов с кейсами в JumbleRumble: %s", len(scrollers))
 
     for row_idx, row in enumerate(scrollers, start=1):
+        row_name = row.get("name", f"Ряд {row_idx}")
         reset_campaign_horizontal_scroll(campaign)
         no_new_streak = 0
-        logging.info("Ряд %s/%s — прокрутка и Claim...", row_idx, len(scrollers))
+        logging.info("%s — прокрутка и Claim...", row_name)
 
         for pass_num in range(24):
             targets = _collect_claim_targets(campaign)
             if pass_num == 0:
-                logging.info("Ряд %s: кнопок Claim в DOM: %s", row_idx, len(targets))
+                logging.info("%s: кнопок Claim в DOM: %s", row_name, len(targets))
 
             row_targets = [
                 t for t in targets
-                if row_idx == 1 or abs(t["y"] - row["y"]) < 120
+                if abs(t["y"] - row["y"]) < 140
             ] or targets
 
             new_clicks = 0
@@ -921,7 +975,7 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator) -> int:
                     seen.add(key)
                     claimed += 1
                     new_clicks += 1
-                    logging.info("JumbleRumble Claim (%s) ряд %s @ %s", claimed, row_idx, key)
+                    logging.info("JumbleRumble Claim (%s) %s @ %s", claimed, row_name, key)
                     jitter_sleep(*CLAIM_DELAY_RANGE)
                     dismiss_email_verification(page)
                 except Exception as exc:
