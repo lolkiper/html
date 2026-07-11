@@ -55,11 +55,12 @@ CLAIM_TEXTS = (
     "получить сейчас",
     "claim now",
 )
-# Только эта кампания — не трогаем другие игры на странице
+# Standoff 2 — JumbleRumble Major 1–4
 CAMPAIGN_TITLE_REGEX = re.compile(
-    r"SO2\s*JumbleRumble|JumbleRumble\s*:\s*Major(?:\s*2)?",
+    r"SO2\s*JumbleRumble|JumbleRumble\s*:\s*Major\s*[1-4]",
     re.IGNORECASE,
 )
+MAJOR_NUMBERS = (1, 2, 3, 4)
 CAMPAIGN_CLAIM_BTN_REGEX = re.compile(r"claim now|получить сейчас", re.IGNORECASE)
 
 
@@ -629,14 +630,13 @@ def ensure_account_session(page: Page, account: Account) -> None:
     jitter_sleep(0.4, 0.7)
 
 
-def _find_campaign_root(page: Page) -> tuple[Locator, int]:
-    """JS: полный блок JumbleRumble (все ряды In Progress / Claimed)."""
-    info = page.evaluate(
+def _find_all_campaign_roots(page: Page) -> list[dict]:
+    """JS: все блоки JumbleRumble Major 1–4 на странице."""
+    return page.evaluate(
         """() => {
-            document.querySelectorAll('[data-farm-jumblerumble]').forEach(
-                el => el.removeAttribute('data-farm-jumblerumble')
+            document.querySelectorAll('[data-farm-major]').forEach(
+                el => el.removeAttribute('data-farm-major')
             );
-            const titleRe = /SO2\\s*JumbleRumble|JumbleRumble\\s*:\\s*Major(?:\\s*2)?/i;
             const isClaimLabel = (t) => /claim\\s*now/i.test(t) || /получить\\s*сейчас/i.test(t);
             const hasScroller = (node) => [...node.querySelectorAll('*')].some(
                 n => n.scrollWidth > n.clientWidth + 20
@@ -644,71 +644,80 @@ def _find_campaign_root(page: Page) -> tuple[Locator, int]:
             const countClaims = (node) => [...node.querySelectorAll('button, [role=button], a, div')]
                 .filter(el => isClaimLabel((el.textContent || '').trim())).length;
 
-            const titleEls = [...document.querySelectorAll('*')].filter(el => {
-                const t = (el.textContent || '').trim();
-                return t.length >= 8 && t.length < 120 && titleRe.test(t);
-            });
+            const found = [];
+            const majors = [1, 2, 3, 4];
 
-            let best = null;
-            let bestArea = Infinity;
-            let bestClaims = 0;
-
-            const consider = (node) => {
-                const full = (node.innerText || '');
-                const lower = full.toLowerCase();
-                if (!titleRe.test(full) || !lower.includes('jumble')) return;
-                const claims = countClaims(node);
-                if (claims === 0) return;
-                const area = node.getBoundingClientRect().width * node.getBoundingClientRect().height;
-                const looksLikeCampaign = (
-                    lower.includes('in progress')
-                    || lower.includes('claimed')
-                    || lower.includes('в процессе')
-                    || lower.includes('получено')
-                    || hasScroller(node)
+            for (const num of majors) {
+                const titleRe = new RegExp(
+                    'JumbleRumble\\\\s*:\\\\s*Major\\\\s*' + num + '\\\\b', 'i'
                 );
-                if (area > 2500 && area < bestArea && looksLikeCampaign) {
-                    best = node;
-                    bestArea = area;
-                    bestClaims = claims;
-                }
-            };
+                const titleEls = [...document.querySelectorAll('*')].filter(el => {
+                    const t = (el.textContent || '').trim();
+                    return t.length >= 10 && t.length < 100 && titleRe.test(t);
+                });
 
-            for (const titleEl of titleEls) {
-                let node = titleEl;
-                for (let d = 0; d < 28 && node; d++, node = node.parentElement) {
-                    consider(node);
-                }
-            }
-            if (!best) {
+                let best = null;
+                let bestArea = Infinity;
+                let bestClaims = 0;
+
+                const consider = (node) => {
+                    const full = (node.innerText || '');
+                    const lower = full.toLowerCase();
+                    if (!titleRe.test(full) || !lower.includes('jumble')) return;
+                    const claims = countClaims(node);
+                    const area = node.getBoundingClientRect().width * node.getBoundingClientRect().height;
+                    const looksLikeCampaign = (
+                        lower.includes('in progress')
+                        || lower.includes('claimed')
+                        || lower.includes('в процессе')
+                        || lower.includes('получено')
+                        || hasScroller(node)
+                        || claims > 0
+                    );
+                    if (area > 2000 && area < bestArea && looksLikeCampaign) {
+                        best = node;
+                        bestArea = area;
+                        bestClaims = claims;
+                    }
+                };
+
                 for (const titleEl of titleEls) {
                     let node = titleEl;
                     for (let d = 0; d < 28 && node; d++, node = node.parentElement) {
-                        const full = (node.innerText || '');
-                        if (!titleRe.test(full)) continue;
-                        const claims = countClaims(node);
-                        if (claims === 0) continue;
-                        const area = node.getBoundingClientRect().width * node.getBoundingClientRect().height;
-                        if (area > 1500 && area < bestArea) {
-                            best = node;
-                            bestArea = area;
-                            bestClaims = claims;
+                        consider(node);
+                    }
+                }
+                if (!best) {
+                    for (const titleEl of titleEls) {
+                        let node = titleEl;
+                        for (let d = 0; d < 28 && node; d++, node = node.parentElement) {
+                            const full = (node.innerText || '');
+                            if (!titleRe.test(full)) continue;
+                            const claims = countClaims(node);
+                            const area = node.getBoundingClientRect().width * node.getBoundingClientRect().height;
+                            if (area > 1500 && area < bestArea) {
+                                best = node;
+                                bestArea = area;
+                                bestClaims = claims;
+                            }
                         }
                     }
                 }
+
+                if (best) {
+                    best.setAttribute('data-farm-major', String(num));
+                    found.push({
+                        major: num,
+                        claims: bestClaims,
+                        y: best.getBoundingClientRect().y,
+                    });
+                }
             }
 
-            if (best) {
-                best.setAttribute('data-farm-jumblerumble', '1');
-                return { found: true, claims: bestClaims };
-            }
-            return { found: false, claims: 0 };
+            found.sort((a, b) => a.y - b.y);
+            return found;
         }"""
     )
-    loc = page.locator('[data-farm-jumblerumble="1"]')
-    if info.get("found") and loc.count():
-        return loc, int(info.get("claims", 0))
-    return page.locator('[data-farm-jumblerumble="1"]').filter(has_text="__none__"), 0
 
 
 def _collect_claim_targets(campaign: Locator) -> list[dict]:
@@ -762,8 +771,8 @@ def _get_campaign_scrollers(campaign: Locator) -> list[dict]:
 
                         const text = (node.innerText || '').trim().toLowerCase();
                         if (text.length < 15) continue;
-                        if (/^so2\\s*jumblerumble|jumblerumble\\s*:\\s*major/i.test(text) && !/crate|claim|%/i.test(text)) continue;
-                        if (/^major\\s*2$/i.test(text.trim())) continue;
+                        if (/^so2\\s*jumblerumble|jumblerumble\\s*:\\s*major\\s*[1-4]/i.test(text) && !/crate|claim|%/i.test(text)) continue;
+                        if (/^major\\s*[1-4]$/i.test(text.trim())) continue;
 
                         const hasReward = /crate|claim|connect|hour|час|%/i.test(text);
                         if (!hasReward) continue;
@@ -799,7 +808,7 @@ def _get_campaign_scrollers(campaign: Locator) -> list[dict]:
                     if (r.height < 70 || r.width < 300) continue;
                     const text = (node.innerText || '').toLowerCase();
                     if (!/crate|claim|hour|час|%/i.test(text)) continue;
-                    if (/jumblerumble|major\\s*2/i.test(text) && !/crate/i.test(text)) continue;
+                    if (/jumblerumble|major\\s*[1-4]/i.test(text) && !/crate/i.test(text)) continue;
                     if (overflow > bestOverflow) {
                         bestOverflow = overflow;
                         best = {
@@ -885,62 +894,80 @@ def scroll_campaign_rewards(campaign: Locator, step: int = 300) -> None:
     jitter_sleep(0.15, 0.3)
 
 
-def find_standoff_campaign(page: Page) -> Locator:
-    """Ищет секцию JumbleRumble — без прокрутки всей страницы."""
+def find_all_standoff_campaigns(page: Page) -> list[tuple[Locator, str]]:
+    """Ищет все секции JumbleRumble Major 1–4 на странице Drops."""
     page.evaluate("window.scrollTo(0, 0)")
     page.wait_for_timeout(150)
     jitter_sleep(0.2, 0.4)
 
-    for scroll_pass in range(6):
-        campaign, claim_count = _find_campaign_root(page)
-        if campaign.count():
+    found: dict[int, Locator] = {}
+
+    for scroll_pass in range(14):
+        for item in _find_all_campaign_roots(page):
+            major = int(item["major"])
+            if major in found:
+                continue
+            loc = page.locator(f'[data-farm-major="{major}"]')
+            if not loc.count():
+                continue
+            campaign = loc.first
             try:
-                snippet = campaign.first.inner_text(timeout=3000)[:100].replace("\n", " ")
+                campaign.scroll_into_view_if_needed()
+                page.wait_for_timeout(200)
+                snippet = campaign.inner_text(timeout=3000)[:80].replace("\n", " ")
                 logging.info(
-                    "JumbleRumble найден (проход %s, Claim в DOM: %s): %s...",
+                    "Major %s найден (проход %s, Claim в DOM: %s): %s...",
+                    major,
                     scroll_pass + 1,
-                    claim_count,
+                    item.get("claims", 0),
                     snippet,
                 )
-                campaign.first.scroll_into_view_if_needed()
-                page.wait_for_timeout(300)
-                return campaign.first
+                found[major] = campaign
             except PlaywrightTimeout:
                 pass
 
-        if scroll_pass < 5:
-            page.mouse.wheel(0, 320)
+        if len(found) >= len(MAJOR_NUMBERS):
+            break
+        if scroll_pass < 13:
+            page.mouse.wheel(0, 380)
             page.wait_for_timeout(120)
 
-    shot = BASE_DIR / "debug_drops_not_found.png"
-    try:
-        page.screenshot(path=str(shot), full_page=True)
-        logging.error("Скрин: %s", shot)
-    except Exception:
-        pass
-    raise RuntimeError("Секция SO2 JumbleRumble не найдена на странице Drops.")
+    if not found:
+        shot = BASE_DIR / "debug_drops_not_found.png"
+        try:
+            page.screenshot(path=str(shot), full_page=True)
+            logging.error("Скрин: %s", shot)
+        except Exception:
+            pass
+        raise RuntimeError("Секции JumbleRumble Major 1–4 не найдены на странице Drops.")
+
+    logging.info(
+        "Найдено кампаний Major: %s",
+        ", ".join(f"Major {m}" for m in sorted(found.keys())),
+    )
+    return [(found[m], f"Major {m}") for m in sorted(found.keys())]
 
 
-def _claim_in_campaign_rows(page: Page, campaign: Locator) -> int:
-    """Кликает Claim Now во всех горизонтальных рядах кампании."""
+def _claim_in_campaign_rows(page: Page, campaign: Locator, campaign_label: str) -> int:
+    """Кликает Claim Now во всех горизонтальных рядах одной кампании Major."""
     claimed = 0
     seen: set[str] = set()
     scrollers = _get_campaign_scrollers(campaign)
     if not scrollers:
         scrollers = [{"name": "In Progress", "key": "all", "overflow": 0, "y": 0}]
 
-    logging.info("Рядов с кейсами в JumbleRumble: %s", len(scrollers))
+    logging.info("%s — рядов с кейсами: %s", campaign_label, len(scrollers))
 
     for row_idx, row in enumerate(scrollers, start=1):
         row_name = row.get("name", f"Ряд {row_idx}")
         reset_campaign_horizontal_scroll(campaign)
         no_new_streak = 0
-        logging.info("%s — прокрутка и Claim...", row_name)
+        logging.info("%s / %s — прокрутка и Claim...", campaign_label, row_name)
 
         for pass_num in range(24):
             targets = _collect_claim_targets(campaign)
             if pass_num == 0:
-                logging.info("%s: кнопок Claim в DOM: %s", row_name, len(targets))
+                logging.info("%s / %s: кнопок Claim в DOM: %s", campaign_label, row_name, len(targets))
 
             row_targets = [
                 t for t in targets
@@ -949,7 +976,7 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator) -> int:
 
             new_clicks = 0
             for t in row_targets:
-                key = t["key"]
+                key = f"{campaign_label}:{t['key']}"
                 if key in seen:
                     continue
                 try:
@@ -968,14 +995,14 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator) -> int:
                         )
                         jitter_sleep(0.15, 0.25)
                         fresh = _collect_claim_targets(campaign)
-                        match = next((f for f in fresh if f["key"] == key), t)
+                        match = next((f for f in fresh if f["key"] == t["key"]), t)
                         t = match
 
                     page.mouse.click(t["x"], t["y"])
                     seen.add(key)
                     claimed += 1
                     new_clicks += 1
-                    logging.info("JumbleRumble Claim (%s) %s @ %s", claimed, row_name, key)
+                    logging.info("%s Claim (%s) %s @ %s", campaign_label, claimed, row_name, key)
                     jitter_sleep(*CLAIM_DELAY_RANGE)
                     dismiss_email_verification(page)
                 except Exception as exc:
@@ -1001,25 +1028,37 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator) -> int:
 
 
 def claim_standoff_drops(page: Page) -> int:
-    campaign = find_standoff_campaign(page)
-    jitter_sleep(0.3, 0.5)
+    campaigns = find_all_standoff_campaigns(page)
     dismiss_email_verification(page)
+    total_claimed = 0
 
-    lower = campaign.inner_text(timeout=5000).lower()
-    if "jumble" not in lower:
-        raise RuntimeError("Контейнер кампании не содержит JumbleRumble — отмена.")
-
-    claimed = _claim_in_campaign_rows(page, campaign)
-
-    if claimed == 0:
+    for campaign, label in campaigns:
         try:
-            page.screenshot(path=str(BASE_DIR / "debug_no_claim_buttons.png"))
+            campaign.scroll_into_view_if_needed()
+            page.wait_for_timeout(250)
+            jitter_sleep(0.3, 0.5)
+            dismiss_email_verification(page)
+
+            lower = campaign.inner_text(timeout=5000).lower()
+            if "jumble" not in lower and "major" not in lower:
+                logging.warning("%s — пропуск, не похоже на JumbleRumble.", label)
+                continue
+
+            claimed = _claim_in_campaign_rows(page, campaign, label)
+            total_claimed += claimed
+            logging.info("%s: получено наград: %s", label, claimed)
+        except Exception as exc:
+            logging.error("%s: ошибка при сборе — %s", label, exc)
+
+    if total_claimed == 0:
+        try:
+            page.screenshot(path=str(BASE_DIR / "debug_no_claim_buttons.png"), full_page=True)
         except Exception:
             pass
-        logging.info("В JumbleRumble нет доступных Claim Now.")
+        logging.info("Нет доступных Claim Now в Major 1–4.")
     else:
-        logging.info("Всего получено в JumbleRumble: %s.", claimed)
-    return claimed
+        logging.info("Всего получено в Major 1–4: %s.", total_claimed)
+    return total_claimed
 
 
 def _logout_via_ui(page: Page) -> bool:
