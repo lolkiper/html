@@ -851,7 +851,9 @@ def scroll_campaign_row_at_y(campaign: Locator, row_y: float, step: int = 300) -
     """Прокручивает один горизонтальный ряд (по вертикальной позиции)."""
     return bool(
         campaign.evaluate(
-            """(root, rowY, step) => {
+            """(root, opts) => {
+                const rowY = opts.rowY;
+                const step = opts.step;
                 let target = null;
                 let bestOverflow = 0;
                 for (const node of [root, ...root.querySelectorAll('*')]) {
@@ -873,8 +875,7 @@ def scroll_campaign_row_at_y(campaign: Locator, row_y: float, step: int = 300) -
                 );
                 return target.scrollLeft > before;
             }""",
-            row_y,
-            step,
+            {"rowY": row_y, "step": step},
         )
     )
 
@@ -989,15 +990,14 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator, campaign_label: str) 
                     vp = page.viewport_size or {"width": 1280, "height": 720}
                     if t["x"] < 0 or t["x"] > vp["width"]:
                         campaign.evaluate(
-                            """(root, x, y) => {
+                            """(root, pos) => {
                                 const el = document.elementFromPoint(
-                                    Math.min(Math.max(x, 10), window.innerWidth - 10),
-                                    Math.min(Math.max(y, 10), window.innerHeight - 10)
+                                    Math.min(Math.max(pos.x, 10), window.innerWidth - 10),
+                                    Math.min(Math.max(pos.y, 10), window.innerHeight - 10)
                                 );
                                 if (el) el.scrollIntoView({ block: 'center', inline: 'center' });
                             }""",
-                            t["x"],
-                            t["y"],
+                            {"x": t["x"], "y": t["y"]},
                         )
                         jitter_sleep(*DELAY_MICRO)
                         fresh = _collect_claim_targets(campaign)
