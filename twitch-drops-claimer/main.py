@@ -57,6 +57,8 @@ TYPE_DELAY_MS = (6, 12)
 LOGIN_WAIT_SEC = 4.0
 DROPS_AUTH_WAIT_SEC = 1.0
 DOLPHIN_STOP_DELAY = (0.35, 0.55)
+WORKER_OPEN_RETRIES = 3
+WORKER_OPEN_RETRY_DELAY = (2.0, 4.0)
 CLAIM_TEXTS = (
     "получить сейчас",
     "claim now",
@@ -1214,6 +1216,24 @@ def split_accounts_for_workers(
     return [bucket for bucket in buckets if bucket]
 
 
+def mark_worker_accounts_failed(
+    worker_no: int,
+    accounts: list[Account],
+    reason: str,
+) -> int:
+    """Пишет в errors.txt все аккаунты очереди, если браузер воркера не запустился."""
+    logging.error(
+        "[Браузер %s] Не удалось открыть — пропуск %s аккаунт(ов). Причина: %s",
+        worker_no,
+        len(accounts),
+        reason,
+    )
+    for account in accounts:
+        msg = f"{account.login}: браузер {worker_no} не открылся — {reason}"
+        log_line(ERRORS_FILE, msg)
+    return len(accounts)
+
+
 def log_worker_split(buckets: list[list[Account]], worker_profiles: list[str] | None = None) -> None:
     logging.info("Разделение аккаунтов по браузерам:")
     for worker_no, bucket in enumerate(buckets, start=1):
@@ -1280,56 +1300,93 @@ def _browser_worker(
                 page = get_page(context)
                 return page
 
-            try:
-                page = open_session()
-                for account in accounts:
+            def open_session_with_retries() -> Page | None:
+                last_exc: Exception | None = None
+                for attempt in range(1, WORKER_OPEN_RETRIES + 1):
                     try:
-                        if not is_page_alive(page):
-                            logging.warning(
-                                "[Браузер %s] Вкладка закрыта — переподключение...",
-                                worker_no,
-                            )
-                            shutdown_session()
-                            page = open_session()
-                        process_account_on_page(page, account)
-                        jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                        return open_session()
                     except Exception as exc:
-                        page_dead = not is_page_alive(page)
-                        if page_dead or is_session_lost_error(exc):
-                            logging.warning(
-                                "[Браузер %s] Сессия потеряна у %s — переподключение...",
-                                worker_no,
-                                account.login,
-                            )
-                            try:
-                                shutdown_session()
-                                page = open_session()
-                                process_account_on_page(page, account)
-                                jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
-                                continue
-                            except Exception as retry_exc:
-                                exc = retry_exc
+                        last_exc = exc
+                        logging.warning(
+                            "[Браузер %s] Запуск профиля %s не удался (%s), попытка %s/%s",
+                            worker_no,
+                            profile_id,
+                            exc,
+                            attempt,
+                            WORKER_OPEN_RETRIES,
+                        )
+                        try:
+                            shutdown_session()
+                        except Exception:
+                            pass
+                        if attempt < WORKER_OPEN_RETRIES:
+                            jitter_sleep(*WORKER_OPEN_RETRY_DELAY)
+                logging.error(
+                    "[Браузер %s] Профиль %s не запустился после %s попыток: %s",
+                    worker_no,
+                    profile_id,
+                    WORKER_OPEN_RETRIES,
+                    last_exc,
+                )
+                return None
 
-                        failures += 1
-                        msg = f"{account.login}: {exc}"
-                        logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
-                        log_line(ERRORS_FILE, msg)
-                        if page_dead or is_session_lost_error(exc):
-                            try:
+            try:
+                page = open_session_with_retries()
+                if page is None:
+                    failures += mark_worker_accounts_failed(
+                        worker_no,
+                        accounts,
+                        f"профиль Dolphin {profile_id} не запустился",
+                    )
+                else:
+                    for account in accounts:
+                        try:
+                            if not is_page_alive(page):
+                                logging.warning(
+                                    "[Браузер %s] Вкладка закрыта — переподключение...",
+                                    worker_no,
+                                )
                                 shutdown_session()
                                 page = open_session()
-                            except Exception as reopen_exc:
-                                logging.error(
-                                    "[Браузер %s] Не удалось переподключиться: %s",
+                            process_account_on_page(page, account)
+                            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                        except Exception as exc:
+                            page_dead = not is_page_alive(page)
+                            if page_dead or is_session_lost_error(exc):
+                                logging.warning(
+                                    "[Браузер %s] Сессия потеряна у %s — переподключение...",
                                     worker_no,
-                                    reopen_exc,
+                                    account.login,
                                 )
-                                break
-                        else:
-                            logging.info(
-                                "[Браузер %s] Браузер открыт — следующий аккаунт.",
-                                worker_no,
-                            )
+                                try:
+                                    shutdown_session()
+                                    page = open_session()
+                                    process_account_on_page(page, account)
+                                    jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                                    continue
+                                except Exception as retry_exc:
+                                    exc = retry_exc
+
+                            failures += 1
+                            msg = f"{account.login}: {exc}"
+                            logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
+                            log_line(ERRORS_FILE, msg)
+                            if page_dead or is_session_lost_error(exc):
+                                try:
+                                    shutdown_session()
+                                    page = open_session()
+                                except Exception as reopen_exc:
+                                    logging.error(
+                                        "[Браузер %s] Не удалось переподключиться: %s",
+                                        worker_no,
+                                        reopen_exc,
+                                    )
+                                    break
+                            else:
+                                logging.info(
+                                    "[Браузер %s] Браузер открыт — следующий аккаунт.",
+                                    worker_no,
+                                )
             finally:
                 if browser:
                     try:
@@ -1341,39 +1398,48 @@ def _browser_worker(
                             pass
                 dolphin.stop_profile(profile_id)
         else:
-            browser = pw.chromium.launch(headless=headless)
+            browser: Browser | None = None
             try:
-                context = browser.new_context(
-                    viewport={"width": 1280, "height": 720},
-                    locale="ru-RU",
+                browser = pw.chromium.launch(headless=headless)
+            except Exception as exc:
+                failures += mark_worker_accounts_failed(
+                    worker_no,
+                    accounts,
+                    f"Chromium не запустился: {exc}",
                 )
-                page = context.new_page()
-                for account in accounts:
-                    try:
-                        if not is_page_alive(page):
-                            page = context.new_page()
-                        process_account_on_page(page, account)
-                        jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
-                    except Exception as exc:
-                        if is_session_lost_error(exc):
-                            logging.warning(
-                                "[Браузер %s] Вкладка закрыта — новая для %s",
-                                worker_no,
-                                account.login,
-                            )
-                            try:
+            if browser is not None:
+                try:
+                    context = browser.new_context(
+                        viewport={"width": 1280, "height": 720},
+                        locale="ru-RU",
+                    )
+                    page = context.new_page()
+                    for account in accounts:
+                        try:
+                            if not is_page_alive(page):
                                 page = context.new_page()
-                                process_account_on_page(page, account)
-                                jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
-                                continue
-                            except Exception as retry_exc:
-                                exc = retry_exc
-                        failures += 1
-                        msg = f"{account.login}: {exc}"
-                        logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
-                        log_line(ERRORS_FILE, msg)
-            finally:
-                browser.close()
+                            process_account_on_page(page, account)
+                            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                        except Exception as exc:
+                            if is_session_lost_error(exc):
+                                logging.warning(
+                                    "[Браузер %s] Вкладка закрыта — новая для %s",
+                                    worker_no,
+                                    account.login,
+                                )
+                                try:
+                                    page = context.new_page()
+                                    process_account_on_page(page, account)
+                                    jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                                    continue
+                                except Exception as retry_exc:
+                                    exc = retry_exc
+                            failures += 1
+                            msg = f"{account.login}: {exc}"
+                            logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
+                            log_line(ERRORS_FILE, msg)
+                finally:
+                    browser.close()
 
     logging.info("Браузер %s завершил очередь аккаунтов.", worker_no)
     return failures
@@ -1413,14 +1479,17 @@ def run_parallel(accounts: list[Account], config: AppConfig, headless: bool, wor
                     headless,
                     profile_id,
                 )
-            ] = worker_no
+            ] = (worker_no, bucket)
         for future in as_completed(futures):
-            worker_no = futures[future]
+            worker_no, bucket = futures[future]
             try:
                 failures += future.result()
             except Exception as exc:
-                failures += 1
-                logging.error("[Браузер %s] Критическая ошибка: %s", worker_no, exc)
+                failures += mark_worker_accounts_failed(
+                    worker_no,
+                    bucket,
+                    f"критическая ошибка воркера: {exc}",
+                )
 
     return failures
 
