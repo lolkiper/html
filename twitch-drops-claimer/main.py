@@ -60,6 +60,7 @@ DROPS_AUTH_WAIT_SEC = 1.0
 DOLPHIN_STOP_DELAY = (0.35, 0.55)
 WORKER_OPEN_RETRIES = 3
 WORKER_OPEN_RETRY_DELAY = (2.0, 4.0)
+WORKER_START_STAGGER_SEC = (1.5, 2.5)  # пауза между стартом браузеров — меньше 500 от Dolphin
 CLAIM_TEXTS = (
     "получить сейчас",
     "claim now",
@@ -1479,7 +1480,13 @@ def _browser_worker(
                                     continue
                                 except Exception as retry_exc:
                                     account_queue.put(account)
-                                    exc = retry_exc
+                                    logging.warning(
+                                        "[Браузер %s] %s возвращён в очередь: %s",
+                                        worker_no,
+                                        account.login,
+                                        retry_exc,
+                                    )
+                                    continue
                             failures += 1
                             msg = f"{account.login}: {exc}"
                             logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
