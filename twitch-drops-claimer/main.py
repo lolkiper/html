@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import queue
 import random
 import re
 import sys
@@ -1216,6 +1217,17 @@ def split_accounts_for_workers(
     return [bucket for bucket in buckets if bucket]
 
 
+def drain_account_queue(account_queue: queue.Queue[Account]) -> list[Account]:
+    """Забирает все аккаунты, оставшиеся в общей очереди."""
+    remaining: list[Account] = []
+    while True:
+        try:
+            remaining.append(account_queue.get_nowait())
+        except queue.Empty:
+            break
+    return remaining
+
+
 def mark_worker_accounts_failed(
     worker_no: int,
     accounts: list[Account],
@@ -1229,7 +1241,10 @@ def mark_worker_accounts_failed(
         reason,
     )
     for account in accounts:
-        msg = f"{account.login}: браузер {worker_no} не открылся — {reason}"
+        if worker_no:
+            msg = f"{account.login}: браузер {worker_no} не открылся — {reason}"
+        else:
+            msg = f"{account.login}: не обработан — {reason}"
         log_line(ERRORS_FILE, msg)
     return len(accounts)
 
@@ -1246,19 +1261,40 @@ def log_worker_split(buckets: list[list[Account]], worker_profiles: list[str] | 
 
 def _browser_worker(
     worker_no: int,
-    accounts: list[Account],
+    account_queue: queue.Queue[Account],
     config: AppConfig,
     headless: bool,
     dolphin_profile_id: str | None = None,
 ) -> int:
-    """Один браузер Dolphin/Chromium на воркер, один профиль, много Twitch-аккаунтов."""
+    """Один браузер Dolphin/Chromium на воркер; аккаунты берутся из общей очереди."""
     failures = 0
     logging.info(
-        "Браузер %s стартовал — %s аккаунт(ов): %s",
+        "Браузер %s стартовал — берёт аккаунты из общей очереди (осталось ~%s)",
         worker_no,
-        len(accounts),
-        ", ".join(account.login for account in accounts),
+        account_queue.qsize(),
     )
+
+    def process_one_account(page: Page, account: Account) -> Page:
+        nonlocal failures
+        try:
+            if not is_page_alive(page):
+                raise RuntimeError("вкладка закрыта")
+            process_account_on_page(page, account)
+            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+            return page
+        except Exception as exc:
+            page_dead = not is_page_alive(page)
+            if page_dead or is_session_lost_error(exc):
+                raise
+            failures += 1
+            msg = f"{account.login}: {exc}"
+            logging.error("[Браузер %s] Ошибка: %s", worker_no, msg)
+            log_line(ERRORS_FILE, msg)
+            logging.info(
+                "[Браузер %s] Браузер открыт — следующий аккаунт.",
+                worker_no,
+            )
+            return page
 
     with sync_playwright() as pw:
         if config.use_dolphin:
@@ -1333,13 +1369,19 @@ def _browser_worker(
             try:
                 page = open_session_with_retries()
                 if page is None:
-                    failures += mark_worker_accounts_failed(
+                    logging.warning(
+                        "[Браузер %s] Профиль %s не запустился — аккаунты останутся в очереди, "
+                        "их заберут другие браузеры.",
                         worker_no,
-                        accounts,
-                        f"профиль Dolphin {profile_id} не запустился",
+                        profile_id,
                     )
                 else:
-                    for account in accounts:
+                    while True:
+                        try:
+                            account = account_queue.get_nowait()
+                        except queue.Empty:
+                            break
+
                         try:
                             if not is_page_alive(page):
                                 logging.warning(
@@ -1348,8 +1390,7 @@ def _browser_worker(
                                 )
                                 shutdown_session()
                                 page = open_session()
-                            process_account_on_page(page, account)
-                            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                            page = process_one_account(page, account)
                         except Exception as exc:
                             page_dead = not is_page_alive(page)
                             if page_dead or is_session_lost_error(exc):
@@ -1361,11 +1402,17 @@ def _browser_worker(
                                 try:
                                     shutdown_session()
                                     page = open_session()
-                                    process_account_on_page(page, account)
-                                    jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                                    page = process_one_account(page, account)
                                     continue
                                 except Exception as retry_exc:
-                                    exc = retry_exc
+                                    account_queue.put(account)
+                                    logging.warning(
+                                        "[Браузер %s] %s возвращён в очередь: %s",
+                                        worker_no,
+                                        account.login,
+                                        retry_exc,
+                                    )
+                                    continue
 
                             failures += 1
                             msg = f"{account.login}: {exc}"
@@ -1376,17 +1423,13 @@ def _browser_worker(
                                     shutdown_session()
                                     page = open_session()
                                 except Exception as reopen_exc:
+                                    account_queue.put(account)
                                     logging.error(
                                         "[Браузер %s] Не удалось переподключиться: %s",
                                         worker_no,
                                         reopen_exc,
                                     )
                                     break
-                            else:
-                                logging.info(
-                                    "[Браузер %s] Браузер открыт — следующий аккаунт.",
-                                    worker_no,
-                                )
             finally:
                 if browser:
                     try:
@@ -1402,10 +1445,10 @@ def _browser_worker(
             try:
                 browser = pw.chromium.launch(headless=headless)
             except Exception as exc:
-                failures += mark_worker_accounts_failed(
+                logging.warning(
+                    "[Браузер %s] Chromium не запустился (%s) — аккаунты останутся в очереди.",
                     worker_no,
-                    accounts,
-                    f"Chromium не запустился: {exc}",
+                    exc,
                 )
             if browser is not None:
                 try:
@@ -1414,12 +1457,15 @@ def _browser_worker(
                         locale="ru-RU",
                     )
                     page = context.new_page()
-                    for account in accounts:
+                    while True:
+                        try:
+                            account = account_queue.get_nowait()
+                        except queue.Empty:
+                            break
                         try:
                             if not is_page_alive(page):
                                 page = context.new_page()
-                            process_account_on_page(page, account)
-                            jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                            page = process_one_account(page, account)
                         except Exception as exc:
                             if is_session_lost_error(exc):
                                 logging.warning(
@@ -1429,10 +1475,10 @@ def _browser_worker(
                                 )
                                 try:
                                     page = context.new_page()
-                                    process_account_on_page(page, account)
-                                    jitter_sleep(*DELAY_BETWEEN_ACCOUNTS)
+                                    page = process_one_account(page, account)
                                     continue
                                 except Exception as retry_exc:
+                                    account_queue.put(account)
                                     exc = retry_exc
                             failures += 1
                             msg = f"{account.login}: {exc}"
@@ -1441,15 +1487,20 @@ def _browser_worker(
                 finally:
                     browser.close()
 
-    logging.info("Браузер %s завершил очередь аккаунтов.", worker_no)
+    logging.info("Браузер %s завершил работу с очередью.", worker_no)
     return failures
 
 
 def run_parallel(accounts: list[Account], config: AppConfig, headless: bool, workers: int) -> int:
+    worker_count = min(max(1, workers), len(accounts))
     buckets = split_accounts_for_workers(accounts, workers)
+    account_queue: queue.Queue[Account] = queue.Queue()
+    for account in accounts:
+        account_queue.put(account)
+
     worker_profiles: list[str] | None = None
     if config.use_dolphin:
-        worker_profiles = load_worker_profile_ids(workers, config.dolphin_profile_id)
+        worker_profiles = load_worker_profile_ids(worker_count, config.dolphin_profile_id)
         if len(set(worker_profiles)) < len(worker_profiles):
             logging.warning(
                 "В profiles.txt меньше уникальных ID (%s), чем браузеров (%s) — профили повторяются.",
@@ -1459,14 +1510,16 @@ def run_parallel(accounts: list[Account], config: AppConfig, headless: bool, wor
 
     log_worker_split(buckets, worker_profiles)
     logging.info(
-        "Параллельный режим: %s браузер(ов), аккаунты делятся по кругу.",
-        len(buckets),
+        "Параллельный режим: %s браузер(ов), общая очередь %s аккаунт(ов). "
+        "Плановое распределение выше; если браузер не откроется — остальные заберут его аккаунты.",
+        worker_count,
+        len(accounts),
     )
 
     failures = 0
-    with ThreadPoolExecutor(max_workers=len(buckets)) as executor:
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {}
-        for worker_no, bucket in enumerate(buckets, start=1):
+        for worker_no in range(1, worker_count + 1):
             profile_id = None
             if worker_profiles:
                 profile_id = worker_profiles[worker_no - 1]
@@ -1474,22 +1527,26 @@ def run_parallel(accounts: list[Account], config: AppConfig, headless: bool, wor
                 executor.submit(
                     _browser_worker,
                     worker_no,
-                    bucket,
+                    account_queue,
                     config,
                     headless,
                     profile_id,
                 )
-            ] = (worker_no, bucket)
+            ] = worker_no
         for future in as_completed(futures):
-            worker_no, bucket = futures[future]
+            worker_no = futures[future]
             try:
                 failures += future.result()
             except Exception as exc:
-                failures += mark_worker_accounts_failed(
-                    worker_no,
-                    bucket,
-                    f"критическая ошибка воркера: {exc}",
-                )
+                logging.error("[Браузер %s] Критическая ошибка: %s", worker_no, exc)
+
+    remaining = drain_account_queue(account_queue)
+    if remaining:
+        failures += mark_worker_accounts_failed(
+            0,
+            remaining,
+            "ни один браузер не смог обработать (все упали или очередь не опустела)",
+        )
 
     return failures
 
