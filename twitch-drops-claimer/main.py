@@ -40,17 +40,23 @@ from playwright.sync_api import (
 from dolphin_client import DolphinClient, DolphinConfig
 
 DROPS_URL = "https://www.twitch.tv/drops/inventory"
-DEFAULT_TIMEOUT_MS = 60_000
-CLAIM_DELAY_RANGE = (0.3, 0.5)
+DEFAULT_TIMEOUT_MS = 25_000
+NAV_NETWORKIDLE_MS = 6_000
+CLAIM_DELAY_RANGE = (0.08, 0.16)
 
-# Паузы (секунды) — уменьшены в 5× от предыдущей версии
-DELAY_AFTER_NAV = (0.5, 0.9)
-DELAY_AFTER_CLICK = (0.2, 0.4)
-DELAY_AFTER_TYPE = (0.16, 0.3)
-DELAY_AFTER_LOGIN = (0.8, 1.2)
-DELAY_AFTER_LOGOUT = (0.5, 0.8)
-DELAY_BETWEEN_ACCOUNTS = (1.0, 1.6)
-TYPE_DELAY_MS = (14, 28)
+# Минимальные паузы (секунды) — быстро, но стабильно
+DELAY_AFTER_NAV = (0.12, 0.22)
+DELAY_AFTER_CLICK = (0.05, 0.1)
+DELAY_AFTER_TYPE = (0.04, 0.08)
+DELAY_AFTER_LOGIN = (0.15, 0.3)
+DELAY_AFTER_LOGOUT = (0.12, 0.22)
+DELAY_BETWEEN_ACCOUNTS = (0.2, 0.45)
+DELAY_MICRO = (0.03, 0.07)
+DELAY_SHORT = (0.06, 0.12)
+TYPE_DELAY_MS = (6, 12)
+LOGIN_WAIT_SEC = 4.0
+DROPS_AUTH_WAIT_SEC = 1.0
+DOLPHIN_STOP_DELAY = (0.35, 0.55)
 CLAIM_TEXTS = (
     "получить сейчас",
     "claim now",
@@ -257,14 +263,14 @@ def human_fill(locator: Locator, text: str, timeout_ms: int = DEFAULT_TIMEOUT_MS
     field = locator.first
     wait_visible(field, timeout_ms)
     field.click()
-    jitter_sleep(0.08, 0.18)
+    jitter_sleep(*DELAY_MICRO)
     field.fill("")
-    jitter_sleep(0.06, 0.12)
+    jitter_sleep(*DELAY_MICRO)
     field.press_sequentially(text, delay=random.randint(*TYPE_DELAY_MS))
     jitter_sleep(*DELAY_AFTER_TYPE)
 
 
-def wait_until_logged_in(page: Page, timeout_sec: float = 3.0) -> None:
+def wait_until_logged_in(page: Page, timeout_sec: float = LOGIN_WAIT_SEC) -> None:
     """Ждём, пока форма входа исчезнет и появится меню пользователя."""
     logging.info("Ожидание завершения авторизации (до %.0f сек)...", timeout_sec)
     deadline = time.time() + timeout_sec
@@ -275,12 +281,12 @@ def wait_until_logged_in(page: Page, timeout_sec: float = 3.0) -> None:
             dismiss_email_verification(page)
             if is_logged_in(page) and not login_form_visible(page):
                 try:
-                    page.wait_for_load_state("networkidle", timeout=15_000)
+                    page.wait_for_load_state("domcontentloaded", timeout=4_000)
                 except PlaywrightTimeout:
                     pass
                 logging.info("Сессия Twitch подтверждена.")
                 return
-        jitter_sleep(0.16, 0.3)
+        jitter_sleep(*DELAY_SHORT)
     raise RuntimeError("Таймаут: авторизация не завершилась")
 
 
@@ -312,9 +318,9 @@ def navigate(page: Page, url: str, retries: int = 3) -> None:
         try:
             page.goto(url, wait_until="domcontentloaded")
             try:
-                page.wait_for_load_state("networkidle", timeout=DEFAULT_TIMEOUT_MS)
+                page.wait_for_load_state("networkidle", timeout=NAV_NETWORKIDLE_MS)
             except PlaywrightTimeout:
-                logging.warning("networkidle таймаут на %s — продолжаем после паузы.", url)
+                pass
             jitter_sleep(*DELAY_AFTER_NAV)
             return
         except Exception as exc:
@@ -339,7 +345,7 @@ def navigate(page: Page, url: str, retries: int = 3) -> None:
                     attempt,
                     retries,
                 )
-                jitter_sleep(1.5, 3.0)
+                jitter_sleep(0.5, 1.0)
                 continue
             raise
     if last_exc is not None:
@@ -354,7 +360,7 @@ def safe_click(locator: Locator, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> None:
     target = locator.first
     wait_visible(target, timeout_ms)
     target.scroll_into_view_if_needed(timeout=timeout_ms)
-    jitter_sleep(0.06, 0.14)
+    jitter_sleep(*DELAY_MICRO)
     target.click(timeout=timeout_ms)
     jitter_sleep(*DELAY_AFTER_CLICK)
 
@@ -394,7 +400,7 @@ def dismiss_email_verification(page: Page) -> bool:
                 if btn.first.is_visible():
                     btn.first.click(timeout=5000)
                     logging.info("Окно верификации закрыто: %s", sel)
-                    jitter_sleep(0.2, 0.4)
+                    jitter_sleep(*DELAY_SHORT)
                     return True
             except PlaywrightTimeout:
                 pass
@@ -406,7 +412,7 @@ def dismiss_email_verification(page: Page) -> bool:
         try:
             dialog.first.locator("button").first.click(timeout=3000)
             logging.info("Окно верификации закрыто через dialog.")
-            jitter_sleep(0.2, 0.4)
+            jitter_sleep(*DELAY_SHORT)
             return True
         except PlaywrightTimeout:
             pass
@@ -435,7 +441,7 @@ def dismiss_overlays(page: Page) -> None:
                     btn.first.click(timeout=3000)
                     logging.info("Закрыт оверлей: %s", sel)
                     dismissed = True
-                    jitter_sleep(0.06, 0.16)
+                    jitter_sleep(*DELAY_MICRO)
                 except PlaywrightTimeout:
                     pass
         if not dismissed:
@@ -484,7 +490,7 @@ def is_logged_in(page: Page) -> bool:
 
 def open_login_form(page: Page) -> None:
     if login_form_visible(page):
-        jitter_sleep(0.2, 0.4)
+        jitter_sleep(*DELAY_SHORT)
         return
 
     if "/login" in page.url.lower():
@@ -500,7 +506,7 @@ def open_login_form(page: Page) -> None:
     login_btn = page.locator('button[data-a-target="login-button"]')
     if login_btn.count() and login_btn.first.is_visible():
         safe_click(login_btn)
-        jitter_sleep(0.3, 0.5)
+        jitter_sleep(*DELAY_SHORT)
         return
     logging.info("Открываю страницу входа Twitch...")
     navigate(page, "https://www.twitch.tv/login")
@@ -510,7 +516,7 @@ def perform_login(page: Page, account: Account) -> None:
     logging.info("Вход в аккаунт %s...", account.login)
     dismiss_overlays(page)
     open_login_form(page)
-    jitter_sleep(0.2, 0.4)
+    jitter_sleep(*DELAY_MICRO)
 
     username = page.locator(
         'input[data-a-target="login-username-input"], '
@@ -533,10 +539,10 @@ def perform_login(page: Page, account: Account) -> None:
         )
         if next_btn.count():
             safe_click(next_btn)
-            jitter_sleep(0.3, 0.5)
+            jitter_sleep(*DELAY_SHORT)
         human_fill(password, account.password, timeout_ms=30_000)
 
-    jitter_sleep(0.2, 0.4)
+    jitter_sleep(*DELAY_MICRO)
     submit = page.locator(
         'button[data-a-target="passport-login-button"]:not([disabled]), '
         'button[type="submit"]:has-text("Log In"):not([disabled]), '
@@ -554,7 +560,7 @@ def perform_login(page: Page, account: Account) -> None:
         )
     safe_click(submit, timeout_ms=30_000)
 
-    wait_until_logged_in(page, timeout_sec=8.0)
+    wait_until_logged_in(page, timeout_sec=LOGIN_WAIT_SEC)
     logging.info("Логин %s выполнен.", account.login)
 
 
@@ -597,7 +603,7 @@ def force_logout_state(page: Page) -> None:
     except Exception as exc:
         logging.warning("Не удалось очистить cookies: %s", exc)
     go_to_drops_inventory(page)
-    jitter_sleep(0.4, 0.8)
+    jitter_sleep(*DELAY_SHORT)
 
 
 def ensure_account_session(page: Page, account: Account) -> None:
@@ -608,7 +614,7 @@ def ensure_account_session(page: Page, account: Account) -> None:
         logging.info("Активна другая сессия — выход перед входом в %s", account.login)
         twitch_logout_keep_browser(page)
         dismiss_overlays(page)
-        jitter_sleep(0.2, 0.4)
+        jitter_sleep(*DELAY_MICRO)
 
     if is_logged_in(page):
         logging.warning("Сессия всё ещё активна — очистка cookies и Drops")
@@ -627,7 +633,7 @@ def ensure_account_session(page: Page, account: Account) -> None:
         else:
             raise RuntimeError(f"Не удалось переключиться на аккаунт {account.login}")
 
-    jitter_sleep(0.4, 0.7)
+    jitter_sleep(*DELAY_SHORT)
 
 
 def _find_all_campaign_roots(page: Page) -> list[dict]:
@@ -891,18 +897,18 @@ def scroll_campaign_rewards(campaign: Locator, step: int = 300) -> None:
         )
     except Exception:
         pass
-    jitter_sleep(0.15, 0.3)
+    jitter_sleep(*DELAY_SHORT)
 
 
 def find_all_standoff_campaigns(page: Page) -> list[tuple[Locator, str]]:
     """Ищет все секции JumbleRumble Major 1–4 на странице Drops."""
     page.evaluate("window.scrollTo(0, 0)")
-    page.wait_for_timeout(150)
-    jitter_sleep(0.2, 0.4)
+    page.wait_for_timeout(60)
+    jitter_sleep(*DELAY_MICRO)
 
     found: dict[int, Locator] = {}
 
-    for scroll_pass in range(14):
+    for scroll_pass in range(10):
         for item in _find_all_campaign_roots(page):
             major = int(item["major"])
             if major in found:
@@ -913,8 +919,8 @@ def find_all_standoff_campaigns(page: Page) -> list[tuple[Locator, str]]:
             campaign = loc.first
             try:
                 campaign.scroll_into_view_if_needed()
-                page.wait_for_timeout(200)
-                snippet = campaign.inner_text(timeout=3000)[:80].replace("\n", " ")
+                page.wait_for_timeout(80)
+                snippet = campaign.inner_text(timeout=2000)[:80].replace("\n", " ")
                 logging.info(
                     "Major %s найден (проход %s, Claim в DOM: %s): %s...",
                     major,
@@ -928,9 +934,9 @@ def find_all_standoff_campaigns(page: Page) -> list[tuple[Locator, str]]:
 
         if len(found) >= len(MAJOR_NUMBERS):
             break
-        if scroll_pass < 13:
-            page.mouse.wheel(0, 380)
-            page.wait_for_timeout(120)
+        if scroll_pass < 9:
+            page.mouse.wheel(0, 400)
+            page.wait_for_timeout(50)
 
     if not found:
         shot = BASE_DIR / "debug_drops_not_found.png"
@@ -964,7 +970,7 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator, campaign_label: str) 
         no_new_streak = 0
         logging.info("%s / %s — прокрутка и Claim...", campaign_label, row_name)
 
-        for pass_num in range(24):
+        for pass_num in range(18):
             targets = _collect_claim_targets(campaign)
             if pass_num == 0:
                 logging.info("%s / %s: кнопок Claim в DOM: %s", campaign_label, row_name, len(targets))
@@ -993,7 +999,7 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator, campaign_label: str) 
                             t["x"],
                             t["y"],
                         )
-                        jitter_sleep(0.15, 0.25)
+                        jitter_sleep(*DELAY_MICRO)
                         fresh = _collect_claim_targets(campaign)
                         match = next((f for f in fresh if f["key"] == t["key"]), t)
                         t = match
@@ -1019,9 +1025,9 @@ def _claim_in_campaign_rows(page: Page, campaign: Locator, campaign_label: str) 
                 scroll_campaign_rewards(campaign)
                 scrolled = True
 
-            if no_new_streak >= 5 and not scrolled:
+            if no_new_streak >= 4 and not scrolled:
                 break
-            if no_new_streak >= 5 and scrolled:
+            if no_new_streak >= 4 and scrolled:
                 no_new_streak = 0
 
     return claimed
@@ -1035,11 +1041,11 @@ def claim_standoff_drops(page: Page) -> int:
     for campaign, label in campaigns:
         try:
             campaign.scroll_into_view_if_needed()
-            page.wait_for_timeout(250)
-            jitter_sleep(0.3, 0.5)
+            page.wait_for_timeout(80)
+            jitter_sleep(*DELAY_SHORT)
             dismiss_email_verification(page)
 
-            lower = campaign.inner_text(timeout=5000).lower()
+            lower = campaign.inner_text(timeout=3000).lower()
             if "jumble" not in lower and "major" not in lower:
                 logging.warning("%s — пропуск, не похоже на JumbleRumble.", label)
                 continue
@@ -1070,16 +1076,16 @@ def _logout_via_ui(page: Page) -> bool:
     try:
         go_to_drops_inventory(page)
         page.evaluate("window.scrollTo(0, 0)")
-        jitter_sleep(0.2, 0.4)
+        jitter_sleep(*DELAY_MICRO)
 
-        for _ in range(3):
+        for _ in range(2):
             dismiss_overlays(page)
             dismiss_email_verification(page)
             try:
                 page.keyboard.press("Escape")
             except Exception:
                 pass
-            jitter_sleep(0.1, 0.2)
+            jitter_sleep(*DELAY_MICRO)
 
         menu = page.locator('button[data-a-target="user-menu-toggle"]')
         if not menu.count():
@@ -1087,10 +1093,10 @@ def _logout_via_ui(page: Page) -> bool:
             return not is_logged_in(page)
 
         menu_btn = menu.first
-        menu_btn.scroll_into_view_if_needed(timeout=5000)
-        jitter_sleep(0.15, 0.3)
-        menu_btn.click(timeout=10_000)
-        jitter_sleep(0.3, 0.5)
+        menu_btn.scroll_into_view_if_needed(timeout=3000)
+        jitter_sleep(*DELAY_MICRO)
+        menu_btn.click(timeout=8_000)
+        jitter_sleep(*DELAY_SHORT)
 
         logout_btn = page.locator(
             'button[data-a-target="dropdown-logout"], '
@@ -1104,7 +1110,7 @@ def _logout_via_ui(page: Page) -> bool:
             candidate = logout_btn.nth(idx)
             try:
                 if candidate.is_visible():
-                    candidate.click(timeout=10_000)
+                    candidate.click(timeout=8_000)
                     clicked = True
                     break
             except Exception:
@@ -1120,7 +1126,7 @@ def _logout_via_ui(page: Page) -> bool:
 
         jitter_sleep(*DELAY_AFTER_LOGOUT)
         try:
-            page.wait_for_load_state("domcontentloaded", timeout=10_000)
+            page.wait_for_load_state("domcontentloaded", timeout=4_000)
         except PlaywrightTimeout:
             pass
         return not is_logged_in(page)
@@ -1172,7 +1178,7 @@ def process_account_on_page(page: Page, account: Account) -> int:
     ensure_account_session(page, account)
     ensure_on_drops_when_logged_in(page)
     dismiss_email_verification(page)
-    wait_until_logged_in(page, timeout_sec=2.0)
+    wait_until_logged_in(page, timeout_sec=DROPS_AUTH_WAIT_SEC)
 
     claimed = claim_standoff_drops(page)
     logging.info("Получено наград Standoff: %s", claimed)
@@ -1261,7 +1267,7 @@ def _browser_worker(
                     browser = None
                     page = None
                 dolphin.stop_profile(profile_id)
-                jitter_sleep(0.8, 1.4)
+                jitter_sleep(*DOLPHIN_STOP_DELAY)
 
             def open_session() -> Page:
                 nonlocal browser, page

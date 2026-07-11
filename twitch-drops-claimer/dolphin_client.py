@@ -12,7 +12,7 @@ from playwright.sync_api import Browser, BrowserContext, Playwright
 logger = logging.getLogger(__name__)
 
 START_RETRIES = 5
-START_RETRY_BASE_SEC = 2.0
+START_RETRY_BASE_SEC = 1.0
 
 
 @dataclass(frozen=True)
