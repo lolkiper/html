@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 
 from app.accounts import load_accounts_file
+from app.accounts_store import load_accounts_ready_for_farm
 from app.config import ACCOUNTS_FILE, AppConfig
 from app.cycle_runner import run_cycle
 from app.models import JobOptions
@@ -19,14 +20,21 @@ def main() -> int:
     parser.add_argument("--no-twitch", action="store_true")
     parser.add_argument("--no-sell", action="store_true")
     parser.add_argument(
-        "--icon-only",
+        "--farm-only",
         action="store_true",
-        help="Только ADB + тап по иконке Standoff 2 (тест)",
+        help="Только аккаунты с handshake (как run_farm.py)",
     )
     args = parser.parse_args()
 
     config = AppConfig.load()
-    accounts = load_accounts_file(ACCOUNTS_FILE)
+    if args.farm_only or config.pipeline_mode == "api":
+        accounts = load_accounts_ready_for_farm(ACCOUNTS_FILE)
+        if not accounts:
+            print(f"Нет аккаунтов с handshake в {ACCOUNTS_FILE}")
+            print("Сначала: python run_prepare.py --limit 1")
+            return 1
+    else:
+        accounts = load_accounts_file(ACCOUNTS_FILE)
     if not accounts:
         print(f"Нет аккаунтов в {ACCOUNTS_FILE}")
         return 1

@@ -1,0 +1,3 @@
+# Аккаунты БЕЗ handshake — для run_prepare.py
+# google_login:google_pass:twitch_login:twitch_pass
+christacrockerbbu2p@azhsk.org:google_pass:consalter_5518520:twitch_pass
