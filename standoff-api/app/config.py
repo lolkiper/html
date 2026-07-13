@@ -43,6 +43,7 @@ class AppConfig:
     delay_max_sec: float = 2.5
     market_fee_rate: float = 0.75
     reset_device_on_start: bool = False
+    auto_find_emulator: bool = True
     google_via_settings: bool = False
 
     @classmethod
