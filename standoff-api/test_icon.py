@@ -18,7 +18,7 @@ def main() -> int:
 
     ld = LdConsole(exe, config.emulator_index, print)
     device = ld.connect_device(config.delay_min_sec, config.delay_max_sec)
-    step_launch_standoff_from_home(device)
+    step_launch_standoff_from_home(device, config)
     print("\n[OK] Тап выполнен. Должна начать грузиться Standoff 2.")
     return 0
 
