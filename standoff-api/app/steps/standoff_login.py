@@ -19,6 +19,13 @@ _GOOGLE_LOGIN_LABELS = [
     "Login with Google",
     "Войти с Google",
 ]
+_GOOGLE_EMAIL_SCREEN = [
+    "Телефон или адрес эл. почты",
+    "Телефон или email",
+    "Phone or email",
+    "Email or phone",
+]
+_PASSWORD_SCREEN = ["Введите пароль", "Enter your password"]
 _CONTINUE_LABELS = ["Continue", "Продолжить", "Select", "Выбрать"]
 _UNITY_MARKERS = ["game view", "unity view", "standoff"]
 
@@ -69,6 +76,10 @@ def _reach_google_login_button(
     unity_hits = 0
 
     while time.time() < deadline:
+        if device.has_text(_GOOGLE_EMAIL_SCREEN):
+            device.log('Экран Google email уже открыт — вводим почту')
+            return True
+
         root = device.uiautomator_dump()
 
         if device.has_text(_GOOGLE_LOGIN_LABELS):
@@ -89,6 +100,10 @@ def _reach_google_login_button(
             device.rnd_delay()
             unity_hits = 0
             continue
+
+        if device.has_text(_PASSWORD_SCREEN):
+            device.log("Экран пароля Google — продолжаем вход")
+            return True
 
         if root is not None and _is_unity_game_screen(root):
             unity_hits += 1
