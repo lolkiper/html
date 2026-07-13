@@ -6,12 +6,28 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 from app.adb.device import AdbDevice
 
 STANDOFF_PACKAGE = "com.axlebolt.standoff2"
 ADB_TIMEOUT_SEC = 60
+
+
+@dataclass(frozen=True)
+class LdInstance:
+    index: int
+    name: str
+    running: bool
+    width: int = 0
+    height: int = 0
+
+    @property
+    def resolution(self) -> str:
+        if self.width and self.height:
+            return f"{self.width}x{self.height}"
+        return ""
 
 LDPLAYER_SEARCH_PATHS = [
     os.environ.get("LDPLAYER_HOME", ""),
@@ -176,7 +192,7 @@ def connect_device(
     adb_port: Optional[int] = None,
     delay_min: float = 1.2,
     delay_max: float = 2.5,
-    retries: int = 12,
+    retries: int = 8,
 ) -> AdbDevice:
     """Прямой adb.exe → fallback dnconsole. Как в рабочем LDPlayer-боте."""
     log = ld.log
@@ -276,3 +292,80 @@ def list_ldplayer_instances(ldplayer_home: Optional[str] = None) -> list[str]:
         except Exception:
             continue
     return []
+
+
+def parse_list2(ldplayer_home: Optional[str] = None) -> list[LdInstance]:
+    """Парсит dnconsole list2 → индекс, имя, запущен ли."""
+    out: list[LdInstance] = []
+    for line in list_ldplayer_instances(ldplayer_home):
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 5:
+            continue
+        try:
+            idx = int(parts[0])
+        except ValueError:
+            continue
+        name = parts[1]
+        running = parts[4] in ("1", "true", "True")
+        width = int(parts[6]) if len(parts) > 6 and parts[6].isdigit() else 0
+        height = int(parts[7]) if len(parts) > 7 and parts[7].isdigit() else 0
+        out.append(LdInstance(index=idx, name=name, running=running, width=width, height=height))
+    return out
+
+
+def _try_connect_index(
+    exe: Path,
+    index: int,
+    *,
+    adb_host: str = "127.0.0.1",
+    adb_port: Optional[int] = None,
+    delay_min: float = 1.2,
+    delay_max: float = 2.5,
+    log_fn: Callable[[str], None] | None = None,
+    retries: int = 2,
+) -> Optional[AdbDevice]:
+    ld = LdConsole(exe, index, log_fn or (lambda m: None))
+    try:
+        return connect_device(
+            ld,
+            adb_host=adb_host,
+            adb_port=adb_port,
+            delay_min=delay_min,
+            delay_max=delay_max,
+            retries=retries,
+        )
+    except Exception:
+        return None
+
+
+def scan_working_emulator(
+    ldplayer_home: Optional[str] = None,
+    *,
+    prefer_index: Optional[int] = None,
+    log_fn: Callable[[str], None] | None = None,
+) -> tuple[Optional[AdbDevice], Optional[int]]:
+    """Ищет первый эмулятор с рабочим ADB. Сначала prefer_index, потом запущенные из list2."""
+    log = log_fn or (lambda m: None)
+    exe = find_dnconsole(ldplayer_home)
+    instances = parse_list2(ldplayer_home)
+
+    indices: list[int] = []
+    if prefer_index is not None:
+        indices.append(prefer_index)
+    for inst in instances:
+        if inst.running and inst.index not in indices:
+            indices.append(inst.index)
+    for inst in instances:
+        if inst.index not in indices:
+            indices.append(inst.index)
+
+    log(f"Сканирование ADB по индексам: {indices[:20]}")
+    for index in indices:
+        name = next((i.name for i in instances if i.index == index), "?")
+        log(f"Пробую EMULATOR_INDEX={index} ({name})...")
+        device = _try_connect_index(exe, index, log_fn=log, retries=2)
+        if device is not None:
+            log(f"Найден рабочий эмулятор: index={index} ({name})")
+            return device, index
+
+    return None, None

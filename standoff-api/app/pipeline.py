@@ -6,7 +6,13 @@ import time
 import traceback
 from datetime import datetime
 
-from app.adb.ldplayer import LdConsole, STANDOFF_PACKAGE, connect_device, find_dnconsole
+from app.adb.ldplayer import (
+    LdConsole,
+    STANDOFF_PACKAGE,
+    connect_device,
+    find_dnconsole,
+    scan_working_emulator,
+)
 from app.config import ERRORS_LOG, SUCCESS_LOG, AppConfig
 from app.models import CreateJobRequest, JobResult
 from app.steps.google_login import step_google_account
@@ -51,14 +57,32 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
             log_fn("RESET_DEVICE_ON_START=true — перезапуск эмулятора...")
             ld.randomize_device_ids()
         else:
-            log_fn("Проверка ADB (эмулятор должен быть уже запущен)...")
+            log_fn("Подключение ADB...")
 
-        device = connect_device(
-            ld,
-            adb_port=config.adb_port,
-            delay_min=config.delay_min_sec,
-            delay_max=config.delay_max_sec,
-        )
+        try:
+            device = connect_device(
+                ld,
+                adb_port=config.adb_port,
+                delay_min=config.delay_min_sec,
+                delay_max=config.delay_max_sec,
+                retries=4,
+            )
+        except RuntimeError as exc:
+            if not config.auto_find_emulator:
+                raise
+            log_fn(f"Индекс {config.emulator_index} не отвечает ({exc}) — авто-поиск...")
+            device, found_index = scan_working_emulator(
+                config.ldplayer_home,
+                prefer_index=config.emulator_index,
+                log_fn=log_fn,
+            )
+            if device is None:
+                raise RuntimeError(
+                    "Ни один эмулятор не ответил по ADB. "
+                    "Запусти LDPlayer вручную, включи ADB, попробуй EMULATOR_INDEX: 6"
+                ) from exc
+            log_fn(f"Используем EMULATOR_INDEX={found_index} (запиши в config.json)")
+            ld = LdConsole(dnconsole, found_index or config.emulator_index, log_fn)
         log_fn("ADB подключён.")
 
         log_fn("Тап по иконке Standoff 2 на рабочем столе...")

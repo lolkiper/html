@@ -43,6 +43,7 @@ class AppConfig:
     delay_max_sec: float = 2.5
     market_fee_rate: float = 0.75
     reset_device_on_start: bool = False
+    auto_find_emulator: bool = True
 
     @classmethod
     def load(cls) -> AppConfig:
@@ -66,4 +67,5 @@ class AppConfig:
             delay_max_sec=float(data.get("DELAY_MAX_SEC", 2.5)),
             market_fee_rate=float(data.get("MARKET_FEE_RATE", 0.75)),
             reset_device_on_start=bool(data.get("RESET_DEVICE_ON_START", False)),
+            auto_find_emulator=bool(data.get("AUTO_FIND_EMULATOR", True)),
         )
