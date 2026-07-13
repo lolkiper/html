@@ -53,7 +53,12 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
         else:
             log_fn("Проверка ADB (эмулятор должен быть уже запущен)...")
 
-        device = ld.connect_device(config.delay_min_sec, config.delay_max_sec)
+        device = connect_device(
+            ld,
+            adb_port=config.adb_port,
+            delay_min=config.delay_min_sec,
+            delay_max=config.delay_max_sec,
+        )
         log_fn("ADB подключён.")
 
         log_fn("Тап по иконке Standoff 2 на рабочем столе...")
