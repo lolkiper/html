@@ -92,14 +92,99 @@ class AdbDevice:
         return False
 
     def find_node(self, root: ET.Element, search_type: str, value: str) -> Optional[ET.Element]:
+        needle = value.lower().strip()
+        candidates: list[tuple[int, ET.Element]] = []
         for node in root.iter():
-            if self.node_matches(node, search_type, value):
-                if node.attrib.get("clickable", "false") == "true" or node.attrib.get("bounds"):
-                    return node
+            if not self.node_matches(node, search_type, value):
+                continue
+            raw = (node.attrib.get("content-desc" if search_type == "content-desc" else search_type) or "").strip()
+            score = 0
+            if raw.lower() == needle:
+                score += 10
+            if node.attrib.get("clickable", "false") == "true":
+                score += 5
+            if search_type == "text":
+                score += 2
+            candidates.append((score, node))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return candidates[0][1]
+
+    @staticmethod
+    def _parent_map(root: ET.Element) -> dict[ET.Element, ET.Element]:
+        return {child: parent for parent in root.iter() for child in parent}
+
+    def _clickable_target(self, node: ET.Element, root: ET.Element) -> ET.Element:
+        parent_map = self._parent_map(root)
+        current: Optional[ET.Element] = node
+        while current is not None:
+            if current.attrib.get("clickable", "false") == "true":
+                return current
+            current = parent_map.get(current)
+        return node
+
+    def find_text_nodes(
+        self,
+        root: ET.Element,
+        labels: list[str],
+        *,
+        exact: bool = False,
+    ) -> list[tuple[int, ET.Element, str]]:
+        """Return UI nodes matched by visible text (text attribute first)."""
+        needles = [label.lower().strip() for label in labels]
+        found: list[tuple[int, ET.Element, str]] = []
         for node in root.iter():
-            if self.node_matches(node, search_type, value):
-                return node
-        return None
+            text = (node.attrib.get("text") or "").strip()
+            if text:
+                text_l = text.lower()
+                for needle in needles:
+                    matched = text_l == needle if exact else needle in text_l
+                    if matched:
+                        score = 20 if text_l == needle else 10
+                        if node.attrib.get("clickable", "false") == "true":
+                            score += 5
+                        found.append((score, node, text))
+                        break
+        found.sort(key=lambda item: item[0], reverse=True)
+        return found
+
+    def click_text(
+        self,
+        labels: list[str],
+        timeout: float = 20.0,
+        *,
+        exact: bool = False,
+    ) -> bool:
+        """Click only by visible text from UI dump (no coordinates fallback)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            root = self.uiautomator_dump()
+            if root is not None:
+                matches = self.find_text_nodes(root, labels, exact=exact)
+                for _, node, matched_text in matches:
+                    target = self._clickable_target(node, root)
+                    center = self.node_center(target)
+                    if center:
+                        self.log(f'Клик по тексту: "{matched_text}"')
+                        self.tap(center[0], center[1])
+                        self.rnd_delay()
+                        return True
+            time.sleep(1.0)
+        wanted = ", ".join(f'"{label}"' for label in labels)
+        self.log(f"Timeout: текст не найден ({wanted})")
+        return False
+
+    def fill_field_by_text(self, labels: list[str], text: str, timeout: float = 25.0) -> bool:
+        """Focus input by clicking its visible label text, then type."""
+        per_label = max(timeout / max(len(labels), 1), 4.0)
+        for label in labels:
+            if self.click_text([label], timeout=per_label):
+                time.sleep(0.5)
+                self.input_text(text)
+                self.rnd_delay()
+                return True
+        return False
 
     def click_by_ui(
         self,
@@ -107,15 +192,19 @@ class AdbDevice:
         value: str,
         timeout: float = 45.0,
     ) -> bool:
+        if search_type == "text":
+            return self.click_text([value], timeout=timeout)
         deadline = time.time() + timeout
         while time.time() < deadline:
             root = self.uiautomator_dump()
             if root is not None:
                 node = self.find_node(root, search_type, value)
                 if node is not None:
-                    center = self.node_center(node)
+                    target = self._clickable_target(node, root)
+                    center = self.node_center(target)
                     if center:
-                        self.log(f'Клик: "{value}"')
+                        shown = (node.attrib.get(search_type) or value).strip()
+                        self.log(f'Клик по тексту: "{shown}"')
                         self.tap(center[0], center[1])
                         self.rnd_delay()
                         return True
@@ -132,13 +221,12 @@ class AdbDevice:
             time.sleep(1.2)
         return False
 
-    def fill_field(self, hints: list[str], text: str) -> bool:
+    def fill_field(self, hints: list[str], text: str, *, text_only: bool = False) -> bool:
+        if self.fill_field_by_text(hints, text, timeout=25.0):
+            return True
+        if text_only:
+            return False
         for hint in hints:
-            if self.click_by_ui("text", hint, timeout=15):
-                time.sleep(0.4)
-                self.input_text(text)
-                self.rnd_delay()
-                return True
             if self.click_by_ui("content-desc", hint, timeout=8):
                 time.sleep(0.4)
                 self.input_text(text)
@@ -158,21 +246,7 @@ class AdbDevice:
         return False
 
     def find_and_click_text(self, labels: list[str], timeout: float = 20.0) -> bool:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            root = self.uiautomator_dump()
-            if root is not None:
-                for label in labels:
-                    node = self.find_node(root, "text", label)
-                    if node is not None:
-                        center = self.node_center(node)
-                        if center:
-                            self.log(f'Клик: "{label}"')
-                            self.tap(center[0], center[1])
-                            self.rnd_delay()
-                            return True
-            time.sleep(1.0)
-        return False
+        return self.click_text(labels, timeout=timeout)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 400) -> None:
         self.shell(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}")
@@ -203,10 +277,7 @@ class AdbDevice:
         return False
 
     def click_any(self, labels: list[str], timeout: float = 20.0) -> bool:
-        for label in labels:
-            if self.click_by_ui("text", label, timeout=timeout / max(len(labels), 1)):
-                return True
-        return False
+        return self.click_text(labels, timeout=timeout)
 
     def find_nodes_with_text(self, *needles: str) -> list[ET.Element]:
         root = self.uiautomator_dump()

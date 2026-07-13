@@ -73,12 +73,12 @@ def _reach_login_form(device: AdbDevice, timeout: float = 35.0) -> bool:
             return True
 
         if _is_blocking_info_popup(root):
-            device.log("Инфо-попап Google — Закрыть")
-            device.find_and_click_text(_BLOCKING_POPUP_CLOSE, timeout=3)
+            device.log("Инфо-попап Google — клик по тексту Закрыть")
+            device.click_text(_BLOCKING_POPUP_CLOSE, timeout=3)
             device.rnd_delay()
             continue
 
-        if device.find_and_click_text(_SIGN_IN_LABELS, timeout=3):
+        if device.click_text(_SIGN_IN_LABELS, timeout=3):
             device.rnd_delay()
             continue
 
@@ -110,48 +110,48 @@ def step_google_account(device: AdbDevice, account: AccountCredentials) -> None:
     if not opened:
         raise TimeoutError("Не открылось окно добавления Google-аккаунта")
 
-    if not device.click_any(["Google", "Гугл"]):
+    if not device.click_text(["Google", "Гугл"], timeout=15):
         raise TimeoutError("Кнопка Google не найдена")
 
     device.rnd_delay()
     if not _reach_login_form(device):
         raise TimeoutError("Не удалось открыть форму входа Google")
 
-    device.log("Клик по полю email и ввод...")
-    if not device.fill_field(_EMAIL_FIELD_HINTS, account.google_login):
-        raise TimeoutError('Поле "Телефон или адрес эл. почты" не найдено')
-    if not device.find_and_click_text(_NEXT_LABELS, timeout=15):
-        raise TimeoutError('Кнопка "Далее" после email не найдена')
+    device.log('Клик по тексту "Телефон или адрес эл. почты" и ввод email...')
+    if not device.fill_field_by_text(_EMAIL_FIELD_HINTS, account.google_login):
+        raise TimeoutError('Текст "Телефон или адрес эл. почты" не найден на экране')
+    if not device.click_text(_NEXT_LABELS, timeout=15):
+        raise TimeoutError('Текст "Далее" не найден после email')
     device.rnd_delay()
 
-    device.log("Клик по полю пароля и ввод...")
+    device.log('Клик по тексту "Введите пароль" и ввод...')
     if not device.wait_for("text", "Введите пароль", timeout=20) and not device.wait_for(
         "text", "Enter your password", timeout=5
     ):
         raise TimeoutError("Экран ввода пароля не появился")
-    if not device.fill_field(_PASSWORD_FIELD_HINTS, account.google_password):
-        raise TimeoutError('Поле "Введите пароль" не найдено')
-    if not device.find_and_click_text(_NEXT_LABELS, timeout=15):
-        raise TimeoutError('Кнопка "Далее" после пароля не найдена')
+    if not device.fill_field_by_text(_PASSWORD_FIELD_HINTS, account.google_password):
+        raise TimeoutError('Текст "Введите пароль" не найден на экране')
+    if not device.click_text(_NEXT_LABELS, timeout=15):
+        raise TimeoutError('Текст "Далее" не найден после пароля')
     device.rnd_delay()
 
-    device.log('Листаем и ищем "Понятно"...')
+    device.log('Листаем и ищем текст "Понятно"...')
     if not device.find_and_click_text_with_scroll(["Понятно", "Got it"], timeout=30):
-        device.log('Кнопка "Понятно" не найдена — возможно экран пропущен')
+        device.log('Текст "Понятно" не найден — возможно экран пропущен')
     device.rnd_delay()
 
-    device.log('Клик "Принимаю"...')
-    if not device.find_and_click_text(["Принимаю", "I agree", "Accept"], timeout=20):
-        device.log('Кнопка "Принимаю" не найдена — возможно экран пропущен')
+    device.log('Клик по тексту "Принимаю"...')
+    if not device.click_text(["Принимаю", "I agree", "Accept"], timeout=20):
+        device.log('Текст "Принимаю" не найден — возможно экран пропущен')
     device.rnd_delay()
 
-    device.log('Сервисы Google — "Ещё"...')
-    if device.find_and_click_text(["Ещё", "ЕЩЁ", "More", "MORE"], timeout=20):
+    device.log('Клик по тексту "Ещё"...')
+    if device.click_text(["Ещё", "ЕЩЁ", "More", "MORE"], timeout=20):
         device.rnd_delay()
-        device.log('Сервисы Google — "Принять"...')
-        device.find_and_click_text(["Принять", "ПРИНЯТЬ", "Accept", "I agree"], timeout=20)
+        device.log('Клик по тексту "Принять"...')
+        device.click_text(["Принять", "ПРИНЯТЬ", "Accept", "I agree"], timeout=20)
     else:
-        device.log('Кнопка "Ещё" не найдена — возможно уже принято')
+        device.log('Текст "Ещё" не найден — возможно уже принято')
 
     device.rnd_delay()
     device.log(f"Google аккаунт {account.google_login} добавлен")
