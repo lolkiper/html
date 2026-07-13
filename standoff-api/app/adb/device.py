@@ -142,6 +142,8 @@ class AdbDevice:
                     matched = text_l == needle if exact else needle in text_l
                     if matched:
                         score = 20 if text_l == needle else 10
+                        if len(text) > 40:
+                            score -= 20
                         if node.attrib.get("clickable", "false") == "true":
                             score += 5
                         found.append((score, node, text))
@@ -155,6 +157,7 @@ class AdbDevice:
         timeout: float = 20.0,
         *,
         exact: bool = False,
+        tap_label: bool = False,
     ) -> bool:
         """Click only by visible text from UI dump (no coordinates fallback)."""
         deadline = time.time() + timeout
@@ -163,7 +166,7 @@ class AdbDevice:
             if root is not None:
                 matches = self.find_text_nodes(root, labels, exact=exact)
                 for _, node, matched_text in matches:
-                    target = self._clickable_target(node, root)
+                    target = node if tap_label else self._clickable_target(node, root)
                     center = self.node_center(target)
                     if center:
                         self.log(f'Клик по тексту: "{matched_text}"')
@@ -175,11 +178,18 @@ class AdbDevice:
         self.log(f"Timeout: текст не найден ({wanted})")
         return False
 
-    def fill_field_by_text(self, labels: list[str], text: str, timeout: float = 25.0) -> bool:
+    def fill_field_by_text(
+        self,
+        labels: list[str],
+        text: str,
+        timeout: float = 25.0,
+        *,
+        tap_label: bool = False,
+    ) -> bool:
         """Focus input by clicking its visible label text, then type."""
         per_label = max(timeout / max(len(labels), 1), 4.0)
         for label in labels:
-            if self.click_text([label], timeout=per_label):
+            if self.click_text([label], timeout=per_label, tap_label=tap_label):
                 time.sleep(0.5)
                 self.input_text(text)
                 self.rnd_delay()
@@ -203,7 +213,10 @@ class AdbDevice:
                     target = self._clickable_target(node, root)
                     center = self.node_center(target)
                     if center:
-                        shown = (node.attrib.get(search_type) or value).strip()
+                        shown = (
+                            node.attrib.get("content-desc" if search_type == "content-desc" else search_type)
+                            or value
+                        ).strip()
                         self.log(f'Клик по тексту: "{shown}"')
                         self.tap(center[0], center[1])
                         self.rnd_delay()
