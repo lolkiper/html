@@ -124,6 +124,37 @@ class AdbDevice:
             current = parent_map.get(current)
         return node
 
+    def find_label_nodes(
+        self,
+        root: ET.Element,
+        labels: list[str],
+        *,
+        exact: bool = False,
+    ) -> list[tuple[int, ET.Element, str]]:
+        """Find nodes by visible text or content-desc."""
+        needles = [label.lower().strip() for label in labels]
+        found: list[tuple[int, ET.Element, str]] = []
+        for node in root.iter():
+            for attr in ("text", "content-desc"):
+                raw = (node.attrib.get(attr) or "").strip()
+                if not raw:
+                    continue
+                raw_l = raw.lower()
+                for needle in needles:
+                    matched = raw_l == needle if exact else needle in raw_l
+                    if matched:
+                        score = 20 if raw_l == needle else 10
+                        if attr == "text":
+                            score += 3
+                        if len(raw) > 40:
+                            score -= 20
+                        if node.attrib.get("clickable", "false") == "true":
+                            score += 5
+                        found.append((score, node, raw))
+                        break
+        found.sort(key=lambda item: item[0], reverse=True)
+        return found
+
     def find_text_nodes(
         self,
         root: ET.Element,
@@ -131,25 +162,7 @@ class AdbDevice:
         *,
         exact: bool = False,
     ) -> list[tuple[int, ET.Element, str]]:
-        """Return UI nodes matched by visible text (text attribute first)."""
-        needles = [label.lower().strip() for label in labels]
-        found: list[tuple[int, ET.Element, str]] = []
-        for node in root.iter():
-            text = (node.attrib.get("text") or "").strip()
-            if text:
-                text_l = text.lower()
-                for needle in needles:
-                    matched = text_l == needle if exact else needle in text_l
-                    if matched:
-                        score = 20 if text_l == needle else 10
-                        if len(text) > 40:
-                            score -= 20
-                        if node.attrib.get("clickable", "false") == "true":
-                            score += 5
-                        found.append((score, node, text))
-                        break
-        found.sort(key=lambda item: item[0], reverse=True)
-        return found
+        return self.find_label_nodes(root, labels, exact=exact)
 
     def has_text(self, labels: list[str], *, exact: bool = False) -> bool:
         root = self.uiautomator_dump()

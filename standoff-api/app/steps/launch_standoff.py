@@ -27,14 +27,14 @@ def step_launch_standoff_from_home(device: AdbDevice, config: AppConfig | None =
     for label in labels:
         if device.click_by_ui("text", label, timeout=8):
             device.log(f"Нажата иконка Standoff 2 (текст «{label}»)")
-            time.sleep(12)
+            time.sleep(6)
             return
         if device.click_by_ui("content-desc", label, timeout=4):
             device.log(f"Нажата иконка Standoff 2 (desc «{label}»)")
-            time.sleep(12)
+            time.sleep(6)
             return
 
     device.log(f"Текст не найден — тап по координатам {coord} (1280x720)")
     device.tap_coord(coord)
-    time.sleep(12)
+    time.sleep(6)
     device.log("Ожидание загрузки Standoff 2...")

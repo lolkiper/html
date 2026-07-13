@@ -12,21 +12,41 @@ _ALLOW_LABELS = ["РАЗРЕШИТЬ", "Разрешить", "ALLOW", "Allow"]
 _LEGAL_ACCEPT_LABELS = ["ПРИНИМАЮ", "Принимаю", "I ACCEPT", "I accept"]
 _GOOGLE_LOGIN_LABELS = [
     "Вход с помощью Google",
+    "Вход с помощью",
     "Sign in with Google",
     "Login with Google",
     "Войти с Google",
 ]
 _CONTINUE_LABELS = ["Continue", "Продолжить", "Select", "Выбрать"]
+# Запасные координаты кнопки Google (1280x720), если игра не отдаёт текст в UI dump
+_FALLBACK_GOOGLE_LOGIN = (380, 600)
 
 
-def _reach_google_login_button(device: AdbDevice, timeout: float = 90.0) -> bool:
-    """Ждёт нужный экран и сразу жмёт «Вход с помощью Google», если он уже виден."""
+def _sample_visible_labels(device: AdbDevice) -> str:
+    root = device.uiautomator_dump()
+    if root is None:
+        return "UI dump пуст"
+    seen: list[str] = []
+    for node in root.iter():
+        for attr in ("text", "content-desc"):
+            raw = (node.attrib.get(attr) or "").strip()
+            if raw and raw not in seen and len(raw) < 80:
+                seen.append(raw)
+    if not seen:
+        return "тексты на экране не найдены (игра может не отдавать UI)"
+    return "На экране: " + " | ".join(seen[:10])
+
+
+def _reach_google_login_button(device: AdbDevice, timeout: float = 120.0) -> bool:
+    """Ждёт экран входа без фиксированной паузы и жмёт Google."""
     deadline = time.time() + timeout
+    last_debug = 0.0
 
     while time.time() < deadline:
         if device.has_text(_GOOGLE_LOGIN_LABELS):
             device.log('Экран входа — клик по тексту "Вход с помощью Google"')
-            return device.click_text(_GOOGLE_LOGIN_LABELS, timeout=8)
+            if device.click_text(_GOOGLE_LOGIN_LABELS, timeout=8):
+                return True
 
         if device.has_text(_ALLOW_LABELS):
             device.log('Разрешение — клик по тексту "РАЗРЕШИТЬ"')
@@ -40,17 +60,24 @@ def _reach_google_login_button(device: AdbDevice, timeout: float = 90.0) -> bool
             device.rnd_delay()
             continue
 
-        time.sleep(1.5)
+        now = time.time()
+        if now - last_debug > 12:
+            device.log(_sample_visible_labels(device))
+            last_debug = now
 
-    return False
+        time.sleep(2.0)
+
+    device.log(
+        f'Текст кнопки не найден — запасной тап {_FALLBACK_GOOGLE_LOGIN} (1280x720)'
+    )
+    device.tap_coord(_FALLBACK_GOOGLE_LOGIN)
+    device.rnd_delay()
+    return True
 
 
 def step_standoff_login(device: AdbDevice, account: AccountCredentials) -> None:
-    device.log("Ожидание загрузки Standoff 2...")
-    time.sleep(8)
-
-    if not _reach_google_login_button(device):
-        raise TimeoutError('Кнопка "Вход с помощью Google" не найдена')
+    device.log("Ожидание экрана входа Standoff 2...")
+    _reach_google_login_button(device)
 
     device.log("Google вход (email → Далее → пароль → Далее)...")
     step_google_signin_form(device, account)
