@@ -24,8 +24,8 @@ job_manager = JobManager(config, max_workers=1)
 
 app = FastAPI(
     title="Standoff 2 API",
-    description="Вход в аккаунт (Google) → привязка Twitch → продажа кейсов на рынке. "
-    "Требует Windows + LDPlayer + ADB.",
+    description="Standoff 2 farm: API (Astandy) или ADB (LDPlayer). "
+    "API: handshake + продажа кейсов + Twitch. ADB: эмулятор.",
     version="1.0.0",
 )
 
@@ -52,6 +52,7 @@ def health() -> HealthResponse:
         pass
     return HealthResponse(
         status="ok",
+        pipeline_mode=config.pipeline_mode,
         ldplayer_found=ld_ok,
         queue_size=job_manager.queue_size(),
     )

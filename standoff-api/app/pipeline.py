@@ -37,7 +37,7 @@ def _cleanup(device, google_login: str, ld: LdConsole) -> None:
         pass
 
 
-def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobResult:
+def run_adb_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobResult:
     account = job.account
     opts = job.options
     result = JobResult(
@@ -143,3 +143,12 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
             except Exception:
                 pass
         time.sleep(1)
+
+
+def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobResult:
+    mode = (config.pipeline_mode or "api").lower()
+    if mode == "api":
+        from app.pipeline_api import run_api_pipeline
+
+        return run_api_pipeline(job, config, log_fn)
+    return run_adb_pipeline(job, config, log_fn)

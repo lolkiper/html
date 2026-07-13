@@ -1,3 +1,9 @@
-# google_login:google_password:twitch_login:twitch_password
-# ќдна строка Ч один аккаунт (Google дл€ Standoff 2 + Twitch дл€ прив€зки)
-example@gmail.com:google_pass:twitch_user:twitch_pass
+# API mode (PIPELINE_MODE=api):
+# google_login:google_pass:twitch_login:twitch_pass:handshake[:twitch_auth_code]
+#
+# handshake Ч токен сессии Standoff 2 (после входа в игру)
+#   см. https://github.com/BonePolk/AstandyClient
+# twitch_auth_code Ч OAuth-код Twitch (опционально, дл€ linkAuth)
+#
+# ADB mode (PIPELINE_MODE=adb): достаточно первых 4 полей
+example@gmail.com:google_pass:twitch_user:twitch_pass:¬—“ј¬№_HANDSHAKE_—ёƒј

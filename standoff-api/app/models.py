@@ -19,9 +19,11 @@ class JobStatus(str, Enum):
 
 class AccountCredentials(BaseModel):
     google_login: str = Field(..., min_length=1)
-    google_password: str = Field(..., min_length=1)
+    google_password: str = Field(default="")
     twitch_login: str = Field(..., min_length=1)
-    twitch_password: str = Field(..., min_length=1)
+    twitch_password: str = Field(default="")
+    handshake: Optional[str] = None
+    twitch_auth_code: Optional[str] = None
 
 
 class JobOptions(BaseModel):
@@ -58,6 +60,7 @@ class JobInfo(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    pipeline_mode: str
     ldplayer_found: bool
     queue_size: int
 

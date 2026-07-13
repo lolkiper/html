@@ -48,10 +48,13 @@ def run_cycle(
         acc_t0 = time.perf_counter()
 
         def step_log(msg: str, step_idx=idx, step_total=len(accounts)) -> None:
-            if msg.startswith("Шаг 3"):
-                log.step("twitch", step_idx, step_total, msg.replace("Шаг 3/4: ", ""))
-            elif msg.startswith("Шаг 4"):
-                log.step("market", step_idx, step_total, msg.replace("Шаг 4/4: ", ""))
+            low = msg.lower()
+            if "twitch" in low or "привязка" in low:
+                log.step("twitch", step_idx, step_total, msg)
+            elif "продаж" in low or "market" in low or "кейс" in low:
+                log.step("market", step_idx, step_total, msg)
+            elif msg.startswith("API:"):
+                log.standoff(f"{step_idx}/{step_total} {msg}")
             else:
                 log.standoff(f"{step_idx}/{step_total} {msg}")
 

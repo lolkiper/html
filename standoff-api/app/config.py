@@ -47,6 +47,10 @@ class AppConfig:
     reset_device_on_start: bool = False
     auto_find_emulator: bool = True
     google_via_settings: bool = False
+    pipeline_mode: str = "api"
+    game_id: str = "com.axlebolt.standoff2"
+    game_version: str = "0.38.2"
+    case_definition_ids: list[int] | None = None
 
     @classmethod
     def load(cls) -> AppConfig:
@@ -74,4 +78,8 @@ class AppConfig:
             reset_device_on_start=bool(data.get("RESET_DEVICE_ON_START", False)),
             auto_find_emulator=bool(data.get("AUTO_FIND_EMULATOR", True)),
             google_via_settings=bool(data.get("GOOGLE_VIA_SETTINGS", False)),
+            pipeline_mode=str(data.get("PIPELINE_MODE", "api")).lower(),
+            game_id=str(data.get("GAME_ID", "com.axlebolt.standoff2")),
+            game_version=str(data.get("GAME_VERSION", "0.38.2")),
+            case_definition_ids=data.get("CASE_DEFINITION_IDS") or None,
         )
