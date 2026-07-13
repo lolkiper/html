@@ -88,14 +88,15 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
         log_fn("Тап по иконке Standoff 2 на рабочем столе...")
         step_launch_standoff_from_home(device, config)
 
-        log_fn("Шаг 1/4: Google аккаунт...")
-        step_google_account(device, account)
+        if config.google_via_settings:
+            log_fn("Google аккаунт через Настройки Android...")
+            step_google_account(device, account)
 
-        log_fn("Шаг 2/4: Вход в Standoff 2...")
-        step_standoff_login(device)
+        log_fn("Шаг 1/3: Вход в Standoff 2 (Google в игре)...")
+        step_standoff_login(device, account)
 
         if opts.link_twitch:
-            log_fn("Шаг 3/4: Привязка Twitch...")
+            log_fn("Шаг 2/3: Привязка Twitch...")
             result.twitch_linked = step_twitch_bind(
                 device,
                 account,
@@ -103,10 +104,10 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
             )
         else:
             result.twitch_linked = False
-            log_fn("Шаг 3/4: Привязка Twitch пропущена")
+            log_fn("Шаг 2/3: Привязка Twitch пропущена")
 
         if opts.sell_cases:
-            log_fn("Шаг 4/4: Продажа кейсов...")
+            log_fn("Шаг 3/3: Продажа кейсов...")
             sold, gold = step_sell_cases(
                 device,
                 min_price=opts.sell_min_price,
@@ -115,7 +116,7 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
             result.cases_sold = sold
             result.gold_earned = gold
         else:
-            log_fn("Шаг 4/4: Продажа кейсов пропущена")
+            log_fn("Шаг 3/3: Продажа кейсов пропущена")
 
         result.message = "OK"
         _append_log(
