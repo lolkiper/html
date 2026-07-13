@@ -7,6 +7,83 @@ import time
 from app.adb.device import AdbDevice
 from app.models import AccountCredentials
 
+_SIGN_IN_LABELS = ["Sign in", "Войти", "Add account", "Добавить аккаунт"]
+_DISMISS_LABELS = [
+    "Закрыть",
+    "Close",
+    "OK",
+    "Ок",
+    "Got it",
+    "Понятно",
+    "Dismiss",
+    "No thanks",
+    "Не сейчас",
+    "Not now",
+    "Пропустить",
+    "Skip",
+]
+_GOOGLE_INFO_MARKERS = [
+    "после входа в аккаунт google",
+    "after signing in to your google",
+    "сервисы google",
+    "google services",
+]
+
+
+def _screen_has_sign_in(device: AdbDevice) -> bool:
+    root = device.uiautomator_dump()
+    if root is None:
+        return False
+    return any(device.find_node(root, "text", label) is not None for label in _SIGN_IN_LABELS)
+
+
+def _dismiss_google_overlays(device: AdbDevice, max_rounds: int = 10) -> None:
+    """Close Google Play Services info popups that block the Sign in screen."""
+    for round_idx in range(max_rounds):
+        if _screen_has_sign_in(device):
+            return
+
+        root = device.uiautomator_dump()
+        if root is not None:
+            for node in root.iter():
+                text = (node.attrib.get("text") or "").lower()
+                if any(marker in text for marker in _GOOGLE_INFO_MARKERS):
+                    device.log("Попап Google Services — закрываем...")
+                    break
+
+        clicked = False
+        for label in _DISMISS_LABELS:
+            if device.click_by_ui("text", label, timeout=2):
+                clicked = True
+                device.rnd_delay()
+                break
+            if device.click_by_ui("content-desc", label, timeout=1):
+                clicked = True
+                device.rnd_delay()
+                break
+
+        if clicked:
+            continue
+
+        if round_idx >= 3:
+            device.log("Попап не закрылся по тексту — BACK")
+            device.shell("input keyevent 4")
+            time.sleep(1.2)
+        else:
+            time.sleep(1.0)
+
+
+def _click_sign_in(device: AdbDevice, timeout: float = 25.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _screen_has_sign_in(device):
+            for label in _SIGN_IN_LABELS:
+                if device.click_by_ui("text", label, timeout=3):
+                    return True
+        _dismiss_google_overlays(device, max_rounds=3)
+        time.sleep(0.8)
+    return False
+
 
 def step_google_account(device: AdbDevice, account: AccountCredentials) -> None:
     device.shell("am start -n com.android.settings/.Settings")
@@ -33,7 +110,10 @@ def step_google_account(device: AdbDevice, account: AccountCredentials) -> None:
     if not device.click_any(["Google", "Гугл"]):
         raise TimeoutError("Кнопка Google не найдена")
 
-    device.click_any(["Sign in", "Войти"], timeout=15)
+    device.rnd_delay()
+    _dismiss_google_overlays(device)
+    if not _click_sign_in(device):
+        raise TimeoutError('Кнопка "Sign in" / "Войти" не найдена (попап Google Services?)')
     device.rnd_delay()
 
     if not device.fill_field(
