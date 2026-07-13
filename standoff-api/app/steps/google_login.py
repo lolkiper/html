@@ -3,86 +3,89 @@
 from __future__ import annotations
 
 import time
+import xml.etree.ElementTree as ET
 
 from app.adb.device import AdbDevice
 from app.models import AccountCredentials
 
-_SIGN_IN_LABELS = ["Sign in", "Войти", "Add account", "Добавить аккаунт"]
-_DISMISS_LABELS = [
-    "Закрыть",
-    "Close",
-    "OK",
-    "Ок",
-    "Got it",
-    "Понятно",
-    "Dismiss",
-    "No thanks",
-    "Не сейчас",
-    "Not now",
-    "Пропустить",
-    "Skip",
+_EMAIL_FIELD_HINTS = [
+    "Телефон или адрес эл. почты",
+    "Телефон или email",
+    "Email or phone",
+    "Phone or email",
+    "Электронная почта",
 ]
+_PASSWORD_FIELD_HINTS = [
+    "Введите пароль",
+    "Enter your password",
+    "Пароль",
+    "Password",
+]
+_NEXT_LABELS = ["Далее", "ДАЛЕЕ", "Next", "NEXT"]
+_SIGN_IN_LABELS = ["Sign in", "Войти", "Add account", "Добавить аккаунт"]
+_BLOCKING_POPUP_CLOSE = ["Закрыть", "Close"]
 _GOOGLE_INFO_MARKERS = [
     "после входа в аккаунт google",
     "after signing in to your google",
-    "сервисы google",
-    "google services",
 ]
 
 
-def _screen_has_sign_in(device: AdbDevice) -> bool:
-    root = device.uiautomator_dump()
-    if root is None:
-        return False
-    return any(device.find_node(root, "text", label) is not None for label in _SIGN_IN_LABELS)
+def _node_texts(root: ET.Element) -> list[str]:
+    return [(node.attrib.get("text") or "").lower() for node in root.iter()]
 
 
-def _dismiss_google_overlays(device: AdbDevice, max_rounds: int = 10) -> None:
-    """Close Google Play Services info popups that block the Sign in screen."""
-    for round_idx in range(max_rounds):
-        if _screen_has_sign_in(device):
-            return
-
-        root = device.uiautomator_dump()
-        if root is not None:
-            for node in root.iter():
-                text = (node.attrib.get("text") or "").lower()
-                if any(marker in text for marker in _GOOGLE_INFO_MARKERS):
-                    device.log("Попап Google Services — закрываем...")
-                    break
-
-        clicked = False
-        for label in _DISMISS_LABELS:
-            if device.click_by_ui("text", label, timeout=2):
-                clicked = True
-                device.rnd_delay()
-                break
-            if device.click_by_ui("content-desc", label, timeout=1):
-                clicked = True
-                device.rnd_delay()
-                break
-
-        if clicked:
-            continue
-
-        if round_idx >= 3:
-            device.log("Попап не закрылся по тексту — BACK")
-            device.shell("input keyevent 4")
-            time.sleep(1.2)
-        else:
-            time.sleep(1.0)
+def _texts_contain(texts: list[str], *needles: str) -> bool:
+    return any(any(n in t for n in needles) for t in texts)
 
 
-def _click_sign_in(device: AdbDevice, timeout: float = 25.0) -> bool:
+def _is_login_form(root: ET.Element) -> bool:
+    texts = _node_texts(root)
+    return _texts_contain(
+        texts,
+        "телефон или адрес",
+        "phone or email",
+        "email or phone",
+        "электронная почта",
+    )
+
+
+
+def _is_blocking_info_popup(root: ET.Element) -> bool:
+    texts = _node_texts(root)
+    if _texts_contain(texts, "закрыть", "close") and _texts_contain(
+        texts, *_GOOGLE_INFO_MARKERS
+    ):
+        return True
+    return _texts_contain(texts, *_GOOGLE_INFO_MARKERS) and not _is_login_form(root)
+
+
+def _reach_login_form(device: AdbDevice, timeout: float = 35.0) -> bool:
+    """Dismiss info popup or click Sign in until the email form is visible."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _screen_has_sign_in(device):
-            for label in _SIGN_IN_LABELS:
-                if device.click_by_ui("text", label, timeout=3):
-                    return True
-        _dismiss_google_overlays(device, max_rounds=3)
-        time.sleep(0.8)
-    return False
+        root = device.uiautomator_dump()
+        if root is None:
+            time.sleep(1.0)
+            continue
+
+        if _is_login_form(root):
+            device.log("Экран входа Google (email)")
+            return True
+
+        if _is_blocking_info_popup(root):
+            device.log("Инфо-попап Google — Закрыть")
+            device.find_and_click_text(_BLOCKING_POPUP_CLOSE, timeout=3)
+            device.rnd_delay()
+            continue
+
+        if device.find_and_click_text(_SIGN_IN_LABELS, timeout=3):
+            device.rnd_delay()
+            continue
+
+        time.sleep(1.0)
+
+    root = device.uiautomator_dump()
+    return root is not None and _is_login_form(root)
 
 
 def step_google_account(device: AdbDevice, account: AccountCredentials) -> None:
@@ -111,31 +114,44 @@ def step_google_account(device: AdbDevice, account: AccountCredentials) -> None:
         raise TimeoutError("Кнопка Google не найдена")
 
     device.rnd_delay()
-    _dismiss_google_overlays(device)
-    if not _click_sign_in(device):
-        raise TimeoutError('Кнопка "Sign in" / "Войти" не найдена (попап Google Services?)')
+    if not _reach_login_form(device):
+        raise TimeoutError("Не удалось открыть форму входа Google")
+
+    device.log("Клик по полю email и ввод...")
+    if not device.fill_field(_EMAIL_FIELD_HINTS, account.google_login):
+        raise TimeoutError('Поле "Телефон или адрес эл. почты" не найдено')
+    if not device.find_and_click_text(_NEXT_LABELS, timeout=15):
+        raise TimeoutError('Кнопка "Далее" после email не найдена')
     device.rnd_delay()
 
-    if not device.fill_field(
-        ["Email or phone", "Phone or email", "Электронная почта", "Телефон или email"],
-        account.google_login,
+    device.log("Клик по полю пароля и ввод...")
+    if not device.wait_for("text", "Введите пароль", timeout=20) and not device.wait_for(
+        "text", "Enter your password", timeout=5
     ):
-        raise TimeoutError("Поле email Google не найдено")
-    device.click_any(["Next", "Далее"], timeout=12)
+        raise TimeoutError("Экран ввода пароля не появился")
+    if not device.fill_field(_PASSWORD_FIELD_HINTS, account.google_password):
+        raise TimeoutError('Поле "Введите пароль" не найдено')
+    if not device.find_and_click_text(_NEXT_LABELS, timeout=15):
+        raise TimeoutError('Кнопка "Далее" после пароля не найдена')
     device.rnd_delay()
 
-    if not device.fill_field(["Enter your password", "Пароль", "Password"], account.google_password):
-        raise TimeoutError("Поле пароля Google не найдено")
-    device.click_any(["Next", "Далее"], timeout=12)
+    device.log('Листаем и ищем "Понятно"...')
+    if not device.find_and_click_text_with_scroll(["Понятно", "Got it"], timeout=30):
+        device.log('Кнопка "Понятно" не найдена — возможно экран пропущен')
     device.rnd_delay()
 
-    for _ in range(5):
-        if device.click_any(["I agree", "Принимаю", "Accept", "Принять"], timeout=4):
-            device.rnd_delay()
-            continue
-        if device.click_any(["Skip", "Пропустить", "Not now", "Не сейчас"], timeout=3):
-            device.rnd_delay()
-            continue
-        break
+    device.log('Клик "Принимаю"...')
+    if not device.find_and_click_text(["Принимаю", "I agree", "Accept"], timeout=20):
+        device.log('Кнопка "Принимаю" не найдена — возможно экран пропущен')
+    device.rnd_delay()
 
+    device.log('Сервисы Google — "Ещё"...')
+    if device.find_and_click_text(["Ещё", "ЕЩЁ", "More", "MORE"], timeout=20):
+        device.rnd_delay()
+        device.log('Сервисы Google — "Принять"...')
+        device.find_and_click_text(["Принять", "ПРИНЯТЬ", "Accept", "I agree"], timeout=20)
+    else:
+        device.log('Кнопка "Ещё" не найдена — возможно уже принято')
+
+    device.rnd_delay()
     device.log(f"Google аккаунт {account.google_login} добавлен")

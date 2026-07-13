@@ -157,6 +157,51 @@ class AdbDevice:
                         return True
         return False
 
+    def find_and_click_text(self, labels: list[str], timeout: float = 20.0) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            root = self.uiautomator_dump()
+            if root is not None:
+                for label in labels:
+                    node = self.find_node(root, "text", label)
+                    if node is not None:
+                        center = self.node_center(node)
+                        if center:
+                            self.log(f'Клик: "{label}"')
+                            self.tap(center[0], center[1])
+                            self.rnd_delay()
+                            return True
+            time.sleep(1.0)
+        return False
+
+    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 400) -> None:
+        self.shell(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}")
+        time.sleep(0.6)
+
+    def scroll_down(self, screen_w: int = 1280, screen_h: int = 720) -> None:
+        cx = screen_w // 2
+        self.swipe(cx, int(screen_h * 0.72), cx, int(screen_h * 0.28), 450)
+
+    def find_and_click_text_with_scroll(
+        self,
+        labels: list[str],
+        timeout: float = 25.0,
+        max_scrolls: int = 8,
+        screen_w: int = 1280,
+        screen_h: int = 720,
+    ) -> bool:
+        deadline = time.time() + timeout
+        scrolls = 0
+        while time.time() < deadline:
+            if self.find_and_click_text(labels, timeout=2.5):
+                return True
+            if scrolls < max_scrolls:
+                self.scroll_down(screen_w, screen_h)
+                scrolls += 1
+            else:
+                time.sleep(1.0)
+        return False
+
     def click_any(self, labels: list[str], timeout: float = 20.0) -> bool:
         for label in labels:
             if self.click_by_ui("text", label, timeout=timeout / max(len(labels), 1)):
