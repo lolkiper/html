@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from app.text_io import read_text_auto
+
 
 def base_dir() -> Path:
     if getattr(sys, "frozen", False):
@@ -44,7 +46,7 @@ class AppConfig:
         path = CONFIG_FILE if CONFIG_FILE.exists() else CONFIG_EXAMPLE
         data: dict = {}
         if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(read_text_auto(path))
         return cls(
             api_host=str(data.get("API_HOST", "0.0.0.0")),
             api_port=int(data.get("API_PORT", 8080)),

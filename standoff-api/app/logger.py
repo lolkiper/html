@@ -59,7 +59,7 @@ class FarmLogger:
         repeat: bool,
     ) -> None:
         repeat_label = "repeat" if repeat else "no repeat"
-        self.farm(
+        self.twitch(
             f"cycle {cycle_no} complete: processed {processed}/{total}, "
             f"ok={ok}, errors={errors}, "
             f"sent={sent_gold:.2f}G, net≈{net_gold:.2f}G, "

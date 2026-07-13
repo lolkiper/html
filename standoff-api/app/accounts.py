@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.models import AccountCredentials, CreateJobRequest, JobOptions
+from app.text_io import read_text_auto
 
 
 def parse_account_line(line: str) -> AccountCredentials:
@@ -25,7 +26,7 @@ def load_accounts_file(path: Path) -> list[AccountCredentials]:
     if not path.is_file():
         return []
     out: list[AccountCredentials] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw in read_text_auto(path).splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
