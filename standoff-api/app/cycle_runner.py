@@ -52,8 +52,8 @@ def run_cycle(
                 log.step("twitch", step_idx, step_total, msg.replace("Шаг 3/4: ", ""))
             elif msg.startswith("Шаг 4"):
                 log.step("market", step_idx, step_total, msg.replace("Шаг 4/4: ", ""))
-            elif "Ошибка" in msg or "FAILED" in msg:
-                log.standoff(f"{step_idx}/{step_total} {msg[:100]}")
+            else:
+                log.standoff(f"{step_idx}/{step_total} {msg}")
 
         try:
             result = run_pipeline(

@@ -8,7 +8,7 @@ from datetime import datetime
 
 from app.adb.ldplayer import LdConsole, STANDOFF_PACKAGE, find_dnconsole
 from app.config import ERRORS_LOG, SUCCESS_LOG, AppConfig
-from app.models import AccountCredentials, CreateJobRequest, JobResult
+from app.models import CreateJobRequest, JobResult
 from app.steps.google_login import step_google_account
 from app.steps.sell_cases import step_sell_cases
 from app.steps.standoff_login import step_standoff_login
@@ -28,10 +28,6 @@ def _cleanup(device, google_login: str, ld: LdConsole) -> None:
         device.shell("pm clear com.google.android.gms")
     except Exception:
         pass
-    try:
-        ld.quit()
-    except Exception:
-        pass
 
 
 def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobResult:
@@ -42,14 +38,22 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
         twitch_login=account.twitch_login,
     )
 
+    log_fn(f"Поиск dnconsole (LDPLAYER_HOME={config.ldplayer_home})...")
     dnconsole = find_dnconsole(config.ldplayer_home)
+    log_fn(f"Найден: {dnconsole} | EMULATOR_INDEX={config.emulator_index}")
+
     ld = LdConsole(dnconsole, config.emulator_index, log_fn)
     device = None
 
     try:
-        log_fn("Сброс device ID и запуск LDPlayer...")
-        ld.randomize_device_ids()
+        if config.reset_device_on_start:
+            log_fn("RESET_DEVICE_ON_START=true — перезапуск эмулятора...")
+            ld.randomize_device_ids()
+        else:
+            log_fn("Проверка ADB (эмулятор должен быть уже запущен)...")
+
         device = ld.connect_device(config.delay_min_sec, config.delay_max_sec)
+        log_fn("ADB подключён.")
 
         log_fn("Шаг 1/4: Google аккаунт...")
         step_google_account(device, account)
@@ -95,7 +99,7 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
             ERRORS_LOG,
             f"google={account.google_login} twitch={account.twitch_login} | {exc}",
         )
-        log_fn(f"Ошибка: {exc}\n{traceback.format_exc()}")
+        log_fn(f"Ошибка: {exc}")
         raise
 
     finally:
@@ -104,4 +108,4 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
                 _cleanup(device, account.google_login, ld)
             except Exception:
                 pass
-        time.sleep(2)
+        time.sleep(1)

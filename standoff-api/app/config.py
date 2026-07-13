@@ -40,6 +40,7 @@ class AppConfig:
     delay_min_sec: float = 1.2
     delay_max_sec: float = 2.5
     market_fee_rate: float = 0.75
+    reset_device_on_start: bool = False
 
     @classmethod
     def load(cls) -> AppConfig:
@@ -60,4 +61,5 @@ class AppConfig:
             delay_min_sec=float(data.get("DELAY_MIN_SEC", 1.2)),
             delay_max_sec=float(data.get("DELAY_MAX_SEC", 2.5)),
             market_fee_rate=float(data.get("MARKET_FEE_RATE", 0.75)),
+            reset_device_on_start=bool(data.get("RESET_DEVICE_ON_START", False)),
         )
