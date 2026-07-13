@@ -93,7 +93,7 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
             step_google_account(device, account)
 
         log_fn("Шаг 1/3: Вход в Standoff 2 (Google в игре)...")
-        step_standoff_login(device, account)
+        step_standoff_login(device, account, config)
 
         if opts.link_twitch:
             log_fn("Шаг 2/3: Привязка Twitch...")

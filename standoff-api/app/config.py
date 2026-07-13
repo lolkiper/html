@@ -36,6 +36,8 @@ class AppConfig:
     adb_port: Optional[int] = None
     standoff_icon_x: int = 660
     standoff_icon_y: int = 340
+    standoff_google_x: int = 350
+    standoff_google_y: int = 610
     sell_min_price: bool = True
     sell_max_items: int = 50
     skip_twitch_if_linked: bool = True
@@ -61,6 +63,8 @@ class AppConfig:
             adb_port=data.get("ADB_PORT"),
             standoff_icon_x=int(data.get("STANDOFF_ICON_X", 660)),
             standoff_icon_y=int(data.get("STANDOFF_ICON_Y", 340)),
+            standoff_google_x=int(data.get("STANDOFF_GOOGLE_X", 350)),
+            standoff_google_y=int(data.get("STANDOFF_GOOGLE_Y", 610)),
             sell_min_price=bool(data.get("SELL_MIN_PRICE", True)),
             sell_max_items=int(data.get("SELL_MAX_ITEMS", 50)),
             skip_twitch_if_linked=bool(data.get("SKIP_TWITCH_IF_LINKED", True)),
