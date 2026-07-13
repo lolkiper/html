@@ -21,6 +21,7 @@ CONFIG_EXAMPLE = BASE_DIR / "config.example.json"
 ACCOUNTS_FILE = BASE_DIR / "accounts.txt"
 SUCCESS_LOG = BASE_DIR / "success_log.txt"
 ERRORS_LOG = BASE_DIR / "errors_log.txt"
+CYCLE_LOG = BASE_DIR / "cycle_log.txt"
 
 
 @dataclass
@@ -36,6 +37,7 @@ class AppConfig:
     skip_twitch_if_linked: bool = True
     delay_min_sec: float = 1.2
     delay_max_sec: float = 2.5
+    market_fee_rate: float = 0.75
 
     @classmethod
     def load(cls) -> AppConfig:
@@ -55,4 +57,5 @@ class AppConfig:
             skip_twitch_if_linked=bool(data.get("SKIP_TWITCH_IF_LINKED", True)),
             delay_min_sec=float(data.get("DELAY_MIN_SEC", 1.2)),
             delay_max_sec=float(data.get("DELAY_MAX_SEC", 2.5)),
+            market_fee_rate=float(data.get("MARKET_FEE_RATE", 0.75)),
         )

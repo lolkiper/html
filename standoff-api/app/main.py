@@ -9,8 +9,15 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from app.adb.ldplayer import find_dnconsole
 from app.accounts import load_accounts_file, to_job_request
 from app.config import ACCOUNTS_FILE, AppConfig
+from app.cycle_runner import run_cycle
 from app.job_manager import JobManager
-from app.models import CreateJobRequest, HealthResponse, JobInfo
+from app.models import (
+    CreateJobRequest,
+    CycleRunRequest,
+    CycleRunResponse,
+    HealthResponse,
+    JobInfo,
+)
 
 config = AppConfig.load()
 job_manager = JobManager(config, max_workers=1)
@@ -74,6 +81,39 @@ def get_job_logs(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"job_id": job_id, "logs": job_manager.get_logs(job_id)}
+
+
+@app.post("/cycles/run", response_model=CycleRunResponse, dependencies=[Depends(verify_api_key)])
+def run_accounts_cycle(request: CycleRunRequest) -> CycleRunResponse:
+    """Прогон accounts.txt одним циклом с итоговым логом."""
+    accounts = load_accounts_file(ACCOUNTS_FILE)
+    if not accounts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Нет аккаунтов в {ACCOUNTS_FILE}",
+        )
+    if request.limit is not None:
+        accounts = accounts[: request.limit]
+
+    stats = run_cycle(
+        accounts,
+        config,
+        cycle_no=request.cycle_no,
+        options=request.options,
+        repeat=request.repeat,
+    )
+    return CycleRunResponse(
+        cycle_no=stats.cycle_no,
+        total=stats.total,
+        processed=stats.processed,
+        ok=stats.ok,
+        errors=stats.errors,
+        sent_gold=round(stats.sent_gold, 2),
+        net_gold=round(stats.net_gold, 2),
+        elapsed_sec=round(stats.elapsed_sec, 1),
+        repeat=stats.repeat,
+        failed_accounts=stats.failed_accounts,
+    )
 
 
 @app.post("/jobs/batch", response_model=list[JobInfo], dependencies=[Depends(verify_api_key)])

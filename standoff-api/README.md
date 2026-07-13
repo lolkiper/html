@@ -33,6 +33,34 @@ python run.py
 
 Документация: http://localhost:8080/docs
 
+## Логи (формат как в фарме)
+
+```
+[twitch] cycle 1 start: 40 accounts, no repeat
+[standoff] 1/40 google=user@gmail.com | twitch=twitch_user | starting...
+[twitch] 1/40 bind twitch_user... ok
+[market] 1/40 sold=3 items, gross=45.00G
+[standoff] 1/40 google=user@gmail.com | done ok | linked | sold=3 | gross=45.00G net≈33.75G | time=62.3s
+[twitch] cycle 1 complete: processed 40/40, ok=20, errors=20, sent=4571.60G, net≈3428.69G, time=420.6s, no repeat
+```
+
+Пишется в консоль и в `cycle_log.txt`.
+
+### CLI цикл
+
+```bash
+python run_cycle.py --limit 40
+```
+
+### API цикл
+
+```bash
+POST /cycles/run
+{"limit": 40, "cycle_no": 1, "repeat": false}
+```
+
+`net` = `sent * MARKET_FEE_RATE` (по умолчанию 0.75 — комиссия рынка).
+
 ## Эндпоинты
 
 | Метод | URL | Описание |

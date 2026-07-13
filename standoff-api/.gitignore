@@ -6,3 +6,4 @@ config.json
 accounts.txt
 success_log.txt
 errors_log.txt
+cycle_log.txt

@@ -60,3 +60,23 @@ class HealthResponse(BaseModel):
     status: str
     ldplayer_found: bool
     queue_size: int
+
+
+class CycleRunRequest(BaseModel):
+    limit: Optional[int] = None
+    cycle_no: int = 1
+    repeat: bool = False
+    options: JobOptions = Field(default_factory=JobOptions)
+
+
+class CycleRunResponse(BaseModel):
+    cycle_no: int
+    total: int
+    processed: int
+    ok: int
+    errors: int
+    sent_gold: float
+    net_gold: float
+    elapsed_sec: float
+    repeat: bool
+    failed_accounts: list[str] = Field(default_factory=list)
