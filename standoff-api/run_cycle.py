@@ -18,6 +18,11 @@ def main() -> int:
     parser.add_argument("--repeat", action="store_true", help="Пометка repeat в итоге")
     parser.add_argument("--no-twitch", action="store_true")
     parser.add_argument("--no-sell", action="store_true")
+    parser.add_argument(
+        "--icon-only",
+        action="store_true",
+        help="Только ADB + тап по иконке Standoff 2 (тест)",
+    )
     args = parser.parse_args()
 
     config = AppConfig.load()

@@ -34,6 +34,8 @@ class AppConfig:
     ldplayer_home: Optional[str] = None
     emulator_index: int = 0
     adb_port: Optional[int] = None
+    standoff_icon_x: int = 660
+    standoff_icon_y: int = 340
     sell_min_price: bool = True
     sell_max_items: int = 50
     skip_twitch_if_linked: bool = True

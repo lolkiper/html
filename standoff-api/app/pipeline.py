@@ -10,6 +10,7 @@ from app.adb.ldplayer import LdConsole, STANDOFF_PACKAGE, find_dnconsole
 from app.config import ERRORS_LOG, SUCCESS_LOG, AppConfig
 from app.models import CreateJobRequest, JobResult
 from app.steps.google_login import step_google_account
+from app.steps.launch_standoff import step_launch_standoff_from_home
 from app.steps.sell_cases import step_sell_cases
 from app.steps.standoff_login import step_standoff_login
 from app.steps.twitch_bind import step_twitch_bind
@@ -54,6 +55,9 @@ def run_pipeline(job: CreateJobRequest, config: AppConfig, log_fn=print) -> JobR
 
         device = ld.connect_device(config.delay_min_sec, config.delay_max_sec)
         log_fn("ADB подключён.")
+
+        log_fn("Тап по иконке Standoff 2 на рабочем столе...")
+        step_launch_standoff_from_home(device, config)
 
         log_fn("Шаг 1/4: Google аккаунт...")
         step_google_account(device, account)

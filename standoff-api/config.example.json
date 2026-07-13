@@ -4,6 +4,8 @@
   "API_KEY": "бярюбэ_ябни_йкчв",
   "LDPLAYER_HOME": "C:\\LDPlayer\\LDPlayer9",
   "EMULATOR_INDEX": 0,
+  "STANDOFF_ICON_X": 660,
+  "STANDOFF_ICON_Y": 340,
   "ADB_PORT": null,
   "SCREEN_W": 1280,
   "SCREEN_H": 720,
