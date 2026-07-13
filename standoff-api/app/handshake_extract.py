@@ -11,6 +11,11 @@ from app.adb.ldplayer import STANDOFF_PACKAGE
 _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
 # Long base64-ish ticket without dots
 _B64_TICKET_RE = re.compile(r"(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{80,})(?![A-Za-z0-9_-])")
+# dump.cs 0.39.2: AuthenticatedPlayerApiState._token / PlayerAuthInfo.Token after HandshakeAsync
+_LOGCAT_COMMANDS = (
+    "logcat -d",
+    'logcat -d | grep -iE "eyJ|handshake|ticket|bolt|axlebolt" 2>/dev/null || logcat -d',
+)
 
 
 def _unique_candidates(text: str) -> list[str]:
@@ -28,14 +33,15 @@ def _unique_candidates(text: str) -> list[str]:
 
 def _try_logcat(shell_fn: Callable[[str], str], log_fn=print) -> str | None:
     log_fn("Токен: читаю logcat...")
-    raw = shell_fn("logcat -d")
-    for token in _unique_candidates(raw):
-        if token.count(".") >= 2:  # prefer JWT shape
-            log_fn(f"Токен найден в logcat (JWT, {len(token)} симв.)")
+    for cmd in _LOGCAT_COMMANDS:
+        raw = shell_fn(cmd)
+        for token in _unique_candidates(raw):
+            if token.count(".") >= 2:  # prefer JWT shape
+                log_fn(f"Токен найден в logcat (JWT, {len(token)} симв.)")
+                return token
+        for token in _unique_candidates(raw):
+            log_fn(f"Токен найден в logcat ({len(token)} симв.)")
             return token
-    for token in _unique_candidates(raw):
-        log_fn(f"Токен найден в logcat ({len(token)} симв.)")
-        return token
     return None
 
 
