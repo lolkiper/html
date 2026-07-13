@@ -57,6 +57,8 @@ class AppConfig:
             ldplayer_home=data.get("LDPLAYER_HOME") or None,
             emulator_index=int(data.get("EMULATOR_INDEX", 0)),
             adb_port=data.get("ADB_PORT"),
+            standoff_icon_x=int(data.get("STANDOFF_ICON_X", 660)),
+            standoff_icon_y=int(data.get("STANDOFF_ICON_Y", 340)),
             sell_min_price=bool(data.get("SELL_MIN_PRICE", True)),
             sell_max_items=int(data.get("SELL_MAX_ITEMS", 50)),
             skip_twitch_if_linked=bool(data.get("SKIP_TWITCH_IF_LINKED", True)),

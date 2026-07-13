@@ -6,7 +6,7 @@ import time
 import traceback
 from datetime import datetime
 
-from app.adb.ldplayer import LdConsole, STANDOFF_PACKAGE, find_dnconsole
+from app.adb.ldplayer import LdConsole, STANDOFF_PACKAGE, connect_device, find_dnconsole
 from app.config import ERRORS_LOG, SUCCESS_LOG, AppConfig
 from app.models import CreateJobRequest, JobResult
 from app.steps.google_login import step_google_account

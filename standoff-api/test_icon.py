@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from app.adb.ldplayer import LdConsole, find_dnconsole
+from app.adb.ldplayer import LdConsole, connect_device, find_dnconsole
 from app.config import AppConfig
 from app.steps.launch_standoff import step_launch_standoff_from_home
 
@@ -17,7 +17,7 @@ def main() -> int:
     print(f"EMULATOR_INDEX: {config.emulator_index}\n")
 
     ld = LdConsole(exe, config.emulator_index, print)
-    device = ld.connect_device(config.delay_min_sec, config.delay_max_sec)
+    device = connect_device(ld, adb_port=config.adb_port)
     step_launch_standoff_from_home(device, config)
     print("\n[OK] Тап выполнен. Должна начать грузиться Standoff 2.")
     return 0
