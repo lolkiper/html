@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import xml.etree.ElementTree as ET
 
-from app.adb.device import AdbDevice
+from app.adb.device import AdbDevice, normalize_ui_text
 from app.models import AccountCredentials
 
 _EMAIL_FIELD_HINTS = [
@@ -45,17 +45,38 @@ def is_popup_blocking(root: ET.Element) -> bool:
     return has_close and has_info
 
 
+def _screen_text_blob(root: ET.Element) -> str:
+    parts: list[str] = []
+    for node in root.iter():
+        for attr in ("text", "content-desc"):
+            raw = normalize_ui_text(node.attrib.get(attr) or "")
+            if raw:
+                parts.append(raw)
+    return " ".join(parts)
+
+
 def is_login_form(root: ET.Element) -> bool:
     if is_popup_blocking(root):
         return False
-    texts = _node_texts(root)
-    return _texts_contain(
-        texts,
-        "телефон или адрес",
-        "phone or email",
-        "email or phone",
-        "электронная почта",
-    )
+    blob = _screen_text_blob(root)
+    if _texts_contain([blob], "телефон или адрес", "phone or email", "email or phone", "электронная почта"):
+        return True
+    if "используйте аккаунт google" in blob and "далее" in blob:
+        return True
+    if "google" in blob and "вход" in blob and "далее" in blob:
+        return True
+    return False
+
+
+def _focus_email_field(device: AdbDevice) -> bool:
+    if device.click_text(_EMAIL_FIELD_HINTS, timeout=10, tap_label=True):
+        return True
+    if device.click_edittext(0):
+        return True
+    device.log("Запасной тап в поле email (640, 300)")
+    device.tap(640, 300)
+    device.rnd_delay()
+    return True
 
 
 def dismiss_blocking_popup(device: AdbDevice, max_attempts: int = 6) -> None:
@@ -79,7 +100,7 @@ def reach_login_form(device: AdbDevice, timeout: float = 35.0) -> bool:
             time.sleep(1.0)
             continue
         if is_login_form(root):
-            device.log('Форма готова — виден текст "Телефон или адрес эл. почты"')
+            device.log("Экран Google email открыт")
             return True
         if device.click_text(_SIGN_IN_LABELS, timeout=3):
             device.rnd_delay()
@@ -95,11 +116,8 @@ def step_google_signin_form(device: AdbDevice, account: AccountCredentials) -> N
     if not reach_login_form(device):
         raise TimeoutError("Не удалось открыть форму входа Google")
 
-    device.log('Клик по тексту "Телефон или адрес эл. почты"...')
-    if not device.click_text(_EMAIL_FIELD_HINTS, timeout=20, tap_label=True):
-        dismiss_blocking_popup(device)
-        if not device.click_text(_EMAIL_FIELD_HINTS, timeout=15, tap_label=True):
-            raise TimeoutError('Не удалось нажать на текст "Телефон или адрес эл. почты"')
+    device.log("Клик в поле email...")
+    _focus_email_field(device)
     time.sleep(0.5)
     device.log(f"Ввод email: {account.google_login}")
     device.input_text(account.google_login)

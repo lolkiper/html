@@ -11,6 +11,17 @@ from typing import Callable, Optional
 BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
 
+def normalize_ui_text(value: str) -> str:
+    return (
+        (value or "")
+        .replace("\u00a0", " ")
+        .replace("–", "-")
+        .replace("—", "-")
+        .lower()
+        .strip()
+    )
+
+
 class AdbDevice:
     def __init__(
         self,
@@ -132,14 +143,14 @@ class AdbDevice:
         exact: bool = False,
     ) -> list[tuple[int, ET.Element, str]]:
         """Find nodes by visible text or content-desc."""
-        needles = [label.lower().strip() for label in labels]
+        needles = [normalize_ui_text(label) for label in labels]
         found: list[tuple[int, ET.Element, str]] = []
         for node in root.iter():
             for attr in ("text", "content-desc"):
                 raw = (node.attrib.get(attr) or "").strip()
                 if not raw:
                     continue
-                raw_l = raw.lower()
+                raw_l = normalize_ui_text(raw)
                 for needle in needles:
                     matched = raw_l == needle if exact else needle in raw_l
                     if matched:
@@ -310,8 +321,24 @@ class AdbDevice:
                 time.sleep(1.0)
         return False
 
-    def click_any(self, labels: list[str], timeout: float = 20.0) -> bool:
-        return self.click_text(labels, timeout=timeout)
+    def click_edittext(self, index: int = 0) -> bool:
+        root = self.uiautomator_dump()
+        if root is None:
+            return False
+        seen = 0
+        for node in root.iter():
+            if "EditText" not in (node.attrib.get("class") or ""):
+                continue
+            if seen < index:
+                seen += 1
+                continue
+            center = self.node_center(node)
+            if center:
+                self.log(f"Клик по EditText #{index}")
+                self.tap(center[0], center[1])
+                self.rnd_delay()
+                return True
+        return False
 
     def find_nodes_with_text(self, *needles: str) -> list[ET.Element]:
         root = self.uiautomator_dump()

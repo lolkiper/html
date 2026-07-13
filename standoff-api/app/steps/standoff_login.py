@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from app.adb.device import AdbDevice
 from app.config import AppConfig
 from app.models import AccountCredentials
-from app.steps.google_signin_form import step_google_signin_form
+from app.steps.google_signin_form import is_login_form, step_google_signin_form
 
 _ALLOW_LABELS = ["РАЗРЕШИТЬ", "Разрешить", "ALLOW", "Allow"]
 _LEGAL_ACCEPT_LABELS = ["ПРИНИМАЮ", "Принимаю", "I ACCEPT", "I accept"]
@@ -76,11 +76,15 @@ def _reach_google_login_button(
     unity_hits = 0
 
     while time.time() < deadline:
-        if device.has_text(_GOOGLE_EMAIL_SCREEN):
-            device.log('Экран Google email уже открыт — вводим почту')
+        root = device.uiautomator_dump()
+
+        if root is not None and is_login_form(root):
+            device.log("Экран Google email уже открыт — вводим почту")
             return True
 
-        root = device.uiautomator_dump()
+        if device.has_text(_GOOGLE_EMAIL_SCREEN):
+            device.log("Экран Google email уже открыт — вводим почту")
+            return True
 
         if device.has_text(_GOOGLE_LOGIN_LABELS):
             device.log('Клик по тексту "Вход с помощью Google"')
