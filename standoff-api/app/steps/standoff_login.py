@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from app.adb.device import AdbDevice
 from app.config import AppConfig
 from app.models import AccountCredentials
-from app.steps.google_signin_form import is_login_form, step_google_signin_form
+from app.steps.google_signin_form import is_login_form, is_password_form, step_google_signin_form
 
 _ALLOW_LABELS = ["РАЗРЕШИТЬ", "Разрешить", "ALLOW", "Allow"]
 _LEGAL_ACCEPT_LABELS = ["ПРИНИМАЮ", "Принимаю", "I ACCEPT", "I accept"]
@@ -82,6 +82,10 @@ def _reach_google_login_button(
             device.log("Экран Google email уже открыт — вводим почту")
             return True
 
+        if root is not None and is_password_form(root):
+            device.log("Экран Google пароля уже открыт — продолжаем вход")
+            return True
+
         if device.has_text(_GOOGLE_EMAIL_SCREEN):
             device.log("Экран Google email уже открыт — вводим почту")
             return True
@@ -121,11 +125,11 @@ def _reach_google_login_button(
             unity_hits = 0
 
         now = time.time()
-        if now - last_debug > 12:
+        if now - last_debug > 8:
             device.log(_sample_visible_labels(device))
             last_debug = now
 
-        time.sleep(2.0)
+        time.sleep(0.8)
 
     return _tap_google_button(device, google_coord, "Таймаут — запасной тап")
 

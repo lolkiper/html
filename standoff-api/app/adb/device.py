@@ -41,6 +41,12 @@ class AdbDevice:
     def rnd_delay(self) -> None:
         time.sleep(random.uniform(self.delay_min, self.delay_max))
 
+    def after_action_pause(self, *, fast: bool = False) -> None:
+        if fast:
+            time.sleep(0.15)
+        else:
+            self.rnd_delay()
+
     def tap(self, x: int, y: int, jitter: int = 3) -> None:
         tx = x + random.randint(-jitter, jitter)
         ty = y + random.randint(-jitter, jitter)
@@ -72,7 +78,7 @@ class AdbDevice:
     def uiautomator_dump(self) -> Optional[ET.Element]:
         dump_path = "/sdcard/window_dump.xml"
         self.shell(f"uiautomator dump {dump_path}")
-        time.sleep(0.8)
+        time.sleep(0.35)
         xml_raw = self.shell(f"cat {dump_path}")
         if not xml_raw or "<?xml" not in xml_raw:
             return None
@@ -189,9 +195,11 @@ class AdbDevice:
         exact: bool = False,
         tap_label: bool = False,
         quiet: bool = False,
+        fast: bool = False,
     ) -> bool:
         """Click only by visible text from UI dump (no coordinates fallback)."""
         deadline = time.time() + timeout
+        poll = 0.35 if fast else 1.0
         while time.time() < deadline:
             root = self.uiautomator_dump()
             if root is not None:
@@ -202,9 +210,9 @@ class AdbDevice:
                     if center:
                         self.log(f'Клик по тексту: "{matched_text}"')
                         self.tap(center[0], center[1])
-                        self.rnd_delay()
+                        self.after_action_pause(fast=fast)
                         return True
-            time.sleep(1.0)
+            time.sleep(poll)
         if not quiet:
             wanted = ", ".join(f'"{label}"' for label in labels)
             self.log(f"Timeout: текст не найден ({wanted})")
@@ -321,7 +329,7 @@ class AdbDevice:
                 time.sleep(1.0)
         return False
 
-    def click_edittext(self, index: int = 0) -> bool:
+    def click_edittext(self, index: int = 0, *, fast: bool = False) -> bool:
         root = self.uiautomator_dump()
         if root is None:
             return False
@@ -336,7 +344,7 @@ class AdbDevice:
             if center:
                 self.log(f"Клик по EditText #{index}")
                 self.tap(center[0], center[1])
-                self.rnd_delay()
+                self.after_action_pause(fast=fast)
                 return True
         return False
 
