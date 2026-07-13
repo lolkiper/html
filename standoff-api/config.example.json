@@ -1,0 +1,15 @@
+{
+  "API_HOST": "0.0.0.0",
+  "API_PORT": 8080,
+  "API_KEY": "ÂÑÒÀÂÜ_ÑÂÎÉ_ÊËÞ×",
+  "LDPLAYER_HOME": "C:\\LDPlayer\\LDPlayer9",
+  "EMULATOR_INDEX": 0,
+  "ADB_PORT": null,
+  "SCREEN_W": 1280,
+  "SCREEN_H": 720,
+  "SELL_MIN_PRICE": true,
+  "SELL_MAX_ITEMS": 50,
+  "SKIP_TWITCH_IF_LINKED": true,
+  "DELAY_MIN_SEC": 1.2,
+  "DELAY_MAX_SEC": 2.5
+}

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+config.json
+accounts.txt
+success_log.txt
+errors_log.txt
