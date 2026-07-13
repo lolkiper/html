@@ -151,6 +151,12 @@ class AdbDevice:
         found.sort(key=lambda item: item[0], reverse=True)
         return found
 
+    def has_text(self, labels: list[str], *, exact: bool = False) -> bool:
+        root = self.uiautomator_dump()
+        if root is None:
+            return False
+        return bool(self.find_text_nodes(root, labels, exact=exact))
+
     def click_text(
         self,
         labels: list[str],
@@ -158,6 +164,7 @@ class AdbDevice:
         *,
         exact: bool = False,
         tap_label: bool = False,
+        quiet: bool = False,
     ) -> bool:
         """Click only by visible text from UI dump (no coordinates fallback)."""
         deadline = time.time() + timeout
@@ -174,8 +181,9 @@ class AdbDevice:
                         self.rnd_delay()
                         return True
             time.sleep(1.0)
-        wanted = ", ".join(f'"{label}"' for label in labels)
-        self.log(f"Timeout: текст не найден ({wanted})")
+        if not quiet:
+            wanted = ", ".join(f'"{label}"' for label in labels)
+            self.log(f"Timeout: текст не найден ({wanted})")
         return False
 
     def fill_field_by_text(

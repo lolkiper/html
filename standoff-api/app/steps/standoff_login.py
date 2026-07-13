@@ -16,29 +16,32 @@ _GOOGLE_LOGIN_LABELS = [
     "Login with Google",
     "Войти с Google",
 ]
-_LOBBY_LABELS = ["PLAY", "ИГРАТЬ", "Play", "Играть"]
 _CONTINUE_LABELS = ["Continue", "Продолжить", "Select", "Выбрать"]
 
 
-def _wait_click_text(
-    device: AdbDevice,
-    labels: list[str],
-    *,
-    timeout: float = 45.0,
-    log_msg: str = "",
-    optional: bool = False,
-) -> bool:
-    if log_msg:
-        device.log(log_msg)
+def _reach_google_login_button(device: AdbDevice, timeout: float = 90.0) -> bool:
+    """Ждёт нужный экран и сразу жмёт «Вход с помощью Google», если он уже виден."""
     deadline = time.time() + timeout
+
     while time.time() < deadline:
-        if device.click_text(labels, timeout=3):
+        if device.has_text(_GOOGLE_LOGIN_LABELS):
+            device.log('Экран входа — клик по тексту "Вход с помощью Google"')
+            return device.click_text(_GOOGLE_LOGIN_LABELS, timeout=8)
+
+        if device.has_text(_ALLOW_LABELS):
+            device.log('Разрешение — клик по тексту "РАЗРЕШИТЬ"')
+            device.click_text(_ALLOW_LABELS, timeout=4, quiet=True)
             device.rnd_delay()
-            return True
+            continue
+
+        if device.has_text(_LEGAL_ACCEPT_LABELS):
+            device.log('Юридическая информация — клик по тексту "ПРИНИМАЮ"')
+            device.click_text(_LEGAL_ACCEPT_LABELS, timeout=4, quiet=True)
+            device.rnd_delay()
+            continue
+
         time.sleep(1.5)
-    if optional:
-        device.log(f"Не найдено (пропуск): {labels[0]}")
-        return False
+
     return False
 
 
@@ -46,40 +49,15 @@ def step_standoff_login(device: AdbDevice, account: AccountCredentials) -> None:
     device.log("Ожидание загрузки Standoff 2...")
     time.sleep(8)
 
-    _wait_click_text(
-        device,
-        _ALLOW_LABELS,
-        timeout=50,
-        log_msg='Шаг 1: разрешение — клик по тексту "РАЗРЕШИТЬ"',
-        optional=True,
-    )
-
-    _wait_click_text(
-        device,
-        _LEGAL_ACCEPT_LABELS,
-        timeout=50,
-        log_msg='Шаг 2: юридическая информация — клик по тексту "ПРИНИМАЮ"',
-        optional=True,
-    )
-
-    if not _wait_click_text(
-        device,
-        _GOOGLE_LOGIN_LABELS,
-        timeout=60,
-        log_msg='Шаг 3: клик по тексту "Вход с помощью Google"',
-    ):
+    if not _reach_google_login_button(device):
         raise TimeoutError('Кнопка "Вход с помощью Google" не найдена')
 
-    device.log("Шаг 4: Google вход (email → Далее → пароль → Далее)...")
+    device.log("Google вход (email → Далее → пароль → Далее)...")
     step_google_signin_form(device, account)
 
-    _wait_click_text(
-        device,
-        _CONTINUE_LABELS,
-        timeout=20,
-        log_msg="Выбор аккаунта Google (если есть)...",
-        optional=True,
-    )
+    if device.has_text(_CONTINUE_LABELS):
+        device.log("Выбор аккаунта Google...")
+        device.click_text(_CONTINUE_LABELS, timeout=8, quiet=True)
 
     if device.wait_for("text", "PLAY", timeout=15) or device.wait_for("text", "ИГРАТЬ", timeout=10):
         device.log("Лобби Standoff 2 открыто")
