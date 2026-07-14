@@ -218,6 +218,22 @@ class AdbDevice:
             self.log(f"Timeout: текст не найден ({wanted})")
         return False
 
+    def click_any(
+        self,
+        labels: list[str],
+        timeout: float = 20.0,
+        *,
+        fast: bool = False,
+        quiet: bool = True,
+    ) -> bool:
+        if self.click_text(labels, timeout=timeout, quiet=quiet, fast=fast):
+            return True
+        per_label = max(timeout / max(len(labels), 1), 1.5)
+        for label in labels:
+            if self.click_text([label], timeout=per_label, quiet=True, fast=fast):
+                return True
+        return False
+
     def fill_field_by_text(
         self,
         labels: list[str],
