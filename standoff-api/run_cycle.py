@@ -17,7 +17,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=None, help="Макс. аккаунтов")
     parser.add_argument("--cycle", type=int, default=1, help="Номер цикла в логе")
     parser.add_argument("--repeat", action="store_true", help="Пометка repeat в итоге")
-    parser.add_argument("--no-twitch", action="store_true")
+    parser.add_argument("--twitch", action="store_true", help="Привязать Twitch (по умолчанию выкл.)")
     parser.add_argument("--no-sell", action="store_true")
     parser.add_argument(
         "--farm-only",
@@ -42,7 +42,7 @@ def main() -> int:
         accounts = accounts[: args.limit]
 
     options = JobOptions(
-        link_twitch=not args.no_twitch,
+        link_twitch=args.twitch,
         sell_cases=not args.no_sell,
     )
     stats = run_cycle(

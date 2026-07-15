@@ -36,7 +36,7 @@ def main() -> int:
     accounts = load_accounts_needing_prepare(in_path)
     if not accounts:
         print(f"Нет аккаунтов без handshake в {in_path}")
-        print("Формат: google:pass:twitch:pass")
+        print("Формат: google_login:google_pass")
         return 1
 
     if args.limit:

@@ -20,14 +20,14 @@ class JobStatus(str, Enum):
 class AccountCredentials(BaseModel):
     google_login: str = Field(..., min_length=1)
     google_password: str = Field(default="")
-    twitch_login: str = Field(..., min_length=1)
+    twitch_login: str = Field(default="")
     twitch_password: str = Field(default="")
     handshake: Optional[str] = None
     twitch_auth_code: Optional[str] = None
 
 
 class JobOptions(BaseModel):
-    link_twitch: bool = True
+    link_twitch: bool = False
     sell_cases: bool = True
     sell_min_price: bool = True
     sell_max_items: int = Field(50, ge=1, le=200)

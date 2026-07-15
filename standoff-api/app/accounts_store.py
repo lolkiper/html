@@ -10,10 +10,13 @@ from app.text_io import read_text_auto
 
 
 def account_to_line(account: AccountCredentials) -> str:
-    line = (
-        f"{account.google_login}:{account.google_password}:"
-        f"{account.twitch_login}:{account.twitch_password}"
-    )
+    if account.twitch_login:
+        line = (
+            f"{account.google_login}:{account.google_password}:"
+            f"{account.twitch_login}:{account.twitch_password}"
+        )
+    else:
+        line = f"{account.google_login}:{account.google_password}"
     if account.handshake:
         line += f":{account.handshake}"
         if account.twitch_auth_code:
