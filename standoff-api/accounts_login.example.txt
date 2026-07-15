@@ -1,0 +1,3 @@
+# Аккаунты БЕЗ handshake — для run_prepare.py
+# Формат (без Twitch): google_login:google_pass
+ChristaCrockerbbu2p@azhsk.org:твой_пароль_google

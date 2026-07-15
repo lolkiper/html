@@ -1,0 +1,3 @@
+# јккаунты с handshake Ч дл€ run_farm.py
+# google_login:google_pass[:handshake]
+# example@gmail.com:google_pass:eyJhbGciOiJ...

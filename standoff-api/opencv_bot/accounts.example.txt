@@ -1,0 +1,2 @@
+# Формат: email:password (один аккаунт на строку)
+# example@gmail.com:your_google_password

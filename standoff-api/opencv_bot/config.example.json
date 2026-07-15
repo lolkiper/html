@@ -1,0 +1,62 @@
+{
+  "ADB_HOST": "127.0.0.1",
+  "ADB_PORTS": [5555, 5554, 5575, 5574],
+  "LDPLAYER_HOME": "C:\\LDPlayer\\LDPlayer9",
+  "EMULATOR_INDEX": 0,
+  "SCREEN_WIDTH": 1280,
+  "SCREEN_HEIGHT": 720,
+
+  "ACCOUNTS_FILE": "accounts.txt",
+  "DONE_FILE": "done.txt",
+  "ERROR_FILE": "error.txt",
+  "SCREENSHOTS_DIR": "screenshots",
+
+  "STANDOFF_PACKAGE": "com.axlebolt.standoff2",
+  "GOOGLE_PLAY_PACKAGE": "com.google.android.gms",
+
+  "WAIT_TIMEOUT_SEC": 15,
+  "TEMPLATE_THRESHOLD": 0.78,
+  "DELAY_AFTER_TAP_SEC": 0.35,
+  "DELAY_AFTER_SCREEN_SEC": 0.5,
+  "DELAY_UI_POLL_SEC": 0.4,
+
+  "TEMPLATES": {
+    "standoff_icon": "templates/standoff_icon.png",
+    "google_sign_in": "templates/google_sign_in.png",
+    "google_next": "templates/google_next.png",
+    "google_password": "templates/google_password.png",
+    "google_agree": "templates/google_agree.png",
+    "google_accept": "templates/google_accept.png",
+    "lobby_play": "templates/lobby_play.png",
+    "inventory": "templates/inventory.png",
+    "case_item": "templates/case_item.png",
+    "sell_button": "templates/sell_button.png",
+    "market_tab": "templates/market_tab.png",
+    "order_price_area": "templates/order_price_area.png",
+    "price_input": "templates/price_input.png",
+    "create_order": "templates/create_order.png",
+    "confirm_sell": "templates/confirm_sell.png"
+  },
+
+  "COORDS": {
+    "standoff_icon": [660, 340],
+    "google_sign_in": [350, 610],
+    "google_email_field": [640, 300],
+    "google_password_field": [640, 430],
+    "google_next": [1014, 646],
+    "inventory": [1180, 650],
+    "market_tab": [640, 680],
+    "my_items": [200, 120],
+    "sell_button": [1050, 650],
+    "price_input": [640, 480],
+    "confirm_sell": [640, 580]
+  },
+
+  "OCR": {
+    "order_price_roi": [420, 350, 860, 420],
+    "tesseract_cmd": "",
+    "whitelist": "0123456789."
+  },
+
+  "MAX_CASES_PER_ACCOUNT": 50
+}
