@@ -1,0 +1,200 @@
+// ============================================================
+// Standoff 2 — Продажа скинов по запросу (Perfect Click)
+// ============================================================
+// Что делает:
+//   1. Читает цену верхнего запроса на покупку ("от X.XX G")
+//   2. Если цена >= MIN_PRICE — нажимает ПРОДАТЬ
+//   3. Вводит цену и подтверждает продажу
+//
+// Перед запуском:
+//   - Откройте страницу предмета в маркете (как на скрине)
+//   - Настройте координаты в блоке CONFIG ниже
+//   - Включите захват экрана и сервис доступности в Perfect Click
+// ============================================================
+
+startScreenCapture(2);
+
+// ======================== CONFIG ========================
+// Минимальная цена продажи (голда). Ниже — скрипт не продаёт.
+double MIN_PRICE = 5.0;
+
+// Паузы (миллисекунды)
+int CHECK_MS = 250;       // как часто проверять цену запроса
+int AFTER_SELL_MS = 2000; // пауза после продажи перед следующей
+int CLICK_MS = 120;       // пауза между кликами
+
+// --- Область OCR: только число "10.00 G" из строки запросов ---
+// В Perfect Click: Инструменты ? пипетка ? отметьте прямоугольник вокруг цены
+Point priceTL = Point.get(720, 88);
+Point priceBR = Point.get(820, 128);
+
+// --- Кнопки интерфейса ---
+Point btnSell       = Point.get(95,  520);  // ПРОДАТЬ (слева внизу)
+Point btnPriceField = Point.get(640, 360);  // поле ввода цены в диалоге
+Point btnConfirm    = Point.get(640, 470);  // ПРОДАТЬ / подтвердить в диалоге
+Point btnCloseDlg   = Point.get(900, 200);  // крестик закрытия (если ошибка)
+
+// --- Цифровая клавиатура в диалоге продажи ---
+// X координаты цифр 0-9, Y — общая строка клавиатуры
+int[] KEY_X = {180, 240, 300, 360, 420, 480, 540, 600, 660, 720};
+int KEY_Y = 620;
+Point btnDot = Point.get(780, KEY_Y);       // точка "."
+Point btnDel = Point.get(120, KEY_Y);       // удалить символ (backspace)
+
+// Цвет кнопки подтверждения в активном состоянии (пипеткой)
+// Если не совпадает — скрипт не жмёт подтверждение
+int CONFIRM_ACTIVE_COLOR = 0;
+boolean USE_COLOR_CHECK = false;
+// ====================== /CONFIG =======================
+
+log("SO2 sell-by-request: старт");
+log("MIN_PRICE = " + MIN_PRICE);
+
+// Парсит "10.00", "10,00 G", "от 10.00 G" ? 10.00
+double parsePrice(String raw) {
+    if (raw == null) return 0;
+    String s = raw.trim();
+    if (s.length() == 0) return 0;
+
+    // оставляем только цифры, точку и запятую
+    String n = "";
+    for (int i = 0; i < s.length(); i++) {
+        char c = s.charAt(i);
+        if ((c >= '0' && c <= '9') || c == '.' || c == ',') {
+            n = n + c;
+        }
+    }
+    if (n.length() == 0) return 0;
+
+    // запятая ? точка
+    String fixed = "";
+    for (int i = 0; i < n.length(); i++) {
+        char c = n.charAt(i);
+        if (c == ',') fixed = fixed + ".";
+        else fixed = fixed + c;
+    }
+
+    try {
+        return Double.parseDouble(fixed);
+    } catch (Exception e) {
+        return 0;
+    }
+}
+
+// Читает цену запроса через OCR
+double readRequestPrice() {
+    String text = getText(priceTL, priceBR);
+    double p = parsePrice(text);
+    if (p > 0) return p;
+
+    // запасной вариант: чуть шире область (вся строка "от X.XX G")
+    Point wideTL = Point.get(priceTL.x - 120, priceTL.y - 10);
+    Point wideBR = Point.get(priceBR.x + 80,  priceBR.y + 10);
+    text = getText(wideTL, wideBR);
+
+    // ищем "от " или "from " в тексте
+    int idx = text.indexOf("от ");
+    int skip = 3;
+    if (idx < 0) {
+        idx = text.indexOf("from ");
+        skip = 5;
+    }
+    if (idx >= 0) {
+        return parsePrice(text.substring(idx + skip));
+    }
+    return parsePrice(text);
+}
+
+// Форматирует цену: 10.0 ? "10.00"
+String formatPrice(double price) {
+    int cents = (int)Math.round(price * 100.0);
+    int whole = cents / 100;
+    int frac  = cents % 100;
+    String f = Integer.toString(frac);
+    if (frac < 10) f = "0" + f;
+    return Integer.toString(whole) + "." + f;
+}
+
+// Ввод цены через экранную клавиатуру
+void typePrice(String price) {
+    click(btnPriceField);
+    sleep(CLICK_MS);
+
+    // очистка поля (несколько backspace)
+    for (int k = 0; k < 8; k++) {
+        click(btnDel);
+        sleep(40);
+    }
+
+    for (int i = 0; i < price.length(); i++) {
+        char c = price.charAt(i);
+        if (c == '.' || c == ',') {
+            click(btnDot);
+        } else if (c >= '0' && c <= '9') {
+            int d = c - '0';
+            click(KEY_X[d], KEY_Y);
+        }
+        sleep(50);
+    }
+}
+
+// Одна продажа по текущей цене запроса
+boolean sellAtPrice(double price) {
+    if (price < MIN_PRICE) {
+        log("Цена " + price + " < MIN " + MIN_PRICE + ", пропуск");
+        return false;
+    }
+
+    String priceStr = formatPrice(price);
+    log("Продаём по запросу: " + priceStr + " G");
+
+    click(btnSell);
+    sleep(400);
+
+    typePrice(priceStr);
+    sleep(CLICK_MS);
+
+    if (USE_COLOR_CHECK && CONFIRM_ACTIVE_COLOR != 0) {
+        if (getColor(btnConfirm.x, btnConfirm.y) != CONFIRM_ACTIVE_COLOR) {
+            log("Кнопка подтверждения неактивна, отмена");
+            click(btnCloseDlg);
+            sleep(300);
+            return false;
+        }
+    }
+
+    click(btnConfirm);
+    sleep(600);
+
+    log("Продажа отправлена: " + priceStr + " G");
+    return true;
+}
+
+// ======================== MAIN ========================
+double lastPrice = 0;
+long lastSellMs = 0;
+
+while (!EXIT) {
+    double price = readRequestPrice();
+
+    if (price > 0) {
+        // продаём, когда цена запроса изменилась или впервые подходит
+        boolean priceOk = price >= MIN_PRICE;
+        boolean changed = Math.abs(price - lastPrice) > 0.001;
+        boolean cooled  = (Time.getMillis() - lastSellMs) > AFTER_SELL_MS;
+
+        if (priceOk && changed && cooled) {
+            if (sellAtPrice(price)) {
+                lastPrice = price;
+                lastSellMs = Time.getMillis();
+                sleep(AFTER_SELL_MS);
+            }
+        } else if (!priceOk) {
+            lastPrice = price;
+        }
+    }
+
+    sleep(CHECK_MS);
+}
+
+log("SO2 sell-by-request: остановлен");
