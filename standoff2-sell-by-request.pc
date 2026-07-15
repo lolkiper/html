@@ -1,0 +1,190 @@
+// ============================================================
+// Standoff 2 — Продажа скинов по запросу
+// Для Android-приложения Perfect Click (Valerij Kolodeev)
+// Google Play: com.kolodeev.perfectclick
+// ============================================================
+//
+// Оба приложения работают НА ОДНОМ ТЕЛЕФОНЕ:
+//   Standoff 2 (игра) + Perfect Click (автокликер поверх игры)
+//
+// Перед запуском в Perfect Click включите:
+//   1. Сервис доступности (для кликов)
+//   2. Показ поверх других приложений (оверлей)
+//   3. Захват экрана (для OCR)
+//
+// В Standoff 2 откройте страницу предмета в маркете.
+// Все координаты ниже — ЗАМЕНИТЕ на свои через пипетку!
+// ============================================================
+
+startScreenCapture(2);
+
+// ======================== CONFIG ========================
+double MIN_PRICE = 5.0;     // мин. цена продажи (G). Ниже — не продаёт
+
+int CHECK_MS = 300;         // проверка цены (мс)
+int AFTER_SELL_MS = 2500;   // пауза после продажи (мс)
+int CLICK_MS = 150;         // пауза между кликами (мс)
+
+// Режим калибровки: true = только читает цену в лог, не продаёт
+boolean CALIBRATE_ONLY = false;
+
+// --- КООРДИНАТЫ ВАШЕГО ТЕЛЕФОНА (обязательно настроить!) ---
+// Perfect Click ? меню ? инструмент координат / пипетка
+// Наведите на элемент в Standoff 2 и впишите X, Y сюда:
+
+// Прямоугольник вокруг цены "10.00 G" в строке запросов
+Point priceTL = Point.get(0, 0);   // левый верхний угол цены
+Point priceBR = Point.get(0, 0);   // правый нижний угол цены
+
+Point btnSell       = Point.get(0, 0);  // кнопка ПРОДАТЬ (слева внизу)
+Point btnPriceField = Point.get(0, 0);  // поле ввода цены в диалоге
+Point btnConfirm    = Point.get(0, 0);  // кнопка ПРОДАТЬ в диалоге
+Point btnCloseDlg   = Point.get(0, 0);  // крестик закрытия (на всякий случай)
+
+// Цифровая клавиатура в диалоге продажи (0–9 в одном ряду)
+int[] KEY_X = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+int KEY_Y = 0;
+Point btnDot = Point.get(0, 0);  // кнопка "."
+Point btnDel = Point.get(0, 0);  // удалить символ
+// ====================== /CONFIG =======================
+
+log("SO2 sell-by-request [Android]");
+log("MIN_PRICE = " + MIN_PRICE);
+if (CALIBRATE_ONLY) log("РЕЖИМ КАЛИБРОВКИ — продажа отключена");
+
+double parsePrice(String raw) {
+    if (raw == null) return 0;
+    String s = raw.trim();
+    if (s.length() == 0) return 0;
+
+    String n = "";
+    for (int i = 0; i < s.length(); i++) {
+        char c = s.charAt(i);
+        if ((c >= '0' && c <= '9') || c == '.' || c == ',') {
+            n = n + c;
+        }
+    }
+    if (n.length() == 0) return 0;
+
+    String fixed = "";
+    for (int i = 0; i < n.length(); i++) {
+        char c = n.charAt(i);
+        if (c == ',') fixed = fixed + ".";
+        else fixed = fixed + c;
+    }
+
+    try {
+        return Double.parseDouble(fixed);
+    } catch (Exception e) {
+        return 0;
+    }
+}
+
+double readRequestPrice() {
+    String text = getText(priceTL, priceBR);
+    double p = parsePrice(text);
+    if (p > 0) return p;
+
+    Point wideTL = Point.get(priceTL.x - 100, priceTL.y - 15);
+    Point wideBR = Point.get(priceBR.x + 100, priceBR.y + 15);
+    text = getText(wideTL, wideBR);
+
+    int idx = text.indexOf("от ");
+    int skip = 3;
+    if (idx < 0) {
+        idx = text.indexOf("from ");
+        skip = 5;
+    }
+    if (idx >= 0) {
+        return parsePrice(text.substring(idx + skip));
+    }
+    return parsePrice(text);
+}
+
+String formatPrice(double price) {
+    int cents = (int)Math.round(price * 100.0);
+    int whole = cents / 100;
+    int frac  = cents % 100;
+    String f = Integer.toString(frac);
+    if (frac < 10) f = "0" + f;
+    return Integer.toString(whole) + "." + f;
+}
+
+void typePrice(String price) {
+    click(btnPriceField);
+    sleep(CLICK_MS);
+
+    for (int k = 0; k < 8; k++) {
+        click(btnDel);
+        sleep(50);
+    }
+
+    for (int i = 0; i < price.length(); i++) {
+        char c = price.charAt(i);
+        if (c == '.' || c == ',') {
+            click(btnDot);
+        } else if (c >= '0' && c <= '9') {
+            int d = c - '0';
+            click(KEY_X[d], KEY_Y);
+        }
+        sleep(60);
+    }
+}
+
+boolean sellAtPrice(double price) {
+    if (price < MIN_PRICE) return false;
+
+    String priceStr = formatPrice(price);
+    log("Продаём по запросу: " + priceStr + " G");
+
+    click(btnSell);
+    sleep(500);
+
+    typePrice(priceStr);
+    sleep(CLICK_MS);
+
+    click(btnConfirm);
+    sleep(700);
+
+    log("Готово: " + priceStr + " G");
+    return true;
+}
+
+// ======================== MAIN ========================
+double lastPrice = 0;
+long lastSellMs = 0;
+long lastLogMs = 0;
+
+while (!EXIT) {
+    double price = readRequestPrice();
+
+    // В режиме калибровки выводим цену в лог раз в секунду
+    if (CALIBRATE_ONLY) {
+        if (Time.getMillis() - lastLogMs > 1000) {
+            log("OCR цена: " + price + " G");
+            lastLogMs = Time.getMillis();
+        }
+        sleep(500);
+        continue;
+    }
+
+    if (price > 0) {
+        boolean priceOk = price >= MIN_PRICE;
+        boolean changed = Math.abs(price - lastPrice) > 0.001;
+        boolean cooled  = (Time.getMillis() - lastSellMs) > AFTER_SELL_MS;
+
+        if (priceOk && changed && cooled) {
+            if (sellAtPrice(price)) {
+                lastPrice = price;
+                lastSellMs = Time.getMillis();
+                sleep(AFTER_SELL_MS);
+            }
+        } else if (!priceOk) {
+            lastPrice = price;
+        }
+    }
+
+    sleep(CHECK_MS);
+}
+
+log("Остановлен");
