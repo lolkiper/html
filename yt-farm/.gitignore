@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+config.json
+channel-state.json
+channel-state.lock
+history_profile_*.json
+history_profile_*.lock
+*.png
+.vscode/
+.DS_Store
