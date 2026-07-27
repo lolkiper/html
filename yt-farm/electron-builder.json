@@ -1,0 +1,38 @@
+{
+  "appId": "com.ytzaliver.farm",
+  "productName": "YouTube Zaliver",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "panel/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "main.mjs",
+      "to": "farm/main.mjs"
+    },
+    {
+      "from": "youtube-studio.mjs",
+      "to": "farm/youtube-studio.mjs"
+    },
+    {
+      "from": "config.example.json",
+      "to": "farm/config.example.json"
+    }
+  ],
+  "extraFiles": [
+    { "from": "main.mjs", "to": "." },
+    { "from": "youtube-studio.mjs", "to": "." },
+    { "from": "config.example.json", "to": "config.example.json" },
+    { "from": "videos", "to": "videos", "filter": ["**/*"] }
+  ],
+  "win": {
+    "target": ["dir"],
+    "signAndEditExecutable": false
+  },
+  "extraMetadata": {
+    "main": "panel/main.mjs"
+  }
+}

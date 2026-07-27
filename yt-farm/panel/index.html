@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' http://localhost:* ws://127.0.0.1:*;">
+    <title>YouTube Shorts Farm Ultra</title>
+    <style id="dynamicThemeStyles">
+        /* Базовые динамические переменные, которые JavaScript будет менять налету */
+        :root {
+            --neon-primary: #bc6fffff;
+            --neon-secondary: #ff0055ff;
+            --neon-glow: rgba(188, 111, 255, 0.35);
+            --bg-card: rgba(18, 9, 30, 0.85);
+            --border-main: #492475;
+            --border-dashed: #5c2896;
+            --bg-input: #150a21;
+            --border-input: #4a217a;
+            --bg-table-th: #1b0d29;
+            --border-table-td: #291340;
+            --text-label: #b4a2d6;
+            --btn-start-bg: linear-gradient(90deg, #7c3aed, #bc6fff);
+            --btn-start-text: #ffffff;
+            --bg-dark: #07030d;
+            --pulse-anim: purplePulse;
+        }
+    </style>
+    <style>
+        body {
+            background-color: var(--bg-dark);
+            color: #e2daf0;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            user-select: none;
+            overflow-x: hidden;
+            position: relative;
+            transition: background-color 0.4s ease;
+        }
+
+        /* НЕОНОВАЯ ПОДСВЕТКА ЗА КУРСОРOM */
+        #cursor-glow {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 70px;
+            height: 70px;
+            background: radial-gradient(circle, var(--neon-glow) 0%, rgba(0, 0, 0, 0) 70%);
+            border-radius: 50%;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            z-index: 9999;
+            mix-blend-mode: screen;
+        }
+
+        .app-container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: var(--bg-card);
+            backdrop-filter: blur(10px);
+            padding: 25px;
+            border-radius: 16px;
+            border: 1px solid var(--border-main);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.9), 0 0 25px var(--neon-glow);
+            position: relative;
+            z-index: 1;
+            transition: all 0.4s ease;
+        }
+
+        h1 {
+            color: #ffffff;
+            text-align: center;
+            font-size: 26px;
+            margin-bottom: 25px;
+            letter-spacing: 2px;
+            font-weight: 900;
+            background: linear-gradient(45deg, #ffffff, var(--neon-primary), var(--neon-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            transition: all 0.4s ease;
+        }
+
+        h2.section-title {
+            color: var(--neon-primary);
+            font-size: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 25px;
+            margin-bottom: 15px;
+            border-left: 4px solid var(--neon-secondary);
+            padding-left: 10px;
+            text-shadow: 0 0 10px var(--neon-glow);
+            transition: all 0.4s ease;
+        }
+
+        .form-group { margin-bottom: 18px; }
+        label { display: block; margin-bottom: 8px; font-size: 12px; font-weight: 600; color: var(--text-label); text-transform: uppercase; letter-spacing: 0.5px; transition: color 0.4s; }
+
+        input[type="text"], input[type="number"], textarea {
+            width: 100%;
+            padding: 12px;
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-input);
+            border-radius: 8px;
+            color: #ffffff;
+            box-sizing: border-box;
+            font-size: 14px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            transition: all 0.4s ease;
+        }
+
+        textarea { height: 140px; resize: vertical; line-height: 1.5; }
+        input:focus, textarea:focus { border-color: var(--neon-primary); outline: none; box-shadow: 0 0 15px var(--neon-primary); }
+
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        
+        /* 🔥 ТУМБЛЕР ПЕРЕКЛЮЧЕНИЯ РЕЖИМОВ */
+        .mode-selector-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px dashed var(--border-dashed);
+            margin-bottom: 25px;
+            transition: border 0.4s ease;
+        }
+
+        .mode-label {
+            font-size: 14px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            transition: all 0.3s ease;
+        }
+
+        .mode-label.active-single { color: #00ffcc; text-shadow: 0 0 10px rgba(0, 255, 204, 0.6); }
+        .mode-label.active-multi { color: #00ff66; text-shadow: 0 0 10px rgba(0, 255, 102, 0.6); }
+        .mode-label.inactive { color: #4e4666; }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 70px;
+            height: 34px;
+        }
+
+        .switch input { opacity: 0; width: 0; height: 0; }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #07030d;
+            border: 2px solid #00ffcc;
+            transition: .4s;
+            border-radius: 34px;
+            box-shadow: inset 0 0 10px rgba(0,255,204,0.2);
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 24px; width: 24px;
+            left: 3px; bottom: 3px;
+            background-color: #00ffcc;
+            box-shadow: 0 0 8px #00ffcc;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            border-color: #00ff66;
+            box-shadow: inset 0 0 10px rgba(0,255,102,0.2);
+            background-color: #030905;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(36px);
+            background-color: #00ff66;
+            box-shadow: 0 0 12px #00ff66;
+        }
+
+        .table-container { max-height: 220px; overflow-y: auto; margin-top: 10px; border: 1px solid var(--border-input); border-radius: 8px; background: rgba(0,0,0,0.2); transition: border 0.4s; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 11px; text-align: left; border-bottom: 1px solid var(--border-table-td); font-size: 13px; transition: border 0.4s; }
+        th { background-color: var(--bg-table-th); color: var(--neon-primary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.4s; }
+
+        .btn-add { background-color: rgba(188, 111, 255, 0.08); color: #ffffff; border: 1px solid var(--border-input); padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-top: 10px; font-size: 13px; font-weight: 600; transition: all 0.2s ease-in-out; }
+        .btn-add:hover { background-color: var(--neon-primary); color: #000; border-color: var(--neon-primary); box-shadow: 0 0 12px var(--neon-primary); }
+
+        .btn-remove { background-color: rgba(159, 18, 57, 0.15); color: #fda4af; border: 1px solid rgba(225, 29, 72, 0.3); padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; transition: all 0.2s ease-in-out; }
+        .btn-remove:hover { background-color: #ff0055ff; color: #fff; border-color: #ff0055ff; box-shadow: 0 0 12px #ff0055ff; }
+
+        .controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 25px; }
+
+        .btn-start { width: 100%; background: var(--btn-start-bg); color: var(--btn-start-text); border: none; padding: 16px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 15px var(--neon-glow); transition: all 0.3s; text-transform: uppercase; letter-spacing: 1px; }
+        .btn-start:hover { box-shadow: 0 0 35px var(--neon-primary); transform: translateY(-2px); }
+
+        .btn-stop { width: 100%; background: rgba(159, 18, 57, 0.1); color: #f43f5e; border: 1px solid rgba(225, 29, 72, 0.4); padding: 16px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: all 0.3s; text-transform: uppercase; letter-spacing: 1px; }
+        .btn-stop:hover { background: #ff0055ff; color: #fff; border-color: #ff0055ff; box-shadow: 0 0 30px #ff0055ff; transform: translateY(-2px); }
+
+        .status { text-align: center; margin-top: 15px; font-weight: bold; color: var(--neon-primary); font-size: 14px; margin-bottom: 15px; transition: color 0.4s; }
+        .threads-container { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-top: 20px; max-height: 250px; overflow-y: auto; padding-right: 5px; }
+        .thread-card { background: rgba(0, 0, 0, 0.4); border: 1px solid var(--border-input); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; height: 160px; box-sizing: border-box; transition: all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1); }
+
+        @keyframes purplePulse {
+            0% { box-shadow: 0 0 8px rgba(188, 111, 255, 0.2); border-color: rgba(188, 111, 255, 0.3); }
+            50% { box-shadow: 0 0 25px #bc6fff; border-color: #bc6fff; }
+            100% { box-shadow: 0 0 8px rgba(188, 111, 255, 0.2); border-color: rgba(188, 111, 255, 0.3); }
+        }
+        @keyframes greenPulse {
+            0% { box-shadow: 0 0 8px rgba(0, 255, 102, 0.2); border-color: rgba(0, 255, 102, 0.3); }
+            50% { box-shadow: 0 0 25px #00ff66; border-color: #00ff66; }
+            100% { box-shadow: 0 0 8px rgba(0, 255, 102, 0.2); border-color: rgba(0, 255, 102, 0.3); }
+        }
+
+        .thread-header { font-size: 12px; font-weight: bold; color: #ffffff; border-bottom: 1px solid var(--border-table-td); padding-bottom: 6px; margin-bottom: 6px; text-align: left; transition: border 0.4s; }
+        .thread-log { font-family: 'Consolas', monospace; font-size: 11px; color: #e2daf0; white-space: pre-wrap; overflow-y: auto; flex-grow: 1; text-align: left; line-height: 1.4; }
+
+        .stats-section { margin-top: 35px; border-top: 2px dashed var(--border-input); padding-top: 25px; transition: border 0.4s; }
+        .stats-section h2 { color: var(--neon-primary); font-size: 18px; letter-spacing: 1px; margin-bottom: 15px; text-shadow: 0 0 10px var(--neon-glow); transition: all 0.4s; }
+        .stats-badges { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 15px; }
+        .badge-card { background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-input); border-radius: 8px; padding: 12px; text-align: center; transition: border 0.4s; }
+        .badge-card .num { font-size: 20px; font-weight: 900; color: #fff; margin-top: 5px; }
+        .badge-card.active-ch .num { color: var(--neon-primary); text-shadow: 0 0 12px var(--neon-primary); transition: all 0.4s; }
+        .badge-card.bans .num { color: #f43f5e; text-shadow: 0 0 12px #f43f5e; }
+        .badge-card label { font-size: 10px; color: var(--text-label); margin: 0; transition: color 0.4s; }
+        .status-tag { padding: 3px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+        .status-tag.ok { background: rgba(0, 255, 102, 0.15); color: #00ff66; border: 1px solid rgba(0, 255, 102, 0.3); }
+        .status-tag.ban { background: rgba(225, 29, 72, 0.15); color: #f43f5e; border: 1px solid rgba(225, 29, 72, 0.3); }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.5); }
+        ::-webkit-scrollbar-thumb { background: var(--border-input); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--neon-primary); }
+    </style>
+</head>
+<body>
+
+<div id="cursor-glow"></div>
+
+<div class="app-container">
+    <h1>🔮 YOUTUBE ZALIVER v1.2</h1>
+
+    <div class="mode-selector-container">
+        <span id="labelSingleMode" class="mode-label active-single">Обычный режим (1 видео)</span>
+        <label class="switch">
+            <input type="checkbox" id="modeToggle">
+            <span class="slider"></span>
+        </label>
+        <span id="labelMultiMode" class="mode-label inactive">Мульти-расписание (10 видео)</span>
+    </div>
+
+    <div class="grid-2">
+        <div class="form-group">
+            <label>Путь к папке с видео</label>
+            <input type="text" id="videosDir" value="C:\\Users\\PC\\yt-farm\\videos">
+        </div>
+        <div class="form-group">
+            <label>Количество потоков (окон)</label>
+            <input type="number" id="concurrencyLimit" value="6" min="1" max="12">
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label>Видео на канал (знаменатель «Всего залито»)</label>
+        <input type="number" id="videosPerChannel" value="10" min="1" max="500">
+    </div>
+
+    <div class="form-group">
+        <label>Названия видео (каждое название с новой строки)</label>
+        <textarea id="baseTitles" placeholder="Вставь сюда свои 160 строк названий..."></textarea>
+    </div>
+
+    <h2 class="section-title">📺 Профили Dolphin (Канал ──► ID Профиля)</h2>
+    <div class="form-group">
+        <div class="table-container">
+            <table id="profileTable">
+                <thead>
+                    <tr>
+                        <th>Номер канала</th>
+                        <th>ID Профиля Dolphin</th>
+                        <th>Управление</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <button class="btn-add" id="addChannelBtn">+ Добавить канал</button>
+    </div>
+
+    <div class="controls-grid">
+        <button class="btn-start" id="startFarmBtn">START</button>
+        <button class="btn-stop" id="stopFarmBtn">STOP</button>
+    </div>
+
+    <div id="statusMessage" class="status"></div>
+    <div class="threads-container" id="threadsContainer"></div>
+
+    <div class="stats-section">
+        <h2>📊 СТАТИСТИКА ФЕРМЫ (МАССОВЫЙ ПАКЕТНЫЙ ЗАЛИВ)</h2>
+
+        <div class="stats-badges">
+            <div class="badge-card active-ch">
+                <label>УСПЕШНО ОБРАБОТАННЫЕ КАНАЛЫ</label>
+                <div class="num" id="activeChannelsCount">0</div>
+            </div>
+            <div class="badge-card bans">
+                <label>ОБНАРУЖЕНО БАНОВ / ОШИБОК 🔴</label>
+                <div class="num" id="bannedChannelsCount">0</div>
+            </div>
+        </div>
+
+        <div class="table-container" style="max-height: 250px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Канал</th>
+                        <th>ID Профиля</th>
+                        <th>Подписчики</th>
+                        <th>Просмотры</th>
+                        <th>Всего залито</th>
+                        <th>Статус аккаунта</th>
+                    </tr>
+                </thead>
+                <tbody id="statsTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    let channelCounter = 1;
+    let videosPerChannel = 10;
+
+    const styleEl = document.getElementById('dynamicThemeStyles');
+    const modeToggle = document.getElementById('modeToggle');
+    const labelSingle = document.getElementById('labelSingleMode');
+    const labelMulti = document.getElementById('labelMultiMode');
+    function getCurrentMode() {
+        return modeToggle.checked ? 'multi' : 'single';
+    }
+
+    function collectUiState(forMode) {
+        const mapping = {};
+        document.querySelectorAll('#profileTable tbody tr').forEach(row => {
+            const ch = row.querySelector('.row-channel').value;
+            const prof = row.querySelector('.row-profile').value.trim();
+            if (ch && prof) mapping[prof] = [parseInt(ch, 10)];
+        });
+        return {
+            forMode,
+            PROFILE_MAPPING: mapping,
+            VIDEOS_DIR: document.getElementById('videosDir').value.trim(),
+            CONCURRENCY_LIMIT: parseInt(document.getElementById('concurrencyLimit').value, 10) || 6,
+            BASE_TITLES: document.getElementById('baseTitles').value.split('\n').filter(t => t.trim() !== ''),
+        };
+    }
+
+    function loadUiFromSettings(settings) {
+        document.getElementById('videosDir').value = settings?.VIDEOS_DIR || '';
+        document.getElementById('concurrencyLimit').value = settings?.CONCURRENCY_LIMIT || 6;
+        document.getElementById('baseTitles').value = (settings?.BASE_TITLES || []).join('\n');
+
+        const tbody = document.querySelector('#profileTable tbody');
+        tbody.innerHTML = '';
+        channelCounter = 1;
+
+        const mapping = settings?.PROFILE_MAPPING || {};
+        const entries = Object.entries(mapping);
+        if (entries.length > 0) {
+            entries.forEach(([profileId, channels]) => addProfileRow(channels[0], profileId));
+        } else {
+            for (let i = 1; i <= 6; i++) addProfileRow(i, '');
+        }
+    }
+
+    function updateUiMode() {
+        if (modeToggle.checked) {
+            labelSingle.className = 'mode-label inactive';
+            labelMulti.className = 'mode-label active-multi';
+
+            styleEl.innerHTML = `
+                :root {
+                    --neon-primary: #00ff66;
+                    --neon-secondary: #00ffcc;
+                    --neon-glow: rgba(0, 255, 102, 0.35);
+                    --bg-card: rgba(9, 30, 18, 0.85);
+                    --border-main: #1a5c38;
+                    --border-dashed: #144a2c;
+                    --bg-input: #0a2113;
+                    --border-input: #144a2c;
+                    --bg-table-th: #0d2919;
+                    --border-table-td: #123620;
+                    --text-label: #a2d6cc;
+                    --btn-start-bg: linear-gradient(90deg, #059669, #00ff66);
+                    --btn-start-text: #000000;
+                    --bg-dark: #030905;
+                    --pulse-anim: greenPulse;
+                }
+            `;
+        } else {
+            labelSingle.className = 'mode-label active-single';
+            labelMulti.className = 'mode-label inactive';
+
+            styleEl.innerHTML = `
+                :root {
+                    --neon-primary: #bc6fffff;
+                    --neon-secondary: #ff0055ff;
+                    --neon-glow: rgba(188, 111, 255, 0.35);
+                    --bg-card: rgba(18, 9, 30, 0.85);
+                    --border-main: #492475;
+                    --border-dashed: #5c2896;
+                    --bg-input: #150a21;
+                    --border-input: #4a217a;
+                    --bg-table-th: #1b0d29;
+                    --border-table-td: #291340;
+                    --text-label: #b4a2d6;
+                    --btn-start-bg: linear-gradient(90deg, #7c3aed, #bc6fff);
+                    --btn-start-text: #ffffff;
+                    --bg-dark: #07030d;
+                    --pulse-anim: purplePulse;
+                }
+            `;
+        }
+    }
+
+    async function persistFarmMode(previousMode) {
+        if (!window.electronAPI?.setFarmMode) return null;
+        const newMode = getCurrentMode();
+        const snapshot = collectUiState(previousMode);
+        const result = await window.electronAPI.setFarmMode(newMode, snapshot);
+        if (result?.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL) {
+            videosPerChannel = result.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
+        }
+        if (result?.modeSettings) {
+            loadUiFromSettings(result.modeSettings);
+        }
+        return result;
+    }
+
+    modeToggle.addEventListener('change', async () => {
+        const newMode = getCurrentMode();
+        const previousMode = newMode === 'multi' ? 'single' : 'multi';
+        updateUiMode();
+        await persistFarmMode(previousMode);
+        const status = document.getElementById('statusMessage');
+        if (status) {
+            status.innerText = newMode === 'multi'
+                ? '🟢 Мульти-режим: отдельный список каналов загружен'
+                : '🟣 Обычный режим: отдельный список каналов загружен';
+            status.style.color = 'var(--neon-primary)';
+        }
+    });
+
+    const glow = document.getElementById('cursor-glow');
+    window.addEventListener('mousemove', (e) => {
+        glow.style.left = e.clientX + 'px';
+        glow.style.top = e.clientY + 'px';
+    });
+
+    function addProfileRow(channel = '', profileId = '') {
+        const tbody = document.querySelector('#profileTable tbody');
+        if (!tbody) return;
+        const currentChannel = channel !== '' ? channel : channelCounter;
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td><input type="number" class="row-channel" value="${currentChannel}" style="width: 70px; padding: 6px; background: var(--bg-input); border:1px solid var(--border-input); color:#ffffff; border-radius:4px; font-family:monospace; transition: background 0.4s, border 0.4s;"></td>
+            <td><input type="text" class="row-profile" value="${profileId}" placeholder="Например: 819465082" style="padding: 6px; background: var(--bg-input); border:1px solid var(--border-input); color:#ffffff; border-radius:4px; width: 85%; font-family:monospace; transition: background 0.4s, border 0.4s;"></td>
+            <td><button class="btn-remove">Удалить</button></td>
+        `;
+        row.querySelector('.btn-remove').addEventListener('click', () => row.remove());
+        tbody.appendChild(row);
+
+        if (channel === '') channelCounter = parseInt(currentChannel) + 1;
+        else if (parseInt(channel) >= channelCounter) channelCounter = parseInt(channel) + 1;
+    }
+
+    document.getElementById('addChannelBtn').addEventListener('click', (e) => { e.preventDefault(); addProfileRow('', ''); });
+
+    document.getElementById('stopFarmBtn').addEventListener('click', () => {
+        const status = document.getElementById('statusMessage');
+        status.innerText = '🛑 Работа фермы принудительно остановлена.';
+        status.style.color = '#f43f5e';
+        if (window.electronAPI?.stopFarm) window.electronAPI.stopFarm();
+    });
+
+    document.getElementById('startFarmBtn').addEventListener('click', async () => {
+        const status = document.getElementById('statusMessage');
+        status.innerText = 'Активация пакетных процессов...';
+        status.style.color = 'var(--neon-primary)';
+
+        document.getElementById('threadsContainer').innerHTML = '';
+        document.getElementById('statsTableBody').innerHTML = '';
+        document.getElementById('activeChannelsCount').innerText = '0';
+        document.getElementById('bannedChannelsCount').innerText = '0';
+
+        const mapping = {};
+        let totalChannels = 0;
+        document.querySelectorAll('#profileTable tbody tr').forEach(row => {
+            const ch = row.querySelector('.row-channel').value;
+            const prof = row.querySelector('.row-profile').value.trim();
+            if (ch && prof) { mapping[prof] = [parseInt(ch, 10)]; totalChannels++; }
+        });
+
+        const farmMode = getCurrentMode();
+        const videosPerChannelValue = parseInt(document.getElementById('videosPerChannel').value, 10) || 10;
+        videosPerChannel = videosPerChannelValue;
+        const updatedConfig = {
+            FARM_MODE: farmMode,
+            VIDEOS_DIR: document.getElementById('videosDir').value.trim(),
+            CONCURRENCY_LIMIT: parseInt(document.getElementById('concurrencyLimit').value, 10),
+            TOTAL_CHANNELS: totalChannels,
+            PROFILE_MAPPING: mapping,
+            BASE_TITLES: document.getElementById('baseTitles').value.split('\n').filter(t => t.trim() !== ''),
+            SCHEDULE_SETTINGS: {
+                VIDEOS_PER_CHANNEL: videosPerChannelValue,
+            },
+        };
+
+        if (window.electronAPI?.startFarm) {
+            const result = await window.electronAPI.startFarm(updatedConfig);
+            if (result?.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL) {
+                videosPerChannel = result.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
+                document.getElementById('videosPerChannel').value = videosPerChannel;
+            }
+            status.innerText = `🔮 Залив запущен в режиме [${farmMode === 'multi' ? 'МУЛЬТИ' : 'ОДИНАРНЫЙ'}]!`;
+        }
+    });
+
+    if (window.electronAPI?.onLogMessage) {
+        window.electronAPI.onLogMessage((data) => {
+            const { threadNum, text, stats } = data;
+
+            if (threadNum === 888 && stats) {
+                const { channelNum, profileId, subs, views, uploaded, status } = stats;
+                let row = document.getElementById(`stats-row-${channelNum}`);
+                const tbody = document.getElementById('statsTableBody');
+
+                if (!row) {
+                    row = document.createElement('tr');
+                    row.id = `stats-row-${channelNum}`;
+                    tbody.appendChild(row);
+                }
+
+                let statusHtml = '<span class="status-tag ok">АКТИВЕН</span>';
+                if (status === 'BAN_DETECTED') statusHtml = '<span class="status-tag ban">BAN_DETECTED</span>';
+                if (status === 'ВЫЛЕТ БРАУЗЕРА') statusHtml = '<span class="status-tag ban" style="background:rgba(244,63,94,0.15); color:#f43f5e; border-color:rgba(244,63,94,0.25);">ВЫЛЕТ</span>';
+
+                row.innerHTML = `
+                    <td>Канал №${channelNum}</td>
+                    <td style="font-family: monospace; color: var(--text-label);">${profileId}</td>
+                    <td style="color: var(--neon-primary); font-weight: bold;">${subs}</td>
+                    <td style="color: #ffffff; font-weight: bold;">${views}</td>
+                    <td style="font-weight: bold; color: #fff;">${uploaded} / ${videosPerChannel}</td>
+                    <td>${statusHtml}</td>
+                `;
+
+                let totalSuccess = 0;
+                let totalBans = 0;
+                document.querySelectorAll('#statsTableBody tr').forEach(r => {
+                    if (r.innerText.includes('BAN_DETECTED') || r.innerText.includes('ВЫЛЕТ')) totalBans++;
+                    else totalSuccess++;
+                });
+                document.getElementById('activeChannelsCount').innerText = totalSuccess;
+                document.getElementById('bannedChannelsCount').innerText = totalBans;
+                return;
+            }
+
+            if (threadNum === 999) {
+                const statusMessage = document.getElementById('statusMessage');
+                if (statusMessage) {
+                    statusMessage.innerText = text;
+                    statusMessage.style.color = 'var(--neon-primary)';
+                }
+                return;
+            }
+
+            let logDiv = document.getElementById(`log-thread-${threadNum}`);
+            let headerDiv = document.getElementById(`header-thread-${threadNum}`);
+            const container = document.getElementById('threadsContainer');
+
+            if (!logDiv) {
+                const card = document.createElement('div');
+                card.className = 'thread-card';
+                card.id = `card-thread-${threadNum}`;
+                card.innerHTML = `
+                    <div class="thread-header" id="header-thread-${threadNum}">🔮 РАБОТАЕТ ПОТОК №${threadNum}</div>
+                    <div class="thread-log" id="log-thread-${threadNum}"></div>
+                `;
+                container.appendChild(card);
+                logDiv = document.getElementById(`log-thread-${threadNum}`);
+                headerDiv = document.getElementById(`header-thread-${threadNum}`);
+            }
+            const parentCard = document.getElementById(`card-thread-${threadNum}`);
+
+            if (text.includes('взял в работу') || text.includes('Инициализация') || text.includes('открывает профиль')) {
+                if (headerDiv) {
+                    headerDiv.innerHTML = `🔮 РАБОТАЕТ ПОТОК №${threadNum}`;
+                    headerDiv.style.color = 'var(--neon-primary)';
+                }
+                if (parentCard) {
+                    parentCard.style.animation = 'var(--pulse-anim) 2s infinite ease-in-out';
+                    parentCard.style.boxShadow = '0 0 15px var(--neon-primary)';
+                    parentCard.style.borderColor = 'var(--neon-primary)';
+                }
+            }
+
+            logDiv.innerText += text + '\n';
+            logDiv.scrollTop = logDiv.scrollHeight;
+
+            if (text.includes('BAN_DETECTED') || text.includes('забанен') || text.includes('closed') || text.includes('Ошибка') || text.includes('Слот свободен') || text.includes('ВЫЛЕТ')) {
+                if (text.includes('Слот свободен')) {
+                    if (headerDiv) { headerDiv.innerHTML = '💤 Слот свободен'; headerDiv.style.color = 'var(--text-label)'; }
+                    if (parentCard) { parentCard.style.animation = 'none'; parentCard.style.borderColor = 'var(--border-input)'; parentCard.style.boxShadow = 'none'; }
+                } else {
+                    if (headerDiv) { headerDiv.innerHTML = `🔴 ОШИБКА КАНАЛА (ПОТОК №${threadNum})`; headerDiv.style.color = '#f43f5e'; }
+                    if (parentCard) { parentCard.style.animation = 'none'; parentCard.style.borderColor = '#f43f5e'; parentCard.style.boxShadow = '0 0 15px rgba(244, 63, 94, 0.4)'; }
+                }
+            } else if (text.includes('Сессия завершена') || text.includes('завершил задачу') || text.includes('завершён')) {
+                if (headerDiv) { headerDiv.innerHTML = `🧲 ПАКЕТ ЗАКРЫТ (ПОТОК №${threadNum})`; headerDiv.style.color = 'var(--neon-secondary)'; }
+                if (parentCard) { parentCard.style.animation = 'none'; parentCard.style.borderColor = 'var(--neon-secondary)'; parentCard.style.boxShadow = '0 0 15px var(--neon-glow)'; }
+            }
+        });
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+        let config = null;
+        try {
+            if (window.electronAPI?.getConfig) {
+                config = await window.electronAPI.getConfig();
+            }
+        } catch (err) {
+            const statusMessage = document.getElementById('statusMessage');
+            const msg = 'Ошибка config.json: ' + (err.message || String(err)) + '. Откройте config.json и проверьте синтаксис.';
+            if (statusMessage) {
+                statusMessage.innerText = msg;
+                statusMessage.style.color = '#f43f5e';
+            } else {
+                alert(msg);
+            }
+        }
+
+        if (config) {
+            if (config.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL) {
+                videosPerChannel = config.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
+                document.getElementById('videosPerChannel').value = videosPerChannel;
+            }
+            modeToggle.checked = config.FARM_MODE === 'multi';
+            updateUiMode();
+
+            const modeSettings = config.modeSettings || config.MODE_SETTINGS?.[getCurrentMode()];
+            if (modeSettings) {
+                loadUiFromSettings(modeSettings);
+            } else if (config.PROFILE_MAPPING && Object.keys(config.PROFILE_MAPPING).length > 0) {
+                loadUiFromSettings({
+                    PROFILE_MAPPING: config.PROFILE_MAPPING,
+                    VIDEOS_DIR: config.VIDEOS_DIR,
+                    CONCURRENCY_LIMIT: config.CONCURRENCY_LIMIT,
+                    BASE_TITLES: config.BASE_TITLES,
+                });
+            } else {
+                for (let i = 1; i <= 6; i++) addProfileRow(i, '');
+            }
+        } else {
+            for (let i = 1; i <= 6; i++) addProfileRow(i, '');
+            updateUiMode();
+        }
+    });
+</script>
+</body>
+</html>
