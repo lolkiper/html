@@ -524,6 +524,7 @@
             const result = await window.electronAPI.startFarm(updatedConfig);
             if (result?.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL) {
                 videosPerChannel = result.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
+                document.getElementById('videosPerChannel').value = videosPerChannel;
             }
             status.innerText = `🔮 Залив запущен в режиме [${farmMode === 'multi' ? 'МУЛЬТИ' : 'ОДИНАРНЫЙ'}]!`;
         }

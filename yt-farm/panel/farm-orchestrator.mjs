@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { applyFarmModePreset } from './mode-presets.mjs';
+import { applyFarmModePreset, pinVideosPerChannel } from './mode-presets.mjs';
 import {
   applyModeSettingsToConfig,
   getModeSettings,
@@ -68,11 +68,11 @@ export function mergeGuiConfig(baseDir, guiConfig) {
     BASE_TITLES: guiConfig.BASE_TITLES,
   });
 
-  const videosPerChannel = Number(
-    guiConfig.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL
+  const rawVpc = guiConfig.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL
     ?? guiConfig.VIDEOS_PER_CHANNEL
-    ?? existing.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL,
-  );
+    ?? existing.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL
+    ?? existing.VIDEOS_PER_CHANNEL;
+  const videosPerChannel = Number(rawVpc);
   const scheduleOverrides = Number.isFinite(videosPerChannel) && videosPerChannel > 0
     ? { VIDEOS_PER_CHANNEL: videosPerChannel }
     : {};
@@ -93,7 +93,9 @@ export function mergeGuiConfig(baseDir, guiConfig) {
     },
   }, mode);
 
-  return merged;
+  return Number.isFinite(videosPerChannel) && videosPerChannel > 0
+    ? pinVideosPerChannel(merged, videosPerChannel)
+    : merged;
 }
 
 export function createFarmOrchestrator({ baseDir, onLog, onStatus }) {

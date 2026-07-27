@@ -9,7 +9,7 @@ import {
   mergeGuiConfig,
   saveConfig,
 } from './farm-orchestrator.mjs';
-import { applyFarmModePreset } from './mode-presets.mjs';
+import { applyFarmModePreset, pinVideosPerChannel } from './mode-presets.mjs';
 import {
   applyModeSettingsToConfig,
   getModeSettings,
@@ -149,7 +149,8 @@ app.whenReady().then(() => {
     const migrated = migrateModeSettings(raw);
     const mode = normalizeMode(migrated.FARM_MODE);
     const withModeFields = applyModeSettingsToConfig(migrated, mode);
-    const preset = applyFarmModePreset(withModeFields, mode);
+    const savedVpc = migrated.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL ?? migrated.VIDEOS_PER_CHANNEL;
+    const preset = pinVideosPerChannel(applyFarmModePreset(withModeFields, mode), savedVpc);
     return {
       ...preset,
       MODE_SETTINGS: migrated.MODE_SETTINGS,
@@ -169,7 +170,8 @@ app.whenReady().then(() => {
 
     existing.FARM_MODE = mode;
     const withFields = applyModeSettingsToConfig(existing, mode);
-    const updated = applyFarmModePreset(withFields, mode);
+    const savedVpc = existing.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL ?? existing.VIDEOS_PER_CHANNEL;
+    const updated = pinVideosPerChannel(applyFarmModePreset(withFields, mode), savedVpc);
     updated.MODE_SETTINGS = existing.MODE_SETTINGS;
     saveConfig(baseDir, updated);
 
@@ -188,7 +190,7 @@ app.whenReady().then(() => {
     const merged = mergeGuiConfig(baseDir, guiConfig);
     saveConfig(baseDir, merged);
     getOrchestrator().start(merged);
-    return { SCHEDULE_SETTINGS: merged.SCHEDULE_SETTINGS };
+    return { SCHEDULE_SETTINGS: merged.SCHEDULE_SETTINGS, VIDEOS_PER_CHANNEL: merged.VIDEOS_PER_CHANNEL };
   }));
 
   ipcMain.handle('stop-farm', wrapIpc(() => {

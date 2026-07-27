@@ -45,7 +45,10 @@ export function applyFarmModePreset(config, mode) {
   const farmMode = preset.FARM_MODE;
   const antidetect = ANTIDETECT_PRESETS[farmMode] || ANTIDETECT_PRESETS.single;
   const userSchedule = config.SCHEDULE_SETTINGS || {};
-  const videosPerChannel = userSchedule.VIDEOS_PER_CHANNEL ?? preset.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
+  const videosPerChannel = getVideosPerChannel({
+    ...config,
+    SCHEDULE_SETTINGS: userSchedule,
+  });
   return {
     ...config,
     FARM_MODE: farmMode,
@@ -75,4 +78,18 @@ export function getVideosPerChannel(config) {
   return config?.SCHEDULE_SETTINGS?.VIDEOS_PER_CHANNEL
     ?? config?.VIDEOS_PER_CHANNEL
     ?? preset.SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL;
+}
+
+/** Жёстко фиксирует лимит — пресет режима при START больше не перезапишет. */
+export function pinVideosPerChannel(config, value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return config;
+  return {
+    ...config,
+    VIDEOS_PER_CHANNEL: n,
+    SCHEDULE_SETTINGS: {
+      ...(config.SCHEDULE_SETTINGS || {}),
+      VIDEOS_PER_CHANNEL: n,
+    },
+  };
 }
