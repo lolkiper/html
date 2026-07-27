@@ -58,6 +58,13 @@ const ANTIDETECT = CONFIG.ANTIDETECT || {};
 const VIDEOS_PER_CHANNEL = SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL ?? 16;
 const BATCH_SIZE = SCHEDULE_SETTINGS.BATCH_SIZE ?? 10;
 
+function isScheduleMode(config = CONFIG) {
+  if (config.FARM_MODE === 'single') return false;
+  return config.SCHEDULE_SETTINGS?.USE_SCHEDULE !== false;
+}
+
+const SCHEDULE_ENABLED = isScheduleMode(CONFIG);
+
 const CHANNEL_STATE_FILE = path.join(baseDir, 'channel-state.json');
 const CHANNEL_STATE_LOCK_FILE = path.join(baseDir, 'channel-state.lock');
 
@@ -498,6 +505,7 @@ async function saveToHistory(profileId, file, title, channelNum, scheduledTime) 
 export async function runFarm(slot, profileId) {
   const CURRENT_SLOT = slot;
   const directProfileId = profileId;
+  console.log(`[Farm] Режим: ${SCHEDULE_ENABLED ? 'расписание (отложенная публикация)' : 'одиночный (публикация сразу)'}`);
   console.log(`[Farm] Анти-детект: паузы 2–10с→1с, >10с→макс 5с (обновлённый main.mjs)`);
   workerLog(`▶️ Слот ${CURRENT_SLOT} старт, профиль ${directProfileId}, cwd=${baseDir}`);
   let finalVideosDir = CONFIG.VIDEOS_DIR;
@@ -544,19 +552,24 @@ export async function runFarm(slot, profileId) {
   const discovered = await syncChannelsFromMapping(CONFIG.PROFILE_MAPPING);
   const isNewChannel = discovered.new.some((c) => c.channelNumber === channelNumber);
 
-  const schedulePrep = await prepareChannelSchedule(
-    channelNumber,
-    directProfileId,
-    history,
-    SCHEDULE_SETTINGS,
-    CONFIG.SCHEDULE
-  );
+  let schedulePrep = null;
+  if (SCHEDULE_ENABLED) {
+    schedulePrep = await prepareChannelSchedule(
+      channelNumber,
+      directProfileId,
+      history,
+      SCHEDULE_SETTINGS,
+      CONFIG.SCHEDULE
+    );
 
-  if (isNewChannel) {
-    console.log(`🆕 Канал №${channelNumber} — первый запуск, расписание с завтра ${String(normalizeScheduleHours(SCHEDULE_SETTINGS)[0]).padStart(2, '0')}:00`);
+    if (isNewChannel) {
+      console.log(`🆕 Канал №${channelNumber} — первый запуск, расписание с завтра ${String(normalizeScheduleHours(SCHEDULE_SETTINGS)[0]).padStart(2, '0')}:00`);
+    } else {
+      const remaining = schedulePrep.schedule.length - schedulePrep.uploadedCount;
+      console.log(`📋 Канал №${channelNumber} — известный, свободных слотов: ${remaining}, всего в графике: ${schedulePrep.schedule.length}`);
+    }
   } else {
-    const remaining = schedulePrep.schedule.length - schedulePrep.uploadedCount;
-    console.log(`📋 Канал №${channelNumber} — известный, свободных слотов: ${remaining}, всего в графике: ${schedulePrep.schedule.length}`);
+    console.log(`📢 Канал №${channelNumber} — одиночный режим: публикация сразу, без отложенного расписания`);
   }
 
   const startVideoNum = (channelNumber - 1) * VIDEOS_PER_CHANNEL + 1;
@@ -585,11 +598,14 @@ export async function runFarm(slot, profileId) {
   const currentBatch = availableVideos.slice(0, BATCH_SIZE);
   console.log(`🎯 Слот ${CURRENT_SLOT} собрал пачку из ${currentBatch.length} видео для этого пакетного захода.`);
 
-  const batchTimeSlots = await schedulePrep.batchSlots(currentBatch.length);
-  if (batchTimeSlots.length < currentBatch.length) {
-    console.error(`❌ Не хватает тайм-слотов в расписании канала №${channelNumber} (нужно ${currentBatch.length}, есть ${batchTimeSlots.length})`);
-    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: мало слотов в расписании`);
-    return;
+  let batchTimeSlots = [];
+  if (SCHEDULE_ENABLED) {
+    batchTimeSlots = await schedulePrep.batchSlots(currentBatch.length);
+    if (batchTimeSlots.length < currentBatch.length) {
+      console.error(`❌ Не хватает тайм-слотов в расписании канала №${channelNumber} (нужно ${currentBatch.length}, есть ${batchTimeSlots.length})`);
+      workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: мало слотов в расписании`);
+      return;
+    }
   }
 
   let browser = null;
@@ -622,15 +638,19 @@ export async function runFarm(slot, profileId) {
 
   for (let i = 0; i < currentBatch.length; i++) {
     const videoToUpload = currentBatch[i];
-    const videoTimeSlot = batchTimeSlots[i];
+    const videoTimeSlot = SCHEDULE_ENABLED ? batchTimeSlots[i] : null;
 
-    if (!videoTimeSlot) {
+    if (SCHEDULE_ENABLED && !videoTimeSlot) {
       console.log(`⚠️ Предупреждение: в расписании канала №${channelNumber} закончились тайм-слоты на шаге ${i + 1}. Остаток пачки пропускается.`);
       break;
     }
 
     console.log(`\n🎬 [Видео ${i + 1}/${currentBatch.length}] Начинаю процесс для: ${videoToUpload.file}`);
-    console.log(`📅 Целевой тайм-слот публикации: ${videoTimeSlot}`);
+    if (SCHEDULE_ENABLED) {
+      console.log(`📅 Целевой тайм-слот публикации: ${videoTimeSlot}`);
+    } else {
+      console.log(`📢 Публикация сразу (публичный доступ)`);
+    }
 
     let attempts = 3;
     let success = false;
@@ -643,7 +663,11 @@ export async function runFarm(slot, profileId) {
         success = true;
         totalUploadedInSession++;
         await saveToHistory(directProfileId, videoToUpload.file, videoToUpload.title, channelNumber, videoTimeSlot);
-        console.log(`💾 Успешно запланировано! Файл ${videoToUpload.file} закреплен за временем ${videoTimeSlot}`);
+        if (SCHEDULE_ENABLED) {
+          console.log(`💾 Успешно запланировано! Файл ${videoToUpload.file} закреплен за временем ${videoTimeSlot}`);
+        } else {
+          console.log(`💾 Успешно опубликовано! Файл ${videoToUpload.file}`);
+        }
       } catch (error) {
         if (error.message === 'BAN_DETECTED') { isBanned = true; break; }
         if (error.message.includes('closed') || error.message.includes('browser has been closed')) { browserClosed = true; break; }
