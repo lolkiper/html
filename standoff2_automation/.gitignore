@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+log.txt
+*.png
+!templates/README.md
