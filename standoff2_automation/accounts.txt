@@ -1,0 +1,5 @@
+# Example accounts — one per line: email:password
+# Lines starting with # are ignored.
+#
+# test1@gmail.com:MyPassword123
+# test2@gmail.com:AnotherPass456
