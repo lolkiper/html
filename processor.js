@@ -33,10 +33,10 @@ const SCALE_FLAGS = 'fast_bilinear';
 const MAX_OUTPUT_FPS = 30;
 /**
  * Потолок скорости кодирования относительно realtime.
- * Без этого NVENC съедает очередь кадров мгновенно и в диспетчере
- * Video Encode прыгает до 100% на каждом новом файле.
+ * 8× при 30 fps ≈ 240 кадров/с — RTX 3060 NVENC заполняется и в диспетчере
+ * это игла до 100% на каждом файле. 2.5× ≈ 75 кадров/с, энкодер ~30%.
  */
-const ENCODE_PACE_SPEED = 8;
+const ENCODE_PACE_SPEED = 2.5;
 
 /** Пресеты кодеков для контейнера .mov. */
 const ENCODERS = {
@@ -121,8 +121,8 @@ const GPU_H264 = [
     id: 'h264_nvenc',
     vendor: 'NVIDIA NVENC',
     extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '16', '-strict_gop', '1', '-bf', '0'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '16', '-strict_gop', '1', '-bf', '0'],
+      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '8', '-strict_gop', '1', '-bf', '0', '-async_depth', '1'],
+      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '8', '-strict_gop', '1', '-bf', '0', '-async_depth', '1'],
       ['-gpu', '0', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
       ['-gpu', '1', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
       ['-gpu', '0', '-preset', 'p1'],
@@ -166,8 +166,8 @@ const GPU_H265 = [
     id: 'hevc_nvenc',
     vendor: 'NVIDIA NVENC',
     extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '16', '-strict_gop', '1', '-bf', '0', '-tag:v', 'hvc1'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '16', '-strict_gop', '1', '-bf', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '8', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-tag:v', 'hvc1'],
+      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '8', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-tag:v', 'hvc1'],
       ['-gpu', '0', '-preset', 'p4', '-tag:v', 'hvc1'],
       ['-gpu', '1', '-preset', 'p4', '-tag:v', 'hvc1'],
       ['-gpu', '0', '-tag:v', 'hvc1'],
@@ -1047,8 +1047,12 @@ function buildGraph({
   // ProRes и так медленный. H.264/H.265 без лимита мгновенно забивают NVENC
   // очередью кадров — в диспетчере это иглы до 100% на каждом новом файле.
   if (target.pixelFormat === 'yuv420p') {
-    filters.push(`[vfinal]realtime=speed=${ENCODE_PACE_SPEED}[vpaced]`);
-    filters.push(`[ca]arealtime=speed=${ENCODE_PACE_SPEED}[apaced]`);
+    filters.push(
+      `[vfinal]setpts=PTS-STARTPTS,realtime=speed=${ENCODE_PACE_SPEED}[vpaced]`
+    );
+    filters.push(
+      `[ca]asetpts=PTS-STARTPTS,arealtime=speed=${ENCODE_PACE_SPEED}[apaced]`
+    );
     return { inputs, filters, videoOut: 'vpaced', audioOut: 'apaced', layout };
   }
 
