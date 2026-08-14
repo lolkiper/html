@@ -81,8 +81,8 @@
                   <input type="range" id="left-share" min="20" max="80" step="1" value="50" />
                 </div>
                 <div class="field">
-                  <label for="feather">Мягкость границы: <b id="feather-value">8 px</b></label>
-                  <input type="range" id="feather" min="0" max="80" step="2" value="8" />
+                  <label for="feather">Мягкость границы: <b id="feather-value">24 px</b></label>
+                  <input type="range" id="feather" min="0" max="80" step="2" value="24" />
                 </div>
               </div>
 
@@ -94,8 +94,8 @@
                     <input type="range" id="left-zoom" min="1" max="3" step="0.05" value="1" />
                   </div>
                   <div class="field">
-                    <label for="left-offset">Сдвиг по X: <b id="left-offset-value">−25%</b></label>
-                    <input type="range" id="left-offset" min="-50" max="50" step="1" value="-25" />
+                    <label for="left-offset">Сдвиг по X: <b id="left-offset-value">0%</b></label>
+                    <input type="range" id="left-offset" min="-50" max="50" step="1" value="0" />
                   </div>
                 </div>
 
@@ -106,8 +106,8 @@
                     <input type="range" id="right-zoom" min="1" max="3" step="0.05" value="1.8" />
                   </div>
                   <div class="field">
-                    <label for="right-offset">Сдвиг по X: <b id="right-offset-value">+25%</b></label>
-                    <input type="range" id="right-offset" min="-50" max="50" step="1" value="25" />
+                    <label for="right-offset">Сдвиг по X: <b id="right-offset-value">0%</b></label>
+                    <input type="range" id="right-offset" min="-50" max="50" step="1" value="0" />
                   </div>
                 </div>
               </div>
@@ -118,7 +118,7 @@
                 <div class="split-preview__right"><span>Крупный план</span></div>
               </div>
               <p class="field__note" id="split-hint">
-                Сдвиг задан в процентах от ширины кадра: −25% это −480 px при ширине 1920.
+                Итог — квадрат 1080×1080. Нулевой сдвиг ставит центр ролика в центр своей половины.
               </p>
             </div>
           </article>
@@ -170,6 +170,7 @@
               <div class="field">
                 <label for="frame">Размер итогового кадра</label>
                 <select id="frame"></select>
+                <p class="field__note">Для TikTok и Shorts — квадрат 1080×1080, как в готовом примере.</p>
               </div>
 
               <div class="field">

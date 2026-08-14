@@ -213,10 +213,11 @@ function updateSplitControls() {
   el.splitPreviewLeft.style.flexBasis = `${share}%`;
   el.splitPreviewSeam.style.flexBasis = `${Math.max(2, feather / 3)}px`;
 
-  const pixels = Math.round((1920 * leftOffset) / 100);
+  const canvasWidth = 1080;
+  const pixels = Math.round((canvasWidth * leftOffset) / 100);
   el.splitHint.textContent =
-    `Сдвиг задан в процентах от ширины кадра: ${signedPercent(leftOffset)} это ` +
-    `${pixels} px при ширине 1920.`;
+    `Итог — квадрат 1080×1080. Сдвиг ${signedPercent(leftOffset)} это ` +
+    `${pixels} px; ноль ставит центр ролика в центр своей половины.`;
 }
 
 function updateScheme() {
@@ -284,15 +285,19 @@ function restoreSettings() {
   el.verbose.checked = Boolean(saved.verbose);
 
   const split = saved.split || {};
+  const oldLayout =
+    Number(split.leftOffset) === -25 &&
+    Number(split.rightOffset) === 25 &&
+    (Number(split.feather) === 8 || saved.frame === undefined || saved.frame === 'source');
   const restoreRange = (node, value) => {
     if (Number.isFinite(Number(value))) node.value = value;
   };
   restoreRange(el.leftShare, split.leftShare);
-  restoreRange(el.feather, split.feather);
+  restoreRange(el.feather, oldLayout ? 24 : split.feather);
   restoreRange(el.leftZoom, split.leftZoom);
-  restoreRange(el.leftOffset, split.leftOffset);
+  restoreRange(el.leftOffset, oldLayout ? 0 : split.leftOffset);
   restoreRange(el.rightZoom, split.rightZoom);
-  restoreRange(el.rightOffset, split.rightOffset);
+  restoreRange(el.rightOffset, oldLayout ? 0 : split.rightOffset);
 
   if (Number.isFinite(saved.percent)) {
     el.percent.value = clamp(saved.percent, 50, 99);
@@ -303,7 +308,7 @@ function restoreSettings() {
     el.overlayOpacityValue.textContent = `${el.overlayOpacity.value}%`;
   }
   if (saved.encoder) el.encoder.value = saved.encoder;
-  if (saved.frame) el.frame.value = saved.frame;
+  el.frame.value = saved.frame && saved.frame !== 'source' ? saved.frame : 'square1080';
   if (saved.fit) el.fit.value = saved.fit;
 }
 
@@ -439,11 +444,12 @@ el.useOverlay.addEventListener('change', () => {
 });
 
 el.useSplit.addEventListener('change', () => {
-  updateSplitState();
-  saveSettings();
   if (el.useSplit.checked) {
+    el.frame.value = 'square1080';
     refreshMediaInfo(el.closeupFile, el.closeupFileNote, CLOSEUP_HINT);
   }
+  updateSplitState();
+  saveSettings();
 });
 
 [el.leftShare, el.feather, el.leftZoom, el.leftOffset, el.rightZoom, el.rightOffset].forEach((node) => {

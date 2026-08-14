@@ -65,16 +65,16 @@ const FIT_MODES = {
 };
 
 /**
- * Раскладка split-screen. Сдвиги заданы в процентах от ширины кадра, чтобы
- * настройки не зависели от разрешения: -25% это привычные -480 px при ширине 1920.
+ * Раскладка split-screen. Сдвиги — в процентах от ширины холста (1080×1080
+ * по умолчанию). Нулевой сдвиг ставит центр исходника в центр своей половины.
  */
 const SPLIT_DEFAULTS = {
   leftShare: 50,
-  feather: 8,
+  feather: 24,
   leftZoom: 1,
-  leftOffset: -25,
+  leftOffset: 0,
   rightZoom: 1.8,
-  rightOffset: 25
+  rightOffset: 0
 };
 
 const DEFAULTS = {
@@ -352,17 +352,59 @@ function alphaFormatFor(pixelFormat) {
 }
 
 /**
+ * Окно в видео, которое заполняет половину кадра.
+ *
+ * Сначала ролик масштабируется так, чтобы покрыть панель (как cover), затем
+ * дополнительно на zoom, и из получившегося слоя вырезается панель со сдвигом.
+ * Нулевой сдвиг — центр исходника в центре половины, как в примере 1080×1080.
+ */
+function coverWindow({ srcW, srcH, paneW, paneH, zoom, panPercent, canvasW }) {
+  const scale = Math.max((paneW * zoom) / srcW, (paneH * zoom) / srcH);
+  const scaledW = evenRound(srcW * scale);
+  const scaledH = evenRound(srcH * scale);
+  const panPx = (canvasW * panPercent) / 100;
+  return {
+    scaledW,
+    scaledH,
+    cropX: clamp(Math.round((scaledW - paneW) / 2 - panPx), 0, Math.max(0, scaledW - paneW)),
+    cropY: clamp(Math.round((scaledH - paneH) / 2), 0, Math.max(0, scaledH - paneH))
+  };
+}
+
+function coverFilter(label, src, paneW, paneH, zoom, panPercent, canvasW, outputLabel) {
+  const window = coverWindow({
+    srcW: src.width,
+    srcH: src.height,
+    paneW,
+    paneH,
+    zoom,
+    panPercent,
+    canvasW
+  });
+  const scale =
+    window.scaledW === src.width && window.scaledH === src.height
+      ? ''
+      : `scale=${window.scaledW}:${window.scaledH}:flags=bicubic,`;
+  return `${label}${scale}crop=${paneW}:${paneH}:${window.cropX}:${window.cropY}[${outputLabel}]`;
+}
+
+/**
  * Делит кадр на две половины: слева смонтированный ролик, справа второе видео.
  *
- * Каждая половина — это окно в «слое»: видео масштабируется на zoom, центр слоя
- * сдвигается на offset (как Position X в монтажке), а в кадр попадает только та
- * часть слоя, которая приходится на свою половину. Поэтому левая часть при
- * сдвиге -25% показывает центр исходника, а правая с зумом 1.8 — крупный план,
- * обрезанный слева.
- *
- * @returns {{filters: string[], layout: object}}
+ * Каждая половина заполняется независимо (cover), поэтому вертикальный 9:16
+ * исходник сохраняет полный рост в колонке 540×1080, а не обрезается сверху
+ * и снизу до квадрата. Правая половина по умолчанию увеличена в 1.8 раза.
  */
-function buildSplitFilters({ baseLabel, closeupIndex, outputLabel, target, split, duration }) {
+function buildSplitFilters({
+  baseLabel,
+  closeupIndex,
+  closeup,
+  montage,
+  outputLabel,
+  target,
+  split,
+  duration
+}) {
   const width = target.width;
   const height = target.height;
 
@@ -370,67 +412,55 @@ function buildSplitFilters({ baseLabel, closeupIndex, outputLabel, target, split
   const rightWidth = width - leftWidth;
   const featherLimit = Math.max(0, Math.min(leftWidth, rightWidth) - 2);
   const requested = clamp(split.feather, 0, featherLimit);
-  // Градиент шириной в один пиксель смысла не имеет и ломает формулу маски.
   const feather = requested > 0 ? Math.max(2, requested) : 0;
-
-  const layerOf = (zoom) => ({ width: evenRound(width * zoom), height: evenRound(height * zoom) });
-  const leftLayer = layerOf(split.leftZoom);
-  const rightLayer = layerOf(split.rightZoom);
-
-  // Левый край слоя на холсте, затем — какая точка слоя попадает в окно половины.
-  const layerLeft = (layer, offsetPercent) => (width - layer.width) / 2 + (width * offsetPercent) / 100;
-  const cropX = (layer, offsetPercent, canvasX, windowWidth) =>
-    clamp(Math.round(canvasX - layerLeft(layer, offsetPercent)), 0, Math.max(0, layer.width - windowWidth));
-  const cropY = (layer) => clamp(Math.round((layer.height - height) / 2), 0, Math.max(0, layer.height - height));
-
-  const zoomLeft =
-    leftLayer.width === width && leftLayer.height === height
-      ? ''
-      : `,scale=${leftLayer.width}:${leftLayer.height}:flags=bicubic`;
-  const leftChain = `[${baseLabel}]setsar=1${zoomLeft}`;
-
-  // Второе видео сначала заполняет кадр целиком, потом увеличивается на zoom.
-  const rightChain =
-    `[${closeupIndex}:v:0]setpts=PTS-STARTPTS,fps=${target.fps},` +
-    `scale=${rightLayer.width}:${rightLayer.height}:force_original_aspect_ratio=increase:flags=bicubic,` +
-    `crop=${rightLayer.width}:${rightLayer.height},setsar=1`;
 
   const filters = [];
   const layout = { width, height, leftWidth, rightWidth, feather };
 
+  const leftSrc = { width: montage.width, height: montage.height };
+  const rightSrc = { width: closeup.width, height: closeup.height };
+  const rightPrep =
+    `[${closeupIndex}:v:0]setpts=PTS-STARTPTS,fps=${target.fps},setsar=1`;
+
   if (feather === 0) {
     filters.push(
-      `${leftChain},crop=${leftWidth}:${height}:` +
-        `${cropX(leftLayer, split.leftOffset, 0, leftWidth)}:${cropY(leftLayer)}[splitLeft]`
+      coverFilter(
+        `[${baseLabel}]setsar=1,`,
+        leftSrc, leftWidth, height, split.leftZoom, split.leftOffset, width,
+        'splitLeft'
+      )
     );
     filters.push(
-      `${rightChain},crop=${rightWidth}:${height}:` +
-        `${cropX(rightLayer, split.rightOffset, leftWidth, rightWidth)}:${cropY(rightLayer)}[splitRight]`
+      coverFilter(
+        `${rightPrep},`,
+        rightSrc, rightWidth, height, split.rightZoom, split.rightOffset, width,
+        'splitRight'
+      )
     );
-    // shortest=1 обязателен: второе видео зациклено и само по себе бесконечно.
     filters.push(`[splitLeft][splitRight]hstack=inputs=2:shortest=1[${outputLabel}]`);
     return { filters, layout };
   }
 
-  // Мягкая граница: правая половина берётся с запасом в feather пикселей и
-  // накладывается на левую с альфа-градиентом, чтобы стык не был резким.
   const rightWindow = rightWidth + feather;
   const seam = leftWidth - feather;
 
   filters.push(
-    `${leftChain},crop=${leftWidth + feather}:${height}:` +
-      `${cropX(leftLayer, split.leftOffset, 0, leftWidth + feather)}:${cropY(leftLayer)},` +
-      `pad=${width}:${height}:0:0:black[splitBase]`
+    coverFilter(
+      `[${baseLabel}]setsar=1,`,
+      leftSrc, leftWidth + feather, height, split.leftZoom, split.leftOffset, width,
+      'splitLeftWide'
+    )
   );
+  filters.push(`[splitLeftWide]pad=${width}:${height}:0:0:black[splitBase]`);
   filters.push(
-    `${rightChain},crop=${rightWindow}:${height}:` +
-      `${cropX(rightLayer, split.rightOffset, seam, rightWindow)}:${cropY(rightLayer)},` +
-      `format=${alphaFormatFor(target.pixelFormat)}[splitRight]`
+    coverFilter(
+      `${rightPrep},`,
+      rightSrc, rightWindow, height, split.rightZoom, split.rightOffset, width,
+      'splitRightRgb'
+    )
   );
+  filters.push(`[splitRightRgb]format=${alphaFormatFor(target.pixelFormat)}[splitRight]`);
 
-  // Маска прозрачности: линейный градиент считается один раз на единственном
-  // кадре и дальше просто повторяется (фильтр gradients растягивает переход
-  // всего на несколько пикселей, независимо от заданной ширины).
   const maskDuration = Math.max(1, duration + 1).toFixed(3);
   filters.push(
     `color=c=black:s=${feather}x${height}:r=1:d=1,format=gray,` +
@@ -459,6 +489,18 @@ function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, 
 
   const headDuration = splitAt;
   const tailDuration = Math.max(0, source.duration - splitAt);
+
+  // При сплите монтаж держит пропорции исходника и высоту холста: вертикальный
+  // 9:16 не режется сверху и снизу до квадрата, а потом заполняет левую колонку.
+  const montage = closeup
+    ? {
+        width: evenRound(target.height * (source.width / source.height)),
+        height: target.height,
+        fps: target.fps,
+        fit: target.fit,
+        pixelFormat: target.pixelFormat
+      }
+    : target;
 
   // 0 — голова исходника
   inputs.push({ file: source.file, options: ['-t', headDuration.toFixed(3)] });
@@ -492,7 +534,7 @@ function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, 
     const videoLabel = `v${i}`;
     const audioLabel = `a${i}`;
 
-    filters.push(videoSegmentFilter(`${segment.videoInput}:v:0`, videoLabel, target));
+    filters.push(videoSegmentFilter(`${segment.videoInput}:v:0`, videoLabel, montage));
 
     // Сегмент без звука заменяется тишиной, иначе concat не соберёт дорожку.
     if (segment.audioSource.hasAudio) {
@@ -513,6 +555,8 @@ function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, 
     const built = buildSplitFilters({
       baseLabel: videoOut,
       closeupIndex,
+      closeup,
+      montage,
       outputLabel: 'sv',
       target,
       split: normalizeSplit(split),
