@@ -13,7 +13,17 @@
 FFmpeg и FFprobe поставляются вместе с приложением (`ffmpeg-static`, `ffprobe-static`) — ставить
 их в систему не нужно.
 
-## Запуск
+## Скачать для Windows
+
+Готовые сборки лежат на [странице релизов](https://github.com/lolkiper/html/releases/latest):
+
+- `Shorts Inserter Setup <версия>.exe` — установщик;
+- `Shorts Inserter <версия>.exe` — portable-версия, запускается без установки.
+
+Сборку делает GitHub Actions на Windows-раннере (`.github/workflows/build-windows.yml`),
+новый релиз выходит при появлении тега `v*`.
+
+## Запуск из исходников
 
 ```bash
 npm install
