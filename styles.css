@@ -464,8 +464,8 @@ input[type='range']:disabled {
 
 /* Полоса стыка расширяется вместе с настройкой мягкости границы. */
 .split-preview__seam {
-  flex: 0 0 2px;
-  background: linear-gradient(90deg, #223049, #6a63ff);
+  flex: 0 0 16px;
+  background: linear-gradient(90deg, #223049 0%, #3d4d78 40%, #6a63ff 100%);
   transition: flex-basis 0.2s ease;
 }
 

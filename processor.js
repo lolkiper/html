@@ -83,7 +83,7 @@ const FIT_MODES = {
  */
 const SPLIT_DEFAULTS = {
   leftShare: 50,
-  feather: 24,
+  feather: 48,
   leftZoom: 1,
   leftOffset: 0,
   rightZoom: 1.8,
@@ -890,16 +890,19 @@ function buildSplitFilters({
   filters.push(`[splitRightRgb]format=${alphaFormatFor(target.pixelFormat)}[splitRight]`);
 
   const maskDuration = Math.max(1, duration + 1).toFixed(3);
+  // Raised-cosine вместо линейного lerp: по краям стык полностью непрозрачный,
+  // в середине нет «двойной экспозиции». Маска сразу того же размера, что и
+  // правая полоса — без loop/hstack, которые сжимают градиент в несколько пикселей.
+  const denom = Math.max(1, feather - 1).toFixed(1);
+  const ease = `0.5-0.5*cos(PI*clip(X/${denom},0,1))`;
   filters.push(
-    `color=c=black:s=${feather}x${height}:r=1:d=1,format=gray,` +
-      `geq=lum='255*X/${feather - 1}',loop=loop=-1:size=1,fps=${target.fps}[splitGradient]`
+    `color=c=black:s=${rightWindow}x${height}:r=${target.fps}:d=${maskDuration},` +
+      `format=gray,geq=lum='255*(${ease})'[splitMask]`
   );
-  filters.push(
-    `color=c=white:s=${rightWidth}x${height}:r=${target.fps}:d=${maskDuration},format=gray[splitSolid]`
-  );
-  filters.push(`[splitGradient][splitSolid]hstack=inputs=2[splitMask]`);
   filters.push(`[splitRight][splitMask]alphamerge=shortest=1[splitSoft]`);
-  filters.push(`[splitBase][splitSoft]overlay=x=${seam}:y=0:shortest=1:format=auto[${outputLabel}]`);
+  filters.push(
+    `[splitBase][splitSoft]overlay=x=${seam}:y=0:shortest=1:format=yuv444:alpha=straight[${outputLabel}]`
+  );
 
   return { filters, layout };
 }

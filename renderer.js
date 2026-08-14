@@ -213,7 +213,7 @@ function updateSplitControls() {
   el.rightOffsetValue.textContent = signedPercent(el.rightOffset.value);
 
   el.splitPreviewLeft.style.flexBasis = `${share}%`;
-  el.splitPreviewSeam.style.flexBasis = `${Math.max(2, feather / 3)}px`;
+  el.splitPreviewSeam.style.flexBasis = `${Math.max(4, Math.round(feather * 0.7))}px`;
 
   const canvasWidth = 1080;
   const pixels = Math.round((canvasWidth * leftOffset) / 100);
@@ -296,7 +296,7 @@ function restoreSettings() {
     if (Number.isFinite(Number(value))) node.value = value;
   };
   restoreRange(el.leftShare, split.leftShare);
-  restoreRange(el.feather, oldLayout ? 24 : split.feather);
+  restoreRange(el.feather, oldLayout ? 48 : split.feather);
   restoreRange(el.leftZoom, split.leftZoom);
   restoreRange(el.leftOffset, oldLayout ? 0 : split.leftOffset);
   restoreRange(el.rightZoom, split.rightZoom);
