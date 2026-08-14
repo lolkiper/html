@@ -629,9 +629,7 @@ window.api.onDone((payload) => {
   const hardware = info.hardware || {};
   if (hardware.gpu) {
     el.accelNote.textContent =
-      `Найдена ${hardware.gpu}. Склейка на процессоре, кодирование на видеокарте` +
-      (hardware.hwaccel ? `, декодирование ${hardware.hwaccel}` : '') +
-      `. Ядер CPU: ${hardware.cores}.`;
+      `Найдена ${hardware.gpu}. Склейка на процессоре, кодирование на видеокарте. Ядер CPU: ${hardware.cores}.`;
   } else {
     el.accelNote.textContent =
       'Видеокарта для кодирования не найдена в этой среде — будет процессор. На Windows с NVIDIA, AMD или Intel GPU кодирование пойдёт на карте.';

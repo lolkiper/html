@@ -308,7 +308,7 @@ function resolveEncodePlan(encoderKey, accelMode, hardware) {
   const mode = ACCEL_MODES[accelMode] ? accelMode : DEFAULTS.accel;
   const wantGpu = mode === 'hybrid' || mode === 'gpu';
   const gpu = encoderKey === 'h265' ? hardware.h265 : encoderKey === 'h264' ? hardware.h264 : null;
-  const splitLoad = Boolean(wantGpu && (gpu || hardware.hwaccel));
+  const splitLoad = Boolean(wantGpu && gpu);
   const threads = threadBudget(splitLoad);
 
   if (wantGpu && gpu) {
@@ -318,7 +318,9 @@ function resolveEncodePlan(encoderKey, accelMode, hardware) {
       videoOptions: ['-c:v', gpu.id, ...gpu.extra],
       audioOptions: cpu.audioOptions,
       extraOptions: cpu.extraOptions && cpu.extraOptions.length ? cpu.extraOptions : ['-movflags', '+faststart'],
-      hwaccel: hardware.hwaccel,
+      // Граф фильтров целиком программный (concat/crop/overlay) — GPU-кадры
+      // к нему не привязать. Видеокарта здесь только кодирует готовый кадр.
+      hwaccel: null,
       usingGpu: true,
       vendor: gpu.vendor,
       threads
@@ -327,9 +329,7 @@ function resolveEncodePlan(encoderKey, accelMode, hardware) {
 
   const reason = !wantGpu
     ? 'выбран режим «только процессор»'
-    : hardware.hwaccel
-      ? `декодирование ${hardware.hwaccel} на GPU, кодирование на CPU`
-      : 'видеокарта недоступна, всё на процессоре';
+    : 'видеокарта недоступна, всё на процессоре';
 
   return {
     label: `${cpu.label} — ${reason}`,
@@ -337,7 +337,7 @@ function resolveEncodePlan(encoderKey, accelMode, hardware) {
     videoOptions: [...cpu.videoOptions, '-threads', String(threads.encodeThreads)],
     audioOptions: cpu.audioOptions,
     extraOptions: cpu.extraOptions,
-    hwaccel: mode === 'cpu' ? null : hardware.hwaccel,
+    hwaccel: null,
     usingGpu: false,
     vendor: null,
     threads
@@ -1154,9 +1154,6 @@ class BatchProcessor {
       this.log('info', `FFmpeg: ${ffmpegPath}`);
       this.log('info', `Кодек: ${ENCODERS[encoder].label}, обрезка: ${percent}%`);
       this.log('info', `Нагрузка: ${plan.label}`);
-      if (plan.hwaccel) {
-        this.log('info', `Декодирование: ${plan.hwaccel}`);
-      }
       this.log(
         'info',
         `Кадр: ${FRAME_PRESETS[frame].label}, ${FIT_MODES[fit].label.toLowerCase()}`
