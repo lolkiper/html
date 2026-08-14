@@ -18,7 +18,9 @@ const {
   BatchProcessor,
   ffmpegPath,
   probeMedia,
-  listVideoFiles
+  listVideoFiles,
+  wrapCloseupOffset,
+  planCloseupInputs
 } = require('../processor');
 
 const ROOT = path.join(os.tmpdir(), `shorts-inserter-smoke-${process.pid}`);
@@ -113,6 +115,23 @@ function makeSolidVideo({ file, color, width, height, duration, fps }) {
     '-f', 'lavfi',
     '-i', `color=c=${color}:size=${width}x${height}:rate=${fps}:duration=${duration}`,
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    file
+  ]);
+}
+
+/** Сплошные цвета подряд — чтобы проверить, что правая половина идёт по таймлайну. */
+function makeConcatColorVideo({ file, parts, width, height, fps }) {
+  const sources = [];
+  const labels = [];
+  parts.forEach((part, i) => {
+    sources.push(`color=c=${part.color}:s=${width}x${height}:r=${fps}:d=${part.duration}[c${i}]`);
+    labels.push(`[c${i}]`);
+  });
+  ffmpegRun([
+    '-filter_complex',
+    `${sources.join(';')};${labels.join('')}concat=n=${parts.length}:v=1:a=0[v]`,
+    '-map', '[v]',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '1', '-pix_fmt', 'yuv420p',
     file
   ]);
 }
@@ -484,6 +503,99 @@ async function main() {
   check(colorsMatch(samplePoint(combo, 1, 810, 540), [128, 255, 128], 40),
     'сплит + оверлей: справа второе видео, смешанное с оверлеем',
     String(samplePoint(combo, 1, 810, 540)));
+
+  console.log('\n5b) Правая половина идёт подряд по роликам, а не с начала каждый раз…');
+  check(wrapCloseupOffset(0, 10) === 0, 'смещение: ноль остаётся нулём');
+  check(Math.abs(wrapCloseupOffset(6, 10) - 6) < 1e-9, 'смещение: внутри файла без обёртки');
+  check(wrapCloseupOffset(10, 10) === 0, 'смещение: ровно длина файла — снова начало');
+  check(Math.abs(wrapCloseupOffset(14, 10) - 4) < 1e-9, 'смещение: после конца файла — остаток');
+
+  const seqDir = path.join(ROOT, 'seq');
+  const seqOut = path.join(ROOT, 'seq-out');
+  const seqWrapOut = path.join(ROOT, 'seq-wrap-out');
+  fs.mkdirSync(seqDir, { recursive: true });
+
+  makeSolidVideo({ file: path.join(seqDir, 'a-first.mp4'), color: 'red', width: 640, height: 360, duration: 4, fps: 30 });
+  makeSolidVideo({ file: path.join(seqDir, 'b-second.mp4'), color: 'red', width: 640, height: 360, duration: 4, fps: 30 });
+
+  const timedCloseup = path.join(ASSETS_DIR, 'timed-closeup.mp4');
+  makeConcatColorVideo({
+    file: timedCloseup,
+    parts: [
+      { color: 'magenta', duration: 6 },
+      { color: 'yellow', duration: 6 }
+    ],
+    width: 640, height: 360, fps: 30
+  });
+
+  const seqBatch = new BatchProcessor(
+    {
+      sourceDir: seqDir,
+      shortsFile: greenShorts,
+      useSplit: true,
+      closeupFile: timedCloseup,
+      split: { leftShare: 50, feather: 0, leftZoom: 1, leftOffset: 0, rightZoom: 1, rightOffset: 0 },
+      outputDir: seqOut,
+      frame: 'square1080',
+      percent: 75,
+      encoder: 'h264'
+    },
+    { onLog: (level, message) => console.log(`    [${level}] ${message}`) }
+  );
+  const seqSummary = await seqBatch.run();
+  check(seqSummary.done === 2, 'последовательный крупный план: два файла собраны', `done=${seqSummary.done}`);
+
+  const seq1 = path.join(seqOut, 'es1.mov');
+  const seq2 = path.join(seqOut, 'es2.mov');
+  // Исходник 4с + Shorts 2с = 6с. Первое видео берёт крупный план 0–6 (magenta),
+  // второе продолжает с 6-й секунды (yellow).
+  check(colorsMatch(samplePoint(seq1, 1, 810, 540), [255, 0, 255]),
+    'es1 справа: крупный план с начала (пурпурный)',
+    String(samplePoint(seq1, 1, 810, 540)));
+  check(colorsMatch(samplePoint(seq2, 1, 810, 540), [255, 255, 0]),
+    'es2 справа: крупный план продолжается (жёлтый), а не начинается заново',
+    String(samplePoint(seq2, 1, 810, 540)));
+
+  const wrapCloseup = path.join(ASSETS_DIR, 'wrap-closeup.mp4');
+  makeConcatColorVideo({
+    file: wrapCloseup,
+    parts: [
+      { color: 'magenta', duration: 4 },
+      { color: 'yellow', duration: 3 }
+    ],
+    width: 640, height: 360, fps: 30
+  });
+
+  const wrapPlan = planCloseupInputs({ file: wrapCloseup, duration: 6 }, 5, 6);
+  check(wrapPlan.wrap === true, 'если крупный план кончается посередине ролика — включается обёртка');
+  check(wrapPlan.inputs.length === 2, 'обёртка: хвост текущего круга и луп с начала', `inputs=${wrapPlan.inputs.length}`);
+
+  const wrapBatch = new BatchProcessor(
+    {
+      sourceDir: seqDir,
+      shortsFile: greenShorts,
+      useSplit: true,
+      closeupFile: wrapCloseup,
+      split: { leftShare: 50, feather: 0, leftZoom: 1, leftOffset: 0, rightZoom: 1, rightOffset: 0 },
+      outputDir: seqWrapOut,
+      frame: 'square1080',
+      percent: 75,
+      encoder: 'h264'
+    },
+    { onLog: (level, message) => console.log(`    [${level}] ${message}`) }
+  );
+  const wrapSummary = await wrapBatch.run();
+  check(wrapSummary.done === 2, 'обёртка крупного плана: два файла собраны', `done=${wrapSummary.done}`);
+
+  const wrap2 = path.join(seqWrapOut, 'es2.mov');
+  // Крупный план 7с: 0–4 magenta, 4–7 yellow. es1 (6с) забирает 0–6.
+  // es2 начинается с 6-й: 1с yellow, затем снова magenta с начала файла.
+  check(colorsMatch(samplePoint(wrap2, 0.4, 810, 540), [255, 255, 0]),
+    'es2 справа сразу после обёртки: ещё хвост жёлтого',
+    String(samplePoint(wrap2, 0.4, 810, 540)));
+  check(colorsMatch(samplePoint(wrap2, 2.0, 810, 540), [255, 0, 255]),
+    'es2 справа после конца файла: крупный план начался сначала (пурпурный)',
+    String(samplePoint(wrap2, 2.0, 810, 540)));
 
   console.log('\n6) Проверяем остановку обработки…');
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });

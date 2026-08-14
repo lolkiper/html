@@ -15,6 +15,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { execFileSync } = require('child_process');
 const ffmpeg = require('fluent-ffmpeg');
 
 const VIDEO_EXTENSIONS = [
@@ -80,12 +82,68 @@ const SPLIT_DEFAULTS = {
 const DEFAULTS = {
   percent: 90,
   encoder: 'h264',
+  accel: 'hybrid',
   overlayOpacity: 100,
   outputPrefix: 'es',
   frame: 'square1080',
   fit: 'cover',
   split: SPLIT_DEFAULTS
 };
+
+/** Как делить работу между процессором и видеокартой. */
+const ACCEL_MODES = {
+  hybrid: {
+    label: 'CPU + GPU 50/50 — склейка на процессоре, кодирование на видеокарте'
+  },
+  cpu: { label: 'Только процессор' },
+  gpu: { label: 'Предпочесть видеокарту (если нет — процессор)' }
+};
+
+const GPU_H264 = [
+  {
+    id: 'h264_nvenc',
+    vendor: 'NVIDIA NVENC',
+    extra: ['-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '19', '-b:v', '0', '-profile:v', 'high']
+  },
+  {
+    id: 'h264_amf',
+    vendor: 'AMD AMF',
+    extra: ['-quality', 'quality', '-rc', 'cqp', '-qp_i', '18', '-qp_p', '20']
+  },
+  {
+    id: 'h264_qsv',
+    vendor: 'Intel Quick Sync',
+    extra: ['-preset', 'medium', '-global_quality', '20']
+  },
+  {
+    id: 'h264_videotoolbox',
+    vendor: 'Apple VideoToolbox',
+    extra: ['-profile:v', 'high', '-q:v', '65']
+  }
+];
+
+const GPU_H265 = [
+  {
+    id: 'hevc_nvenc',
+    vendor: 'NVIDIA NVENC',
+    extra: ['-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1']
+  },
+  {
+    id: 'hevc_amf',
+    vendor: 'AMD AMF',
+    extra: ['-quality', 'quality', '-rc', 'cqp', '-qp_i', '22', '-qp_p', '24', '-tag:v', 'hvc1']
+  },
+  {
+    id: 'hevc_qsv',
+    vendor: 'Intel Quick Sync',
+    extra: ['-preset', 'medium', '-global_quality', '22', '-tag:v', 'hvc1']
+  },
+  {
+    id: 'hevc_videotoolbox',
+    vendor: 'Apple VideoToolbox',
+    extra: ['-q:v', '65', '-tag:v', 'hvc1']
+  }
+];
 
 // ---------------------------------------------------------------------------
 // Пути к бинарникам FFmpeg / FFprobe
@@ -119,6 +177,172 @@ const ffprobePath = resolveBinary(ffprobeStatic && ffprobeStatic.path, 'ffprobe'
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath);
+
+// ---------------------------------------------------------------------------
+// Видеокарта: декодирование и кодирование. Фильтры остаются на CPU.
+// ---------------------------------------------------------------------------
+
+class GpuUnavailableError extends Error {
+  constructor(cause) {
+    super(cause && cause.message ? cause.message : 'GPU-кодирование недоступно');
+    this.name = 'GpuUnavailableError';
+    this.gpuFallback = true;
+  }
+}
+
+function ffmpegCli(args, options = {}) {
+  try {
+    return execFileSync(ffmpegPath, args, {
+      encoding: 'utf8',
+      timeout: options.timeout || 15000,
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: options.stdio || ['ignore', 'pipe', 'pipe']
+    });
+  } catch (err) {
+    const stderr = err && err.stderr ? String(err.stderr) : '';
+    const stdout = err && err.stdout ? String(err.stdout) : '';
+    err.combined = `${stdout}\n${stderr}`.trim();
+    throw err;
+  }
+}
+
+function parseEncoderIds(text) {
+  const ids = new Set();
+  String(text || '').split('\n').forEach((line) => {
+    const match = line.match(/^\s*[A-Z.]+\s+(\S+)\s+/);
+    if (match) ids.add(match[1]);
+  });
+  return ids;
+}
+
+function parseHwaccels(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/hardware acceleration/i.test(line));
+}
+
+function encoderWorks(id, extra) {
+  try {
+    ffmpegCli(
+      [
+        '-hide_banner', '-loglevel', 'error', '-y',
+        '-f', 'lavfi', '-i', 'color=c=black:s=128x128:r=10:d=0.3',
+        '-c:v', id, ...extra, '-frames:v', '2', '-f', 'null', '-'
+      ],
+      { timeout: 20000, stdio: ['ignore', 'ignore', 'pipe'] }
+    );
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+let hardwareCache = null;
+
+/**
+ * Какие GPU-кодеки реально отвечают на тестовый кадр, а не просто
+ * скомпилированы в бинарник. На машине без драйвера NVENC в списке
+ * может быть, а открыться не сможет.
+ */
+function detectHardware() {
+  if (hardwareCache) return hardwareCache;
+
+  let encoderText = '';
+  let accelText = '';
+  try {
+    encoderText = ffmpegCli(['-hide_banner', '-encoders'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (err) {
+    encoderText = err.combined || '';
+  }
+  try {
+    accelText = ffmpegCli(['-hide_banner', '-hwaccels'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (err) {
+    accelText = err.combined || '';
+  }
+
+  const ids = parseEncoderIds(encoderText);
+  const accels = parseHwaccels(accelText);
+  const pick = (candidates) => {
+    for (const candidate of candidates) {
+      if (!ids.has(candidate.id)) continue;
+      if (encoderWorks(candidate.id, candidate.extra)) return candidate;
+    }
+    return null;
+  };
+
+  const preferredAccel = {
+    win32: ['d3d11va', 'cuda', 'dxva2', 'qsv'],
+    linux: ['vaapi', 'cuda', 'vdpau'],
+    darwin: ['videotoolbox']
+  }[process.platform] || [];
+
+  hardwareCache = {
+    h264: pick(GPU_H264),
+    h265: pick(GPU_H265),
+    hwaccel: preferredAccel.find((name) => accels.includes(name)) || null,
+    accels,
+    cores: Math.max(1, (os.cpus() || []).length || 4)
+  };
+  return hardwareCache;
+}
+
+function threadBudget(splitWithGpu) {
+  const cores = Math.max(1, (os.cpus() || []).length || 4);
+  if (splitWithGpu) {
+    return {
+      cores,
+      filterThreads: Math.max(2, Math.floor(cores / 2)),
+      encodeThreads: Math.max(2, Math.ceil(cores / 2))
+    };
+  }
+  return { cores, filterThreads: cores, encodeThreads: cores };
+}
+
+/**
+ * Собирает итоговый план: какой кодек, сколько потоков CPU, включать ли
+ * аппаратное декодирование. ProRes на потребительских GPU нет — остаётся CPU.
+ */
+function resolveEncodePlan(encoderKey, accelMode, hardware) {
+  const cpu = ENCODERS[encoderKey] || ENCODERS.h264;
+  const mode = ACCEL_MODES[accelMode] ? accelMode : DEFAULTS.accel;
+  const wantGpu = mode === 'hybrid' || mode === 'gpu';
+  const gpu = encoderKey === 'h265' ? hardware.h265 : encoderKey === 'h264' ? hardware.h264 : null;
+  const splitLoad = Boolean(wantGpu && (gpu || hardware.hwaccel));
+  const threads = threadBudget(splitLoad);
+
+  if (wantGpu && gpu) {
+    return {
+      label: `${gpu.vendor}: склейка на CPU (${threads.filterThreads} из ${threads.cores} потоков), кодирование на GPU`,
+      pixelFormat: 'yuv420p',
+      videoOptions: ['-c:v', gpu.id, ...gpu.extra],
+      audioOptions: cpu.audioOptions,
+      extraOptions: cpu.extraOptions && cpu.extraOptions.length ? cpu.extraOptions : ['-movflags', '+faststart'],
+      hwaccel: hardware.hwaccel,
+      usingGpu: true,
+      vendor: gpu.vendor,
+      threads
+    };
+  }
+
+  const reason = !wantGpu
+    ? 'выбран режим «только процессор»'
+    : hardware.hwaccel
+      ? `декодирование ${hardware.hwaccel} на GPU, кодирование на CPU`
+      : 'видеокарта недоступна, всё на процессоре';
+
+  return {
+    label: `${cpu.label} — ${reason}`,
+    pixelFormat: cpu.pixelFormat,
+    videoOptions: [...cpu.videoOptions, '-threads', String(threads.encodeThreads)],
+    audioOptions: cpu.audioOptions,
+    extraOptions: cpu.extraOptions,
+    hwaccel: mode === 'cpu' ? null : hardware.hwaccel,
+    usingGpu: false,
+    vendor: null,
+    threads
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Вспомогательные функции
@@ -389,6 +613,83 @@ function coverFilter(label, src, paneW, paneH, zoom, panPercent, canvasW, output
 }
 
 /**
+ * Смещение внутри второго видео: 0, duration, почти duration — это начало.
+ * Иначе берём остаток от деления, чтобы таймлайн зацикливался.
+ */
+function wrapCloseupOffset(start, duration) {
+  if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0) return 0;
+  let offset = start % duration;
+  if (offset < 0) offset += duration;
+  if (offset < 0.02 || duration - offset < 0.02) return 0;
+  return offset;
+}
+
+/**
+ * Входы для правой половины: не с начала файла, а с playhead партии.
+ *
+ *   offset = 0              → одно зацикленное видео с нуля;
+ *   remaining >= длительность результата → один кусок с -ss;
+ *   иначе                   → хвост до конца, затем то же видео с начала (луп).
+ */
+function planCloseupInputs(closeup, startSec, neededSec) {
+  const duration = closeup && closeup.duration ? closeup.duration : 0;
+  const offset = wrapCloseupOffset(startSec, duration);
+  const needed = Math.max(0.05, Number(neededSec) || 0);
+  const remaining = duration - offset;
+  const pad = 0.2;
+
+  if (!closeup || !closeup.file) return { inputs: [], wrap: false, offset: 0 };
+
+  if (offset === 0) {
+    return {
+      inputs: [{ file: closeup.file, options: ['-stream_loop', '-1'] }],
+      wrap: false,
+      offset: 0
+    };
+  }
+
+  if (needed <= remaining + 0.05) {
+    return {
+      inputs: [{
+        file: closeup.file,
+        options: ['-ss', offset.toFixed(3), '-t', (needed + pad).toFixed(3)]
+      }],
+      wrap: false,
+      offset
+    };
+  }
+
+  return {
+    inputs: [
+      { file: closeup.file, options: ['-ss', offset.toFixed(3)] },
+      { file: closeup.file, options: ['-stream_loop', '-1'] }
+    ],
+    wrap: true,
+    offset
+  };
+}
+
+function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration }) {
+  if (wrap) {
+    const dur = Math.max(0.05, duration).toFixed(3);
+    return {
+      filters: [
+        `[${closeupIndex}:v:0]setpts=PTS-STARTPTS[cu_tail]`,
+        `[${closeupIndex + 1}:v:0]setpts=PTS-STARTPTS[cu_loop]`,
+        `[cu_tail][cu_loop]concat=n=2:v=1:a=0,` +
+          `trim=duration=${dur},setpts=PTS-STARTPTS,fps=${target.fps},setsar=1[cu_src]`
+      ],
+      prep: '[cu_src]'
+    };
+  }
+
+  return {
+    filters: [],
+    prep: `[${closeupIndex}:v:0]setpts=PTS-STARTPTS,fps=${target.fps},setsar=1`
+  };
+}
+
+/**
  * Делит кадр на две половины: слева смонтированный ролик, справа второе видео.
  *
  * Каждая половина заполняется независимо (cover), поэтому вертикальный 9:16
@@ -398,6 +699,7 @@ function coverFilter(label, src, paneW, paneH, zoom, panPercent, canvasW, output
 function buildSplitFilters({
   baseLabel,
   closeupIndex,
+  closeupWrap,
   closeup,
   montage,
   outputLabel,
@@ -419,8 +721,14 @@ function buildSplitFilters({
 
   const leftSrc = { width: montage.width, height: montage.height };
   const rightSrc = { width: closeup.width, height: closeup.height };
-  const rightPrep =
-    `[${closeupIndex}:v:0]setpts=PTS-STARTPTS,fps=${target.fps},setsar=1`;
+  const closeupPrep = buildCloseupPrepFilters({
+    closeupIndex,
+    wrap: Boolean(closeupWrap),
+    target,
+    duration
+  });
+  filters.push(...closeupPrep.filters);
+  const rightPrep = closeupPrep.prep;
 
   if (feather === 0) {
     filters.push(
@@ -483,7 +791,18 @@ function buildSplitFilters({
  * split+trim: так ffmpeg не буферизует хвост видео в памяти, пока пишется
  * начало ролика.
  */
-function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, overlayOpacity, duration }) {
+function buildGraph({
+  source,
+  shorts,
+  overlay,
+  closeup,
+  closeupStart,
+  split,
+  target,
+  splitAt,
+  overlayOpacity,
+  duration
+}) {
   const inputs = [];
   const filters = [];
 
@@ -517,10 +836,14 @@ function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, 
   }
 
   let closeupIndex = -1;
+  let closeupWrap = false;
   if (closeup) {
-    // Второе видео живёт по тем же правилам: короткое зациклится, длинное обрежется.
+    // Правая половина идёт по таймлайну партии: ролик N продолжает с того места,
+    // где закончился ролик N-1. Если файл кончился — начинается сначала.
+    const planned = planCloseupInputs(closeup, closeupStart, duration);
     closeupIndex = inputs.length;
-    inputs.push({ file: closeup.file, options: ['-stream_loop', '-1'] });
+    closeupWrap = planned.wrap;
+    planned.inputs.forEach((input) => inputs.push(input));
   }
 
   const segments = [
@@ -555,6 +878,7 @@ function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, 
     const built = buildSplitFilters({
       baseLabel: videoOut,
       closeupIndex,
+      closeupWrap,
       closeup,
       montage,
       outputLabel: 'sv',
@@ -597,10 +921,12 @@ function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, 
  * @param {object} params.shorts      результат probeMedia() для Shorts
  * @param {object|null} params.overlay результат probeMedia() для оверлея
  * @param {object|null} params.closeup результат probeMedia() для правой половины
+ * @param {number} [params.closeupStart] секунда внутри второго видео, с которой начинается правая половина
  * @param {object} params.split       настройки раскладки split-screen
  * @param {string} params.outputFile  путь к esN.mov
  * @param {number} params.percent     процент обрезки (50..99)
  * @param {string} params.encoder     ключ ENCODERS
+ * @param {object} [params.plan]      результат resolveEncodePlan()
  * @param {string} params.frame       ключ FRAME_PRESETS (размер итогового кадра)
  * @param {string} params.fit         ключ FIT_MODES (обрезать или вписать)
  * @param {number} params.overlayOpacity 0..100
@@ -624,14 +950,15 @@ function renderVideo(params) {
     onDebug
   } = params;
 
-  const preset = ENCODERS[encoder] || ENCODERS[DEFAULTS.encoder];
+  const hardware = params.hardware || detectHardware();
+  const plan = params.plan || resolveEncodePlan(encoder, params.accel, hardware);
   const frame = FRAME_PRESETS[params.frame] || FRAME_PRESETS[DEFAULTS.frame];
   const target = {
     width: evenRound(frame.width || source.width),
     height: evenRound(frame.height || source.height),
     fps: source.fps,
     fit: FIT_MODES[params.fit] ? params.fit : DEFAULTS.fit,
-    pixelFormat: preset.pixelFormat
+    pixelFormat: plan.pixelFormat
   };
 
   // У головы и хвоста должно остаться хотя бы по паре кадров, иначе concat получит пустой вход.
@@ -648,6 +975,7 @@ function renderVideo(params) {
     shorts,
     overlay,
     closeup,
+    closeupStart: Number(params.closeupStart) || 0,
     split,
     target,
     splitAt,
@@ -660,20 +988,27 @@ function renderVideo(params) {
 
     inputs.forEach((input) => {
       const added = command.input(input.file);
+      // Аппаратное декодирование — до -i. На фильтрах кадры всё равно в RAM.
+      if (plan.hwaccel) added.inputOptions(['-hwaccel', plan.hwaccel]);
       if (input.options && input.options.length) added.inputOptions(input.options);
     });
+
+    command._global([
+      '-filter_complex_threads', String(plan.threads.filterThreads),
+      '-filter_threads', String(plan.threads.filterThreads)
+    ]);
 
     command
       .complexFilter(filters)
       .outputOptions([
         '-map', `[${videoOut}]`,
         '-map', `[${audioOut}]`,
-        ...preset.videoOptions,
-        ...preset.audioOptions,
+        ...plan.videoOptions,
+        ...plan.audioOptions,
         '-ar', String(AUDIO_SAMPLE_RATE),
         '-ac', '2',
         '-r', String(target.fps),
-        ...preset.extraOptions,
+        ...(plan.extraOptions || []),
         '-y'
       ])
       .format('mov')
@@ -695,6 +1030,10 @@ function renderVideo(params) {
     });
 
     command.on('error', (err) => {
+      if (plan.usingGpu) {
+        reject(new GpuUnavailableError(err));
+        return;
+      }
       reject(err);
     });
 
@@ -791,8 +1130,12 @@ class BatchProcessor {
       const s = this.settings;
       const percent = clamp(Number(s.percent), 50, 99);
       const encoder = ENCODERS[s.encoder] ? s.encoder : DEFAULTS.encoder;
+      const accel = ACCEL_MODES[s.accel] ? s.accel : DEFAULTS.accel;
       const prefix = s.outputPrefix || DEFAULTS.outputPrefix;
       const overlayOpacity = Number.isFinite(Number(s.overlayOpacity)) ? Number(s.overlayOpacity) : 100;
+      const hardware = detectHardware();
+      const plan = resolveEncodePlan(encoder, accel, hardware);
+      const cpuPlan = resolveEncodePlan(encoder, 'cpu', hardware);
 
       fs.mkdirSync(s.outputDir, { recursive: true });
 
@@ -810,6 +1153,10 @@ class BatchProcessor {
       this.log('info', `Найдено видео: ${sources.length}`);
       this.log('info', `FFmpeg: ${ffmpegPath}`);
       this.log('info', `Кодек: ${ENCODERS[encoder].label}, обрезка: ${percent}%`);
+      this.log('info', `Нагрузка: ${plan.label}`);
+      if (plan.hwaccel) {
+        this.log('info', `Декодирование: ${plan.hwaccel}`);
+      }
       this.log(
         'info',
         `Кадр: ${FRAME_PRESETS[frame].label}, ${FIT_MODES[fit].label.toLowerCase()}`
@@ -847,7 +1194,13 @@ class BatchProcessor {
             `сдвиг ${split.leftOffset}%), правая — зум ${split.rightZoom.toFixed(2)}, ` +
             `сдвиг ${split.rightOffset}%, граница ${split.feather ? `мягкая ${split.feather} px` : 'чёткая'}`
         );
+        this.log(
+          'info',
+          'Крупный план справа идёт подряд: каждый следующий ролик продолжает с того места, где закончился предыдущий'
+        );
       }
+
+      let closeupHead = 0;
 
       for (let i = 0; i < sources.length; i += 1) {
         if (this.cancelled) break;
@@ -885,17 +1238,31 @@ class BatchProcessor {
               `(${percent}%) → ${path.basename(outputFile)}`
           );
 
+          const closeupStart = closeup
+            ? wrapCloseupOffset(closeupHead, closeup.duration)
+            : 0;
+          if (closeup) {
+            this.log(
+              'info',
+              `[${humanIndex}] Крупный план справа: с ${formatDuration(closeupStart)} ` +
+                `(таймлайн второго видео)`
+            );
+          }
+
           this.currentOutput = outputFile;
 
-          await renderVideo({
+          const renderOnce = (encodePlan) => renderVideo({
             source,
             shorts,
             overlay,
             closeup,
+            closeupStart,
             split,
             outputFile,
             percent,
             encoder,
+            plan: encodePlan,
+            hardware,
             frame,
             fit,
             overlayOpacity,
@@ -925,6 +1292,22 @@ class BatchProcessor {
             }
           });
 
+          try {
+            await renderOnce(plan);
+          } catch (err) {
+            if (this.cancelled) throw err;
+            if (err && err.gpuFallback) {
+              this.log(
+                'warn',
+                `[${humanIndex}] Видеокарта не приняла кадр (${shortenFfmpegError(err.message)}), повтор на процессоре`
+              );
+              safeUnlink(outputFile);
+              await renderOnce(cpuPlan);
+            } else {
+              throw err;
+            }
+          }
+
           if (this.cancelled) {
             safeUnlink(outputFile);
             break;
@@ -933,6 +1316,7 @@ class BatchProcessor {
           const size = fs.existsSync(outputFile) ? fs.statSync(outputFile).size : 0;
           summary.done += 1;
           summary.results.push({ source: sourceFile, output: outputFile, size });
+          if (closeup) closeupHead += source.duration + shorts.duration;
           this.log(
             'success',
             `[${humanIndex}] Готово: ${path.basename(outputFile)} ` +
@@ -974,6 +1358,7 @@ class BatchProcessor {
 module.exports = {
   BatchProcessor,
   ENCODERS,
+  ACCEL_MODES,
   FRAME_PRESETS,
   FIT_MODES,
   DEFAULTS,
@@ -981,12 +1366,17 @@ module.exports = {
   normalizeSplit,
   VIDEO_EXTENSIONS,
   ProcessingCancelledError,
+  GpuUnavailableError,
   ffmpegPath,
   ffprobePath,
+  detectHardware,
+  resolveEncodePlan,
   listVideoFiles,
   probeMedia,
   renderVideo,
   formatDuration,
+  wrapCloseupOffset,
+  planCloseupInputs,
   isVideoFile,
   shortenFfmpegError
 };

@@ -7,6 +7,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron')
 const {
   BatchProcessor,
   ENCODERS,
+  ACCEL_MODES,
   FRAME_PRESETS,
   FIT_MODES,
   DEFAULTS,
@@ -14,6 +15,7 @@ const {
   listVideoFiles,
   probeMedia,
   formatDuration,
+  detectHardware,
   ffmpegPath,
   ffprobePath
 } = require('./processor');
@@ -72,15 +74,25 @@ function send(channel, payload) {
 // IPC
 // ---------------------------------------------------------------------------
 
-ipcMain.handle('app:info', () => ({
-  version: app.getVersion(),
-  encoders: Object.entries(ENCODERS).map(([value, preset]) => ({ value, label: preset.label })),
-  frames: Object.entries(FRAME_PRESETS).map(([value, preset]) => ({ value, label: preset.label })),
-  fits: Object.entries(FIT_MODES).map(([value, mode]) => ({ value, label: mode.label })),
-  defaults: DEFAULTS,
-  ffmpegPath,
-  ffprobePath
-}));
+ipcMain.handle('app:info', () => {
+  const hardware = detectHardware();
+  const gpuName = (hardware.h264 && hardware.h264.vendor) || (hardware.h265 && hardware.h265.vendor);
+  return {
+    version: app.getVersion(),
+    encoders: Object.entries(ENCODERS).map(([value, preset]) => ({ value, label: preset.label })),
+    accels: Object.entries(ACCEL_MODES).map(([value, mode]) => ({ value, label: mode.label })),
+    frames: Object.entries(FRAME_PRESETS).map(([value, preset]) => ({ value, label: preset.label })),
+    fits: Object.entries(FIT_MODES).map(([value, mode]) => ({ value, label: mode.label })),
+    defaults: DEFAULTS,
+    hardware: {
+      gpu: gpuName || null,
+      hwaccel: hardware.hwaccel,
+      cores: hardware.cores
+    },
+    ffmpegPath,
+    ffprobePath
+  };
+});
 
 ipcMain.handle('dialog:pick-directory', async (_event, options = {}) => {
   const result = await dialog.showOpenDialog(mainWindow, {

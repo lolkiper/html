@@ -48,6 +48,8 @@ const el = {
   percent: document.getElementById('percent'),
   percentRange: document.getElementById('percent-range'),
   encoder: document.getElementById('encoder'),
+  accel: document.getElementById('accel'),
+  accelNote: document.getElementById('accel-note'),
   frame: document.getElementById('frame'),
   fit: document.getElementById('fit'),
   verbose: document.getElementById('verbose'),
@@ -80,7 +82,7 @@ const state = {
   logLines: []
 };
 
-const CLOSEUP_HINT = 'Короткое видео зациклится, длинное — обрежется. Звук берётся из основного ролика.';
+const CLOSEUP_HINT = 'Для каждого следующего ролика крупный план продолжается с того места, где закончился предыдущий. Если видео кончится — начнётся сначала. Звук берётся из основного ролика.';
 const OVERLAY_HINT = 'Короткий оверлей зациклится, длинный — обрежется по длине результата.';
 
 // ------------------------------------------------------------------ Утилиты
@@ -168,7 +170,7 @@ function setRunning(running) {
 
   const lockable = [
     el.sourceDir, el.shortsFile, el.overlayFile, el.outputDir,
-    el.percent, el.percentRange, el.encoder, el.useOverlay,
+    el.percent, el.percentRange, el.encoder, el.accel, el.frame, el.fit, el.useOverlay,
     el.overlayOpacity, el.verbose,
     el.useSplit, el.closeupFile, el.leftShare, el.feather,
     el.leftZoom, el.leftOffset, el.rightZoom, el.rightOffset
@@ -252,6 +254,7 @@ function collectSettings() {
     outputDir: el.outputDir.value.trim(),
     percent: clamp(Number(el.percent.value) || 90, 50, 99),
     encoder: el.encoder.value,
+    accel: el.accel.value,
     frame: el.frame.value,
     fit: el.fit.value,
     verbose: el.verbose.checked
@@ -308,6 +311,7 @@ function restoreSettings() {
     el.overlayOpacityValue.textContent = `${el.overlayOpacity.value}%`;
   }
   if (saved.encoder) el.encoder.value = saved.encoder;
+  if (saved.accel) el.accel.value = saved.accel;
   el.frame.value = saved.frame && saved.frame !== 'source' ? saved.frame : 'square1080';
   if (saved.fit) el.fit.value = saved.fit;
 }
@@ -611,14 +615,27 @@ window.api.onDone((payload) => {
   };
 
   fillSelect(el.encoder, info.encoders);
+  fillSelect(el.accel, info.accels || []);
   fillSelect(el.frame, info.frames);
   fillSelect(el.fit, info.fits);
 
   el.encoder.value = info.defaults.encoder;
+  el.accel.value = info.defaults.accel || 'hybrid';
   el.frame.value = info.defaults.frame;
   el.fit.value = info.defaults.fit;
   el.percent.value = info.defaults.percent;
   el.percentRange.value = info.defaults.percent;
+
+  const hardware = info.hardware || {};
+  if (hardware.gpu) {
+    el.accelNote.textContent =
+      `Найдена ${hardware.gpu}. Склейка на процессоре, кодирование на видеокарте` +
+      (hardware.hwaccel ? `, декодирование ${hardware.hwaccel}` : '') +
+      `. Ядер CPU: ${hardware.cores}.`;
+  } else {
+    el.accelNote.textContent =
+      'Видеокарта для кодирования не найдена в этой среде — будет процессор. На Windows с NVIDIA, AMD или Intel GPU кодирование пойдёт на карте.';
+  }
 
   const splitDefaults = info.defaults.split || {};
   el.leftShare.value = splitDefaults.leftShare;
