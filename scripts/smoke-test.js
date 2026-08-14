@@ -23,7 +23,9 @@ const {
   planCloseupInputs,
   resolveEncodePlan,
   ENCODE_PACE_SPEED,
-  paceGlobalArgs
+  MAX_JOBS_PER_SESSION,
+  paceGlobalArgs,
+  chunkJobs
 } = require('../processor');
 
 const ROOT = path.join(os.tmpdir(), `shorts-inserter-smoke-${process.pid}`);
@@ -177,6 +179,15 @@ async function main() {
     'чтение входа ограничено с первого пакета, без стартового выброса',
     paceArgs
   );
+  check(
+    chunkJobs(Array.from({ length: 93 }, (_, i) => i), 6).length === 16,
+    '93 файла режутся на сессии по 6 — команда Windows не переполняется'
+  );
+  check(
+    MAX_JOBS_PER_SESSION <= 16,
+    'в одной сессии ffmpeg не больше 16 файлов',
+    `max=${MAX_JOBS_PER_SESSION}`
+  );
   [SOURCE_DIR, OUTPUT_DIR, ASSETS_DIR].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
 
   console.log('\n1) Готовим тестовые файлы…');
@@ -235,8 +246,8 @@ async function main() {
   );
   check(progressStates.length > 5, 'прогресс приходил в интерфейс', `событий: ${progressStates.length}`);
   check(
-    logs.some((line) => line.includes('до ') && line.includes('одной сессией')),
-    'в логе есть ограничение скорости и одна сессия кодирования'
+    logs.some((line) => line.includes('до ') && line.includes('сессиями по')),
+    'в логе есть ограничение скорости и сессии кодирования'
   );
 
   const out1 = path.join(OUTPUT_DIR, 'es1.mov');
@@ -581,7 +592,7 @@ async function main() {
   const seqSummary = await seqBatch.run();
   check(seqSummary.done === 2, 'последовательный крупный план: два файла собраны', `done=${seqSummary.done}`);
   check(
-    seqLogs.some((line) => line.includes('Кодирование одной сессией')),
+    seqLogs.some((line) => line.includes('Кодирование сессиями')),
     'два файла одного размера кодируются одной сессией энкодера'
   );
 

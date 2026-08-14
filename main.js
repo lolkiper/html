@@ -218,6 +218,24 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+process.on('uncaughtException', (err) => {
+  const message = err && err.message ? err.message : String(err);
+  console.error(err);
+  send('processing:log', {
+    level: 'error',
+    message: /ENAMETOOLONG/i.test(message)
+      ? 'Команда FFmpeg слишком длинная для Windows. Файлы будут кодироваться более короткими сессиями.'
+      : `Сбой: ${message}`,
+    time: Date.now()
+  });
+});
+
+process.on('unhandledRejection', (err) => {
+  const message = err && err.message ? err.message : String(err);
+  console.error(err);
+  send('processing:log', { level: 'error', message: `Сбой: ${message}`, time: Date.now() });
+});
+
 app.on('before-quit', () => {
   if (activeBatch) activeBatch.stop();
 });

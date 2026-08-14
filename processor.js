@@ -37,6 +37,12 @@ const MAX_OUTPUT_FPS = 30;
  * энкодера на каждый файл: очередь одного размера идёт одним процессом.
  */
 const ENCODE_PACE_SPEED = 4;
+/**
+ * Windows CreateProcess принимает ~32k символов. 90 роликов в одном ffmpeg
+ * дают spawn ENAMETOOLONG и падение Electron. Сессия из нескольких файлов
+ * оставляет NVENC открытым, но команда остаётся короткой.
+ */
+const MAX_JOBS_PER_SESSION = process.platform === 'win32' ? 6 : 16;
 
 function paceGlobalArgs() {
   return [
@@ -47,6 +53,19 @@ function paceGlobalArgs() {
 
 function prefixed(prefix, name) {
   return prefix ? `${prefix}${name}` : name;
+}
+
+function isCommandTooLong(err) {
+  if (!err) return false;
+  if (err.code === 'ENAMETOOLONG') return true;
+  return /ENAMETOOLONG/i.test(String(err.message || ''));
+}
+
+function chunkJobs(jobs, size) {
+  const n = Math.max(1, Number(size) || MAX_JOBS_PER_SESSION);
+  const chunks = [];
+  for (let i = 0; i < jobs.length; i += n) chunks.push(jobs.slice(i, i + n));
+  return chunks;
 }
 
 /** Пресеты кодеков для контейнера .mov. */
@@ -1120,6 +1139,18 @@ function groupJobsByTarget(jobs) {
   return groups;
 }
 
+function attachFilterGraph(command, filters) {
+  const script = path.join(
+    os.tmpdir(),
+    `shorts-fc-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.ffilter`
+  );
+  const text = Array.isArray(filters) ? filters.filter(Boolean).join(';') : String(filters || '');
+  fs.writeFileSync(script, text, 'utf8');
+  command._global(['-/filter_complex', script]);
+  command._filterScriptPath = script;
+  return script;
+}
+
 function applyInputs(command, inputs, plan, pace) {
   inputs.forEach((input) => {
     const added = command.input(input.file);
@@ -1131,6 +1162,15 @@ function applyInputs(command, inputs, plan, pace) {
 
 function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDebug }) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => safeUnlink(command._filterScriptPath);
+    const finish = (handler) => (value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      handler(value);
+    };
+
     command.on('start', (commandLine) => {
       lowerFfmpegPriority(command);
       if (typeof onCommand === 'function') onCommand(command);
@@ -1144,15 +1184,23 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
       const done = timemarkToSeconds(progress.timemark);
       onProgress(clamp((done / totalDuration) * 100, 0, 99.9), done);
     });
-    command.on('error', (err) => {
+    command.on('error', finish((err) => {
+      if (isCommandTooLong(err)) {
+        reject(err);
+        return;
+      }
       if (plan && plan.usingGpu) {
         reject(new GpuUnavailableError(err));
         return;
       }
       reject(err);
-    });
-    command.on('end', () => resolve());
-    command.run();
+    }));
+    command.on('end', finish(() => resolve()));
+    try {
+      command.run();
+    } catch (err) {
+      finish((value) => reject(value))(err);
+    }
   });
 }
 
@@ -1216,8 +1264,8 @@ function renderVideo(params) {
     '-filter_complex_threads', String(plan.threads.filterThreads),
     '-filter_threads', String(plan.threads.filterThreads)
   ]);
+  attachFilterGraph(command, filters);
   command
-    .complexFilter(filters)
     .outputOptions([
       '-map', `[${videoOut}]`,
       '-map', `[${audioOut}]`,
@@ -1355,8 +1403,8 @@ function renderJobGroup(params) {
     '-filter_complex_threads', String(plan.threads.filterThreads),
     '-filter_threads', String(plan.threads.filterThreads)
   ]);
+  attachFilterGraph(command, filters);
   command
-    .complexFilter(filters)
     .outputOptions([
       '-map', `[${videoOut}]`,
       '-map', `[${audioOut}]`,
@@ -1419,6 +1467,11 @@ function renderJobGroup(params) {
   }).catch((err) => {
     safeUnlink(tempFile);
     jobs.forEach((job) => safeUnlink(job.outputFile));
+    if (isCommandTooLong(err) && jobs.length > 1) {
+      const mid = Math.ceil(jobs.length / 2);
+      return renderJobGroup({ ...params, jobs: jobs.slice(0, mid) })
+        .then(() => renderJobGroup({ ...params, jobs: jobs.slice(mid) }));
+    }
     throw err;
   });
 }
@@ -1530,7 +1583,7 @@ class BatchProcessor {
         this.log(
           'info',
           `Скорость: до ${ENCODE_PACE_SPEED}× (~50% Video Encode). ` +
-            'Ролики одного размера кодируются одной сессией — без скачка до 100% на стыке файлов'
+            `Ролики одного размера идут сессиями по ${MAX_JOBS_PER_SESSION}, без скачка до 100% внутри сессии`
         );
       }
       if (hardware.compiledGpu && hardware.compiledGpu.length) {
@@ -1651,11 +1704,18 @@ class BatchProcessor {
 
       const groups = groupJobsByTarget(jobs);
       const reuseEncoder = plan.pixelFormat === 'yuv420p' && groups.some((group) => group.jobs.length > 1);
-      const encodeGroups = reuseEncoder
-        ? groups
-        : jobs.map((job) => ({ key: 'one', jobs: [job] }));
+      const encodeGroups = [];
+      (reuseEncoder ? groups : jobs.map((job) => ({ key: 'one', jobs: [job] }))).forEach((group) => {
+        chunkJobs(group.jobs, MAX_JOBS_PER_SESSION).forEach((chunk) => {
+          encodeGroups.push({ key: group.key, jobs: chunk });
+        });
+      });
       if (reuseEncoder) {
-        this.log('info', 'Кодирование одной сессией: видеокарта не переоткрывает энкодер между файлами');
+        this.log(
+          'info',
+          `Кодирование сессиями по ${MAX_JOBS_PER_SESSION} файлов: энкодер не переоткрывается внутри сессии, ` +
+            'команда ffmpeg не превышает лимит Windows'
+        );
       }
 
       const bindCommand = (command) => {
@@ -1849,5 +1909,7 @@ module.exports = {
   isVideoFile,
   shortenFfmpegError,
   ENCODE_PACE_SPEED,
-  paceGlobalArgs
+  MAX_JOBS_PER_SESSION,
+  paceGlobalArgs,
+  chunkJobs
 };
