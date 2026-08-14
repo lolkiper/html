@@ -48,6 +48,8 @@ const el = {
   percent: document.getElementById('percent'),
   percentRange: document.getElementById('percent-range'),
   encoder: document.getElementById('encoder'),
+  frame: document.getElementById('frame'),
+  fit: document.getElementById('fit'),
   verbose: document.getElementById('verbose'),
 
   schemeHead: document.getElementById('scheme-head'),
@@ -249,6 +251,8 @@ function collectSettings() {
     outputDir: el.outputDir.value.trim(),
     percent: clamp(Number(el.percent.value) || 90, 50, 99),
     encoder: el.encoder.value,
+    frame: el.frame.value,
+    fit: el.fit.value,
     verbose: el.verbose.checked
   };
 }
@@ -299,6 +303,8 @@ function restoreSettings() {
     el.overlayOpacityValue.textContent = `${el.overlayOpacity.value}%`;
   }
   if (saved.encoder) el.encoder.value = saved.encoder;
+  if (saved.frame) el.frame.value = saved.frame;
+  if (saved.fit) el.fit.value = saved.fit;
 }
 
 // ------------------------------------------------------- Проверка выбранного
@@ -470,6 +476,8 @@ el.percentRange.addEventListener('input', () => {
 
 el.percentRange.addEventListener('change', saveSettings);
 el.encoder.addEventListener('change', saveSettings);
+el.frame.addEventListener('change', saveSettings);
+el.fit.addEventListener('change', saveSettings);
 el.verbose.addEventListener('change', saveSettings);
 
 el.clearLog.addEventListener('click', clearLog);
@@ -587,13 +595,22 @@ window.api.onDone((payload) => {
 
   const info = await window.api.getAppInfo();
 
-  info.encoders.forEach((encoder) => {
-    const option = document.createElement('option');
-    option.value = encoder.value;
-    option.textContent = encoder.label;
-    el.encoder.appendChild(option);
-  });
+  const fillSelect = (node, items) => {
+    items.forEach((item) => {
+      const option = document.createElement('option');
+      option.value = item.value;
+      option.textContent = item.label;
+      node.appendChild(option);
+    });
+  };
+
+  fillSelect(el.encoder, info.encoders);
+  fillSelect(el.frame, info.frames);
+  fillSelect(el.fit, info.fits);
+
   el.encoder.value = info.defaults.encoder;
+  el.frame.value = info.defaults.frame;
+  el.fit.value = info.defaults.fit;
   el.percent.value = info.defaults.percent;
   el.percentRange.value = info.defaults.percent;
 

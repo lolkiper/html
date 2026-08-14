@@ -50,6 +50,20 @@ const ENCODERS = {
   }
 };
 
+/** Размер итогового кадра. */
+const FRAME_PRESETS = {
+  square1080: { label: '1080×1080 — квадрат', width: 1080, height: 1080 },
+  vertical1080: { label: '1080×1920 — вертикаль', width: 1080, height: 1920 },
+  horizontal1080: { label: '1920×1080 — горизонталь', width: 1920, height: 1080 },
+  source: { label: 'Как у исходника', width: null, height: null }
+};
+
+/** Как исходник ложится в кадр, если пропорции не совпадают. */
+const FIT_MODES = {
+  cover: { label: 'Заполнить кадр (обрезать лишнее)' },
+  contain: { label: 'Вписать целиком (чёрные поля)' }
+};
+
 /**
  * Раскладка split-screen. Сдвиги заданы в процентах от ширины кадра, чтобы
  * настройки не зависели от разрешения: -25% это привычные -480 px при ширине 1920.
@@ -68,6 +82,8 @@ const DEFAULTS = {
   encoder: 'h264',
   overlayOpacity: 100,
   outputPrefix: 'es',
+  frame: 'square1080',
+  fit: 'cover',
   split: SPLIT_DEFAULTS
 };
 
@@ -268,11 +284,24 @@ function safeUnlink(file) {
 // Построение графа фильтров
 // ---------------------------------------------------------------------------
 
+/** Вписывание кадра в холст: обрезать по краям либо добавить чёрные поля. */
+function fitFilter(width, height, fit) {
+  if (fit === 'contain') {
+    return (
+      `scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=bicubic,` +
+      `pad=${width}:${height}:-1:-1:color=black`
+    );
+  }
+  return (
+    `scale=${width}:${height}:force_original_aspect_ratio=increase:flags=bicubic,` +
+    `crop=${width}:${height}`
+  );
+}
+
 function videoSegmentFilter(inputLabel, outputLabel, target) {
   return (
     `[${inputLabel}]setpts=PTS-STARTPTS,fps=${target.fps},` +
-    `scale=${target.width}:${target.height}:force_original_aspect_ratio=decrease:flags=bicubic,` +
-    `pad=${target.width}:${target.height}:-1:-1:color=black,setsar=1,` +
+    `${fitFilter(target.width, target.height, target.fit)},setsar=1,` +
     `format=${target.pixelFormat}[${outputLabel}]`
   );
 }
@@ -528,6 +557,8 @@ function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, 
  * @param {string} params.outputFile  путь к esN.mov
  * @param {number} params.percent     процент обрезки (50..99)
  * @param {string} params.encoder     ключ ENCODERS
+ * @param {string} params.frame       ключ FRAME_PRESETS (размер итогового кадра)
+ * @param {string} params.fit         ключ FIT_MODES (обрезать или вписать)
  * @param {number} params.overlayOpacity 0..100
  * @param {function} params.onProgress вызывается с (0..100)
  * @param {function} params.onCommand  получает объект команды (для остановки)
@@ -550,10 +581,12 @@ function renderVideo(params) {
   } = params;
 
   const preset = ENCODERS[encoder] || ENCODERS[DEFAULTS.encoder];
+  const frame = FRAME_PRESETS[params.frame] || FRAME_PRESETS[DEFAULTS.frame];
   const target = {
-    width: source.width,
-    height: source.height,
+    width: evenRound(frame.width || source.width),
+    height: evenRound(frame.height || source.height),
     fps: source.fps,
+    fit: FIT_MODES[params.fit] ? params.fit : DEFAULTS.fit,
     pixelFormat: preset.pixelFormat
   };
 
@@ -727,9 +760,16 @@ class BatchProcessor {
         throw new Error('В выбранной папке нет видеофайлов.');
       }
 
+      const frame = FRAME_PRESETS[s.frame] ? s.frame : DEFAULTS.frame;
+      const fit = FIT_MODES[s.fit] ? s.fit : DEFAULTS.fit;
+
       this.log('info', `Найдено видео: ${sources.length}`);
       this.log('info', `FFmpeg: ${ffmpegPath}`);
       this.log('info', `Кодек: ${ENCODERS[encoder].label}, обрезка: ${percent}%`);
+      this.log(
+        'info',
+        `Кадр: ${FRAME_PRESETS[frame].label}, ${FIT_MODES[fit].label.toLowerCase()}`
+      );
 
       const shorts = await probeMedia(s.shortsFile);
       this.log(
@@ -812,6 +852,8 @@ class BatchProcessor {
             outputFile,
             percent,
             encoder,
+            frame,
+            fit,
             overlayOpacity,
             onCommand: (command) => {
               this.currentCommand = command;
@@ -888,6 +930,8 @@ class BatchProcessor {
 module.exports = {
   BatchProcessor,
   ENCODERS,
+  FRAME_PRESETS,
+  FIT_MODES,
   DEFAULTS,
   SPLIT_DEFAULTS,
   normalizeSplit,

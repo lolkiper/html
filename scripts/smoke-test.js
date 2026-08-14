@@ -149,6 +149,7 @@ async function main() {
       overlayFile: overlay,
       overlayOpacity: 60,
       outputDir: OUTPUT_DIR,
+      frame: 'source',
       percent: 90,
       encoder: 'h264',
       verbose: false
@@ -224,6 +225,7 @@ async function main() {
       shortsFile: greenShorts,
       useOverlay: false,
       outputDir: colorOut,
+      frame: 'source',
       percent: 75,
       encoder: 'h264'
     },
@@ -249,6 +251,7 @@ async function main() {
       overlayFile: whiteOverlay,
       overlayOpacity: 50,
       outputDir: overlayOut,
+      frame: 'source',
       percent: 75,
       encoder: 'h264'
     },
@@ -295,6 +298,7 @@ async function main() {
         closeupFile: stripedCloseup,
         split: { leftShare: 50, feather, leftZoom: 1, leftOffset: -25, rightZoom: 1.8, rightOffset: 25 },
         outputDir,
+        frame: 'source',
         percent: 75,
         encoder: 'h264'
       },
@@ -360,6 +364,42 @@ async function main() {
     'мягкая граница: за стыком чистое второе видео',
     String(samplePoint(soft.file, 1, 1000, 540)));
 
+  // Квадрат 1080x1080 из горизонтальных исходников: холст задаётся настройкой,
+  // а не размером исходника, при этом раскладка половин не съезжает.
+  const squareOut = path.join(ROOT, 'split-out-square');
+  const squareBatch = new BatchProcessor(
+    {
+      sourceDir: colorDir,
+      shortsFile: greenShorts,
+      useSplit: true,
+      closeupFile: whiteOverlay,
+      split: { leftShare: 50, feather: 0, leftZoom: 1, leftOffset: -25, rightZoom: 1.8, rightOffset: 25 },
+      outputDir: squareOut,
+      frame: 'source',
+      percent: 75,
+      frame: 'square1080',
+      fit: 'cover',
+      encoder: 'h264'
+    },
+    { onLog: (level, message) => console.log(`    [${level}] ${message}`) }
+  );
+  const squareSummary = await squareBatch.run();
+  check(squareSummary.done === 1, 'квадратный кадр: файл собран', `done=${squareSummary.done}`);
+
+  const square = path.join(squareOut, 'es1.mov');
+  const squareInfo = await probeMedia(square);
+  check(
+    squareInfo.width === 1080 && squareInfo.height === 1080,
+    'квадратный кадр: результат 1080x1080 из горизонтального исходника',
+    `${squareInfo.width}x${squareInfo.height}`
+  );
+  check(colorsMatch(samplePoint(square, 1, 270, 540), [255, 0, 0]),
+    'квадратный кадр: слева исходник без полей',
+    String(samplePoint(square, 1, 270, 540)));
+  check(colorsMatch(samplePoint(square, 1, 810, 540), [255, 255, 255]),
+    'квадратный кадр: справа второе видео',
+    String(samplePoint(square, 1, 810, 540)));
+
   // Сплит и оверлей вместе, да ещё и в 10-битном ProRes: оверлей должен лечь
   // поверх обеих половин, а альфа-канал не сломать формат кодека.
   const comboOut = path.join(ROOT, 'split-out-combo');
@@ -382,13 +422,14 @@ async function main() {
   const comboSummary = await comboBatch.run();
   check(comboSummary.done === 1, 'сплит вместе с оверлеем: файл собран', `done=${comboSummary.done}`);
 
+  // Холст здесь квадратный по умолчанию, поэтому половины делятся по x = 540.
   const combo = path.join(comboOut, 'es1.mov');
-  check(colorsMatch(samplePoint(combo, 1, 160, 180), [128, 128, 0], 40),
+  check(colorsMatch(samplePoint(combo, 1, 270, 540), [128, 128, 0], 40),
     'сплит + оверлей: слева исходник, смешанный с оверлеем',
-    String(samplePoint(combo, 1, 160, 180)));
-  check(colorsMatch(samplePoint(combo, 1, 480, 180), [128, 255, 128], 40),
+    String(samplePoint(combo, 1, 270, 540)));
+  check(colorsMatch(samplePoint(combo, 1, 810, 540), [128, 255, 128], 40),
     'сплит + оверлей: справа второе видео, смешанное с оверлеем',
-    String(samplePoint(combo, 1, 480, 180)));
+    String(samplePoint(combo, 1, 810, 540)));
 
   console.log('\n6) Проверяем остановку обработки…');
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
@@ -400,6 +441,7 @@ async function main() {
       shortsFile: shorts,
       useOverlay: false,
       outputDir: OUTPUT_DIR,
+      frame: 'source',
       percent: 90,
       encoder: 'prores',
       verbose: false
@@ -426,6 +468,7 @@ async function main() {
       shortsFile: shorts,
       useOverlay: false,
       outputDir: OUTPUT_DIR,
+      frame: 'source',
       percent: 50,
       encoder: 'prores',
       verbose: false

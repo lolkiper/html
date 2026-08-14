@@ -7,6 +7,8 @@ const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron')
 const {
   BatchProcessor,
   ENCODERS,
+  FRAME_PRESETS,
+  FIT_MODES,
   DEFAULTS,
   VIDEO_EXTENSIONS,
   listVideoFiles,
@@ -73,6 +75,8 @@ function send(channel, payload) {
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
   encoders: Object.entries(ENCODERS).map(([value, preset]) => ({ value, label: preset.label })),
+  frames: Object.entries(FRAME_PRESETS).map(([value, preset]) => ({ value, label: preset.label })),
+  fits: Object.entries(FIT_MODES).map(([value, mode]) => ({ value, label: mode.label })),
   defaults: DEFAULTS,
   ffmpegPath,
   ffprobePath
