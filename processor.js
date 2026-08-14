@@ -103,22 +103,42 @@ const GPU_H264 = [
   {
     id: 'h264_nvenc',
     vendor: 'NVIDIA NVENC',
-    extra: ['-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '19', '-b:v', '0', '-profile:v', 'high']
+    extras: [
+      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '19', '-b:v', '0', '-profile:v', 'high'],
+      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '19', '-b:v', '0', '-profile:v', 'high'],
+      ['-gpu', '0', '-preset', 'medium', '-cq', '19', '-b:v', '0'],
+      ['-gpu', '1', '-preset', 'medium', '-cq', '19', '-b:v', '0'],
+      ['-gpu', '0'],
+      ['-gpu', '1'],
+      []
+    ]
   },
   {
     id: 'h264_amf',
     vendor: 'AMD AMF',
-    extra: ['-quality', 'quality', '-rc', 'cqp', '-qp_i', '18', '-qp_p', '20']
+    extras: [
+      ['-quality', 'quality', '-rc', 'cqp', '-qp_i', '18', '-qp_p', '20'],
+      ['-quality', 'speed'],
+      []
+    ]
   },
   {
     id: 'h264_qsv',
     vendor: 'Intel Quick Sync',
-    extra: ['-preset', 'medium', '-global_quality', '20']
+    extras: [
+      ['-preset', 'medium', '-global_quality', '20'],
+      ['-preset', 'fast'],
+      []
+    ]
   },
   {
     id: 'h264_videotoolbox',
     vendor: 'Apple VideoToolbox',
-    extra: ['-profile:v', 'high', '-q:v', '65']
+    extras: [
+      ['-profile:v', 'high', '-q:v', '65'],
+      ['-q:v', '65'],
+      []
+    ]
   }
 ];
 
@@ -126,22 +146,41 @@ const GPU_H265 = [
   {
     id: 'hevc_nvenc',
     vendor: 'NVIDIA NVENC',
-    extra: ['-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1']
+    extras: [
+      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '0', '-preset', 'medium', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '1', '-preset', 'medium', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '1', '-tag:v', 'hvc1'],
+      ['-tag:v', 'hvc1']
+    ]
   },
   {
     id: 'hevc_amf',
     vendor: 'AMD AMF',
-    extra: ['-quality', 'quality', '-rc', 'cqp', '-qp_i', '22', '-qp_p', '24', '-tag:v', 'hvc1']
+    extras: [
+      ['-quality', 'quality', '-rc', 'cqp', '-qp_i', '22', '-qp_p', '24', '-tag:v', 'hvc1'],
+      ['-quality', 'speed', '-tag:v', 'hvc1'],
+      ['-tag:v', 'hvc1']
+    ]
   },
   {
     id: 'hevc_qsv',
     vendor: 'Intel Quick Sync',
-    extra: ['-preset', 'medium', '-global_quality', '22', '-tag:v', 'hvc1']
+    extras: [
+      ['-preset', 'medium', '-global_quality', '22', '-tag:v', 'hvc1'],
+      ['-preset', 'fast', '-tag:v', 'hvc1'],
+      ['-tag:v', 'hvc1']
+    ]
   },
   {
     id: 'hevc_videotoolbox',
     vendor: 'Apple VideoToolbox',
-    extra: ['-q:v', '65', '-tag:v', 'hvc1']
+    extras: [
+      ['-q:v', '65', '-tag:v', 'hvc1'],
+      ['-tag:v', 'hvc1']
+    ]
   }
 ];
 
@@ -209,7 +248,7 @@ function ffmpegCli(args, options = {}) {
 function parseEncoderIds(text) {
   const ids = new Set();
   String(text || '').split('\n').forEach((line) => {
-    const match = line.match(/^\s*[A-Z.]+\s+(\S+)\s+/);
+    const match = line.match(/^\s*[A-Za-z.]+\s+(\S+)/);
     if (match) ids.add(match[1]);
   });
   return ids;
@@ -222,28 +261,57 @@ function parseHwaccels(text) {
     .filter((line) => line && !/hardware acceleration/i.test(line));
 }
 
-function encoderWorks(id, extra) {
+function probeEncoder(id, extra) {
+  const tmp = path.join(os.tmpdir(), `shorts-gpu-probe-${process.pid}-${id}.mp4`);
   try {
     ffmpegCli(
       [
         '-hide_banner', '-loglevel', 'error', '-y',
-        '-f', 'lavfi', '-i', 'color=c=black:s=128x128:r=10:d=0.3',
-        '-c:v', id, ...extra, '-frames:v', '2', '-f', 'null', '-'
+        '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=15:d=0.4',
+        '-pix_fmt', 'yuv420p',
+        '-c:v', id, ...(extra || []),
+        '-frames:v', '4',
+        tmp
       ],
-      { timeout: 20000, stdio: ['ignore', 'ignore', 'pipe'] }
+      { timeout: 12000, stdio: ['ignore', 'ignore', 'pipe'] }
     );
-    return true;
+    return { ok: true };
   } catch (err) {
-    return false;
+    return { ok: false, error: shortenFfmpegError(err.combined || err.message) };
+  } finally {
+    try {
+      if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+    } catch (err) {
+      /* временный файл */
+    }
   }
+}
+
+function pickGpuEncoder(candidates, compiledIds) {
+  let lastError = null;
+  for (const candidate of candidates) {
+    if (!compiledIds.has(candidate.id)) continue;
+    const extras = candidate.extras && candidate.extras.length ? candidate.extras : [[]];
+    for (const extra of extras) {
+      const probe = probeEncoder(candidate.id, extra);
+      if (probe.ok) {
+        return {
+          encoder: { id: candidate.id, vendor: candidate.vendor, extra },
+          error: null
+        };
+      }
+      lastError = `${candidate.id}: ${probe.error}`;
+    }
+  }
+  return { encoder: null, error: lastError };
 }
 
 let hardwareCache = null;
 
 /**
  * Какие GPU-кодеки реально отвечают на тестовый кадр, а не просто
- * скомпилированы в бинарник. На машине без драйвера NVENC в списке
- * может быть, а открыться не сможет.
+ * скомпилированы в бинарник. На ноутбуке с Intel + NVIDIA NVENC часто
+ * открывается только с `-gpu 1`, а Quick Sync — на встроенной карте.
  */
 function detectHardware() {
   if (hardwareCache) return hardwareCache;
@@ -263,13 +331,11 @@ function detectHardware() {
 
   const ids = parseEncoderIds(encoderText);
   const accels = parseHwaccels(accelText);
-  const pick = (candidates) => {
-    for (const candidate of candidates) {
-      if (!ids.has(candidate.id)) continue;
-      if (encoderWorks(candidate.id, candidate.extra)) return candidate;
-    }
-    return null;
-  };
+  const wanted = [...GPU_H264, ...GPU_H265].map((item) => item.id);
+  const compiledGpu = wanted.filter((id) => ids.has(id));
+
+  const h264 = pickGpuEncoder(GPU_H264, ids);
+  const h265 = pickGpuEncoder(GPU_H265, ids);
 
   const preferredAccel = {
     win32: ['d3d11va', 'cuda', 'dxva2', 'qsv'],
@@ -278,44 +344,47 @@ function detectHardware() {
   }[process.platform] || [];
 
   hardwareCache = {
-    h264: pick(GPU_H264),
-    h265: pick(GPU_H265),
+    h264: h264.encoder,
+    h265: h265.encoder,
     hwaccel: preferredAccel.find((name) => accels.includes(name)) || null,
     accels,
+    compiledGpu,
+    probeError: (h264.encoder ? null : h264.error) || (h265.encoder ? null : h265.error) || null,
     cores: Math.max(1, (os.cpus() || []).length || 4)
   };
   return hardwareCache;
 }
 
-function threadBudget(splitWithGpu) {
-  const cores = Math.max(1, (os.cpus() || []).length || 4);
-  if (splitWithGpu) {
+function threadBudget(limitCpu, coreCount) {
+  const cores = Math.max(1, coreCount || (os.cpus() || []).length || 4);
+  if (limitCpu) {
     return {
       cores,
-      filterThreads: Math.max(2, Math.floor(cores / 2)),
-      encodeThreads: Math.max(2, Math.ceil(cores / 2))
+      filterThreads: Math.max(1, Math.floor(cores / 2)),
+      encodeThreads: Math.max(1, Math.ceil(cores / 2))
     };
   }
   return { cores, filterThreads: cores, encodeThreads: cores };
 }
 
 /**
- * Собирает итоговый план: какой кодек, сколько потоков CPU, включать ли
- * аппаратное декодирование. ProRes на потребительских GPU нет — остаётся CPU.
+ * Собирает итоговый план: какой кодек, сколько потоков CPU.
+ * ProRes на потребительских GPU нет — остаётся CPU.
+ * В режимах hybrid/gpu ffmpeg никогда не берёт все ядра, даже если карта
+ * не ответила: иначе интерфейс Windows зависает на 100% CPU.
  */
 function resolveEncodePlan(encoderKey, accelMode, hardware) {
   const cpu = ENCODERS[encoderKey] || ENCODERS.h264;
   const mode = ACCEL_MODES[accelMode] ? accelMode : DEFAULTS.accel;
   const wantGpu = mode === 'hybrid' || mode === 'gpu';
   const gpu = encoderKey === 'h265' ? hardware.h265 : encoderKey === 'h264' ? hardware.h264 : null;
-  const splitLoad = Boolean(wantGpu && gpu);
-  const threads = threadBudget(splitLoad);
+  const threads = threadBudget(wantGpu, hardware.cores);
 
   if (wantGpu && gpu) {
     return {
       label: `${gpu.vendor}: склейка на CPU (${threads.filterThreads} из ${threads.cores} потоков), кодирование на GPU`,
       pixelFormat: 'yuv420p',
-      videoOptions: ['-c:v', gpu.id, ...gpu.extra],
+      videoOptions: ['-c:v', gpu.id, ...(gpu.extra || [])],
       audioOptions: cpu.audioOptions,
       extraOptions: cpu.extraOptions && cpu.extraOptions.length ? cpu.extraOptions : ['-movflags', '+faststart'],
       // Граф фильтров целиком программный (concat/crop/overlay) — GPU-кадры
@@ -329,7 +398,9 @@ function resolveEncodePlan(encoderKey, accelMode, hardware) {
 
   const reason = !wantGpu
     ? 'выбран режим «только процессор»'
-    : 'видеокарта недоступна, всё на процессоре';
+    : hardware.probeError
+      ? `видеокарта не приняла тест (${hardware.probeError}), процессор на ${threads.encodeThreads} из ${threads.cores} потоков`
+      : `видеокарта недоступна, процессор на ${threads.encodeThreads} из ${threads.cores} потоков`;
 
   return {
     label: `${cpu.label} — ${reason}`,
@@ -1156,6 +1227,12 @@ class BatchProcessor {
       this.log('info', `FFmpeg: ${ffmpegPath}`);
       this.log('info', `Кодек: ${ENCODERS[encoder].label}, обрезка: ${percent}%`);
       this.log('info', `Нагрузка: ${plan.label}`);
+      if (hardware.compiledGpu && hardware.compiledGpu.length) {
+        this.log('info', `GPU-кодеки в FFmpeg: ${hardware.compiledGpu.join(', ')}`);
+      }
+      if (!plan.usingGpu && accel !== 'cpu' && hardware.probeError) {
+        this.log('warn', `Тест видеокарты: ${hardware.probeError}`);
+      }
       this.log(
         'info',
         `Кадр: ${FRAME_PRESETS[frame].label}, ${FIT_MODES[fit].label.toLowerCase()}`

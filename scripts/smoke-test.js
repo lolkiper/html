@@ -20,7 +20,8 @@ const {
   probeMedia,
   listVideoFiles,
   wrapCloseupOffset,
-  planCloseupInputs
+  planCloseupInputs,
+  resolveEncodePlan
 } = require('../processor');
 
 const ROOT = path.join(os.tmpdir(), `shorts-inserter-smoke-${process.pid}`);
@@ -151,6 +152,18 @@ function makeVideo({ file, width, height, duration, fps, withAudio, pattern = 't
 
 async function main() {
   console.log(`FFmpeg: ${ffmpegPath}`);
+  const hybridPlan = resolveEncodePlan('h264', 'hybrid', { h264: null, h265: null, cores: 8 });
+  const cpuPlan = resolveEncodePlan('h264', 'cpu', { h264: null, h265: null, cores: 8 });
+  check(
+    hybridPlan.threads.encodeThreads === 4 && hybridPlan.threads.filterThreads === 4,
+    'hybrid без GPU занимает половину ядер, а не все 8',
+    `encode=${hybridPlan.threads.encodeThreads} filter=${hybridPlan.threads.filterThreads}`
+  );
+  check(
+    cpuPlan.threads.encodeThreads === 8,
+    'режим «только процессор» может взять все ядра',
+    `encode=${cpuPlan.threads.encodeThreads}`
+  );
   [SOURCE_DIR, OUTPUT_DIR, ASSETS_DIR].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
 
   console.log('\n1) Готовим тестовые файлы…');

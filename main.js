@@ -4,6 +4,9 @@ const path = require('path');
 const fs = require('fs');
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
 
+// Дискретный GPU вместо встроенного Intel — иначе NVENC часто не видит карту.
+app.commandLine.appendSwitch('force_high_performance_gpu');
+
 const {
   BatchProcessor,
   ENCODERS,
@@ -86,6 +89,8 @@ ipcMain.handle('app:info', () => {
     defaults: DEFAULTS,
     hardware: {
       gpu: gpuName || null,
+      compiledGpu: hardware.compiledGpu || [],
+      probeError: hardware.probeError || null,
       hwaccel: hardware.hwaccel,
       cores: hardware.cores
     },

@@ -28,6 +28,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Ensure FFmpeg has GPU encoders
+        run: node scripts/ensure-gpu-ffmpeg.js
+
       - name: Build installer and portable exe
         run: npx electron-builder --win --publish never
 
@@ -41,6 +44,10 @@ jobs:
             if (-not (Test-Path $binary)) { throw "Missing bundled binary: $binary" }
             Write-Host ("OK {0} ({1:N1} MB)" -f $binary, ((Get-Item $binary).Length / 1MB))
           }
+          $encoders = & "$root/ffmpeg-static/ffmpeg.exe" -hide_banner -encoders 2>&1 | Out-String
+          $gpu = @('h264_nvenc', 'h264_amf', 'h264_qsv') | Where-Object { $encoders -match $_ }
+          if (-not $gpu.Count) { throw 'Bundled ffmpeg.exe has no GPU encoders (nvenc/amf/qsv)' }
+          Write-Host ("GPU encoders: {0}" -f ($gpu -join ', '))
           Get-ChildItem dist -Filter *.exe | ForEach-Object {
             Write-Host ("{0} — {1:N1} MB" -f $_.Name, ($_.Length / 1MB))
           }
