@@ -360,6 +360,36 @@ async function main() {
     'мягкая граница: за стыком чистое второе видео',
     String(samplePoint(soft.file, 1, 1000, 540)));
 
+  // Сплит и оверлей вместе, да ещё и в 10-битном ProRes: оверлей должен лечь
+  // поверх обеих половин, а альфа-канал не сломать формат кодека.
+  const comboOut = path.join(ROOT, 'split-out-combo');
+  const comboBatch = new BatchProcessor(
+    {
+      sourceDir: colorDir,
+      shortsFile: greenShorts,
+      useSplit: true,
+      closeupFile: whiteOverlay,
+      split: { leftShare: 50, feather: 16, leftZoom: 1, leftOffset: 0, rightZoom: 1.8, rightOffset: 0 },
+      useOverlay: true,
+      overlayFile: greenShorts,
+      overlayOpacity: 50,
+      outputDir: comboOut,
+      percent: 75,
+      encoder: 'prores'
+    },
+    { onLog: (level, message) => console.log(`    [${level}] ${message}`) }
+  );
+  const comboSummary = await comboBatch.run();
+  check(comboSummary.done === 1, 'сплит вместе с оверлеем: файл собран', `done=${comboSummary.done}`);
+
+  const combo = path.join(comboOut, 'es1.mov');
+  check(colorsMatch(samplePoint(combo, 1, 160, 180), [128, 128, 0], 40),
+    'сплит + оверлей: слева исходник, смешанный с оверлеем',
+    String(samplePoint(combo, 1, 160, 180)));
+  check(colorsMatch(samplePoint(combo, 1, 480, 180), [128, 255, 128], 40),
+    'сплит + оверлей: справа второе видео, смешанное с оверлеем',
+    String(samplePoint(combo, 1, 480, 180)));
+
   console.log('\n6) Проверяем остановку обработки…');
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
