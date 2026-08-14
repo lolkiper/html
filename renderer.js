@@ -629,15 +629,15 @@ window.api.onDone((payload) => {
   const hardware = info.hardware || {};
   if (hardware.gpu) {
     el.accelNote.textContent =
-      `Найдена ${hardware.gpu}. Склейка на процессоре (половина ядер), кодирование на видеокарте. Ядер CPU: ${hardware.cores}.`;
+      `Найдена ${hardware.gpu}. Склейка на 1–2 ядрах CPU, кодирование на видеокарте, процесс с низким приоритетом.`;
   } else if (hardware.compiledGpu && hardware.compiledGpu.length) {
     el.accelNote.textContent =
       `FFmpeg видит ${hardware.compiledGpu.join(', ')}, но тестовый кадр не прошёл` +
       (hardware.probeError ? ` (${hardware.probeError})` : '') +
-      `. Кодирование на процессоре, занята только половина ядер. Обновите драйвер видеокарты.`;
+      `. Кодирование veryfast на 1–2 ядрах, чтобы компьютер не зависал.`;
   } else {
     el.accelNote.textContent =
-      'В этой сборке FFmpeg нет GPU-кодеков — кодирование на процессоре, занята только половина ядер.';
+      'Кодирование veryfast на 1–2 ядрах процессора, ffmpeg с низким приоритетом — компьютер остаётся отзывчивым.';
   }
 
   const splitDefaults = info.defaults.split || {};

@@ -27,20 +27,31 @@ const VIDEO_EXTENSIONS = [
 const AUDIO_SAMPLE_RATE = 48000;
 const AUDIO_LAYOUT = 'stereo';
 
+/** Быстрее bicubic, для Shorts разницы почти нет. */
+const SCALE_FLAGS = 'fast_bilinear';
+/** 60 fps исходник гоняется в 30 — вдвое меньше кадров на фильтрах. */
+const MAX_OUTPUT_FPS = 30;
+
 /** Пресеты кодеков для контейнера .mov. */
 const ENCODERS = {
   h264: {
-    label: 'H.264 (libx264) — универсальный',
+    label: 'H.264 — быстро (veryfast)',
     pixelFormat: 'yuv420p',
-    videoOptions: ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-profile:v', 'high'],
-    audioOptions: ['-c:a', 'aac', '-b:a', '192k'],
+    videoOptions: [
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-profile:v', 'high',
+      '-x264-params', 'ref=1:bframes=0:rc-lookahead=10:sync-lookahead=0'
+    ],
+    audioOptions: ['-c:a', 'aac', '-b:a', '128k'],
     extraOptions: ['-movflags', '+faststart']
   },
   h265: {
-    label: 'H.265 (libx265) — меньше размер',
+    label: 'H.265 — быстро (veryfast)',
     pixelFormat: 'yuv420p',
-    videoOptions: ['-c:v', 'libx265', '-preset', 'medium', '-crf', '22', '-tag:v', 'hvc1'],
-    audioOptions: ['-c:a', 'aac', '-b:a', '192k'],
+    videoOptions: [
+      '-c:v', 'libx265', '-preset', 'veryfast', '-crf', '24', '-tag:v', 'hvc1',
+      '-x265-params', 'log-level=error'
+    ],
+    audioOptions: ['-c:a', 'aac', '-b:a', '128k'],
     extraOptions: ['-movflags', '+faststart']
   },
   prores: {
@@ -93,10 +104,10 @@ const DEFAULTS = {
 /** Как делить работу между процессором и видеокартой. */
 const ACCEL_MODES = {
   hybrid: {
-    label: 'CPU + GPU 50/50 — склейка на процессоре, кодирование на видеокарте'
+    label: 'Минимум нагрузки — 1–2 ядра CPU, кодирование на видеокарте'
   },
-  cpu: { label: 'Только процессор' },
-  gpu: { label: 'Предпочесть видеокарту (если нет — процессор)' }
+  cpu: { label: 'Только процессор (быстрый пресет, треть ядер)' },
+  gpu: { label: 'Предпочесть видеокарту (если нет — быстрый процессор)' }
 };
 
 const GPU_H264 = [
@@ -104,10 +115,12 @@ const GPU_H264 = [
     id: 'h264_nvenc',
     vendor: 'NVIDIA NVENC',
     extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '19', '-b:v', '0', '-profile:v', 'high'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '19', '-b:v', '0', '-profile:v', 'high'],
-      ['-gpu', '0', '-preset', 'medium', '-cq', '19', '-b:v', '0'],
-      ['-gpu', '1', '-preset', 'medium', '-cq', '19', '-b:v', '0'],
+      ['-gpu', '0', '-preset', 'p1', '-tune', 'll', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
+      ['-gpu', '1', '-preset', 'p1', '-tune', 'll', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
+      ['-gpu', '0', '-preset', 'p1'],
+      ['-gpu', '1', '-preset', 'p1'],
+      ['-gpu', '0', '-preset', 'fast'],
+      ['-gpu', '1', '-preset', 'fast'],
       ['-gpu', '0'],
       ['-gpu', '1'],
       []
@@ -117,7 +130,7 @@ const GPU_H264 = [
     id: 'h264_amf',
     vendor: 'AMD AMF',
     extras: [
-      ['-quality', 'quality', '-rc', 'cqp', '-qp_i', '18', '-qp_p', '20'],
+      ['-quality', 'speed', '-rc', 'cqp', '-qp_i', '22', '-qp_p', '24'],
       ['-quality', 'speed'],
       []
     ]
@@ -126,7 +139,7 @@ const GPU_H264 = [
     id: 'h264_qsv',
     vendor: 'Intel Quick Sync',
     extras: [
-      ['-preset', 'medium', '-global_quality', '20'],
+      ['-preset', 'veryfast'],
       ['-preset', 'fast'],
       []
     ]
@@ -147,10 +160,10 @@ const GPU_H265 = [
     id: 'hevc_nvenc',
     vendor: 'NVIDIA NVENC',
     extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1'],
-      ['-gpu', '0', '-preset', 'medium', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1'],
-      ['-gpu', '1', '-preset', 'medium', '-cq', '22', '-b:v', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '0', '-preset', 'p1', '-tune', 'll', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '1', '-preset', 'p1', '-tune', 'll', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-tag:v', 'hvc1'],
+      ['-gpu', '0', '-preset', 'p1', '-tag:v', 'hvc1'],
+      ['-gpu', '1', '-preset', 'p1', '-tag:v', 'hvc1'],
       ['-gpu', '0', '-tag:v', 'hvc1'],
       ['-gpu', '1', '-tag:v', 'hvc1'],
       ['-tag:v', 'hvc1']
@@ -160,7 +173,6 @@ const GPU_H265 = [
     id: 'hevc_amf',
     vendor: 'AMD AMF',
     extras: [
-      ['-quality', 'quality', '-rc', 'cqp', '-qp_i', '22', '-qp_p', '24', '-tag:v', 'hvc1'],
       ['-quality', 'speed', '-tag:v', 'hvc1'],
       ['-tag:v', 'hvc1']
     ]
@@ -169,7 +181,7 @@ const GPU_H265 = [
     id: 'hevc_qsv',
     vendor: 'Intel Quick Sync',
     extras: [
-      ['-preset', 'medium', '-global_quality', '22', '-tag:v', 'hvc1'],
+      ['-preset', 'veryfast', '-tag:v', 'hvc1'],
       ['-preset', 'fast', '-tag:v', 'hvc1'],
       ['-tag:v', 'hvc1']
     ]
@@ -355,16 +367,15 @@ function detectHardware() {
   return hardwareCache;
 }
 
-function threadBudget(limitCpu, coreCount) {
+function threadBudget(mode, coreCount) {
   const cores = Math.max(1, coreCount || (os.cpus() || []).length || 4);
-  if (limitCpu) {
-    return {
-      cores,
-      filterThreads: Math.max(1, Math.floor(cores / 2)),
-      encodeThreads: Math.max(1, Math.ceil(cores / 2))
-    };
+  if (mode === 'cpu') {
+    const n = Math.max(1, Math.min(4, Math.ceil(cores / 3)));
+    return { cores, filterThreads: n, encodeThreads: n };
   }
-  return { cores, filterThreads: cores, encodeThreads: cores };
+  // hybrid / gpu: один-два потока на фильтры, кодирование на карте (или veryfast x264).
+  const n = Math.max(1, Math.min(2, Math.floor(cores / 4) || 1));
+  return { cores, filterThreads: n, encodeThreads: n };
 }
 
 /**
@@ -378,7 +389,7 @@ function resolveEncodePlan(encoderKey, accelMode, hardware) {
   const mode = ACCEL_MODES[accelMode] ? accelMode : DEFAULTS.accel;
   const wantGpu = mode === 'hybrid' || mode === 'gpu';
   const gpu = encoderKey === 'h265' ? hardware.h265 : encoderKey === 'h264' ? hardware.h264 : null;
-  const threads = threadBudget(wantGpu, hardware.cores);
+  const threads = threadBudget(mode, hardware.cores);
 
   if (wantGpu && gpu) {
     return {
@@ -579,25 +590,59 @@ function safeUnlink(file) {
 // Построение графа фильтров
 // ---------------------------------------------------------------------------
 
+function lowerFfmpegPriority(command) {
+  const proc = command && command.ffmpegProc;
+  if (!proc || !Number.isInteger(proc.pid)) return;
+  const levels = os.constants && os.constants.priority;
+  if (!levels) return;
+  try {
+    os.setPriority(proc.pid, levels.PRIORITY_BELOW_NORMAL);
+  } catch (err) {
+    try {
+      os.setPriority(proc.pid, levels.PRIORITY_LOW);
+    } catch (err2) {
+      /* нет прав менять приоритет — не критично */
+    }
+  }
+}
+
+function chooseOutputFps(sourceFps) {
+  if (!Number.isFinite(sourceFps) || sourceFps <= 0) return MAX_OUTPUT_FPS;
+  return Math.min(sourceFps, MAX_OUTPUT_FPS);
+}
+
+function needsFpsConvert(targetFps, inputFps) {
+  return !(Number.isFinite(inputFps) && Math.abs(inputFps - targetFps) < 0.08);
+}
+
+function filterChain(...parts) {
+  return parts.filter(Boolean).join(',');
+}
+
 /** Вписывание кадра в холст: обрезать по краям либо добавить чёрные поля. */
-function fitFilter(width, height, fit) {
-  if (fit === 'contain') {
+function fitStep(target, src) {
+  if (src && src.width === target.width && src.height === target.height) return '';
+  if (target.fit === 'contain') {
     return (
-      `scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=bicubic,` +
-      `pad=${width}:${height}:-1:-1:color=black`
+      `scale=${target.width}:${target.height}:force_original_aspect_ratio=decrease:flags=${SCALE_FLAGS},` +
+      `pad=${target.width}:${target.height}:-1:-1:color=black`
     );
   }
   return (
-    `scale=${width}:${height}:force_original_aspect_ratio=increase:flags=bicubic,` +
-    `crop=${width}:${height}`
+    `scale=${target.width}:${target.height}:force_original_aspect_ratio=increase:flags=${SCALE_FLAGS},` +
+    `crop=${target.width}:${target.height}`
   );
 }
 
-function videoSegmentFilter(inputLabel, outputLabel, target) {
+function videoSegmentFilter(inputLabel, outputLabel, target, inputFps, srcSize) {
   return (
-    `[${inputLabel}]setpts=PTS-STARTPTS,fps=${target.fps},` +
-    `${fitFilter(target.width, target.height, target.fit)},setsar=1,` +
-    `format=${target.pixelFormat}[${outputLabel}]`
+    `[${inputLabel}]${filterChain(
+      'setpts=PTS-STARTPTS',
+      needsFpsConvert(target.fps, inputFps) ? `fps=${target.fps}` : '',
+      fitStep(target, srcSize),
+      'setsar=1',
+      `format=${target.pixelFormat}`
+    )}[${outputLabel}]`
   );
 }
 
@@ -679,7 +724,7 @@ function coverFilter(label, src, paneW, paneH, zoom, panPercent, canvasW, output
   const scale =
     window.scaledW === src.width && window.scaledH === src.height
       ? ''
-      : `scale=${window.scaledW}:${window.scaledH}:flags=bicubic,`;
+      : `scale=${window.scaledW}:${window.scaledH}:flags=${SCALE_FLAGS},`;
   return `${label}${scale}crop=${paneW}:${paneH}:${window.cropX}:${window.cropY}[${outputLabel}]`;
 }
 
@@ -740,7 +785,8 @@ function planCloseupInputs(closeup, startSec, neededSec) {
   };
 }
 
-function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration }) {
+function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeupFps }) {
+  const fps = needsFpsConvert(target.fps, closeupFps) ? `fps=${target.fps},` : '';
   if (wrap) {
     const dur = Math.max(0.05, duration).toFixed(3);
     return {
@@ -748,7 +794,7 @@ function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration }) {
         `[${closeupIndex}:v:0]setpts=PTS-STARTPTS[cu_tail]`,
         `[${closeupIndex + 1}:v:0]setpts=PTS-STARTPTS[cu_loop]`,
         `[cu_tail][cu_loop]concat=n=2:v=1:a=0,` +
-          `trim=duration=${dur},setpts=PTS-STARTPTS,fps=${target.fps},setsar=1[cu_src]`
+          `trim=duration=${dur},setpts=PTS-STARTPTS,${fps}setsar=1[cu_src]`
       ],
       // Дальше coverFilter дописывает `,scale=...` — поэтому здесь уже должна
       // быть цепочка фильтров, а не голая метка `[cu_src],scale` (пустой фильтр).
@@ -758,7 +804,7 @@ function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration }) {
 
   return {
     filters: [],
-    prep: `[${closeupIndex}:v:0]setpts=PTS-STARTPTS,fps=${target.fps},setsar=1`
+    prep: `[${closeupIndex}:v:0]setpts=PTS-STARTPTS,${fps}setsar=1`
   };
 }
 
@@ -798,7 +844,8 @@ function buildSplitFilters({
     closeupIndex,
     wrap: Boolean(closeupWrap),
     target,
-    duration
+    duration,
+    closeupFps: closeup.fps
   });
   filters.push(...closeupPrep.filters);
   const rightPrep = closeupPrep.prep;
@@ -920,9 +967,9 @@ function buildGraph({
   }
 
   const segments = [
-    { videoInput: 0, audioSource: source, audioInput: 0, duration: headDuration },
-    { videoInput: 2, audioSource: shorts, audioInput: 2, duration: shorts.duration },
-    { videoInput: 1, audioSource: source, audioInput: 1, duration: tailDuration }
+    { videoInput: 0, audioSource: source, audioInput: 0, duration: headDuration, fps: source.fps, width: source.width, height: source.height },
+    { videoInput: 2, audioSource: shorts, audioInput: 2, duration: shorts.duration, fps: shorts.fps, width: shorts.width, height: shorts.height },
+    { videoInput: 1, audioSource: source, audioInput: 1, duration: tailDuration, fps: source.fps, width: source.width, height: source.height }
   ];
 
   const concatLabels = [];
@@ -930,7 +977,13 @@ function buildGraph({
     const videoLabel = `v${i}`;
     const audioLabel = `a${i}`;
 
-    filters.push(videoSegmentFilter(`${segment.videoInput}:v:0`, videoLabel, montage));
+    filters.push(videoSegmentFilter(
+      `${segment.videoInput}:v:0`,
+      videoLabel,
+      montage,
+      segment.fps,
+      { width: segment.width, height: segment.height }
+    ));
 
     // Сегмент без звука заменяется тишиной, иначе concat не соберёт дорожку.
     if (segment.audioSource.hasAudio) {
@@ -967,9 +1020,10 @@ function buildGraph({
   // Оверлей ложится последним — поверх уже собранного split-screen.
   if (overlay) {
     const opacity = clamp(Number(overlayOpacity) / 100, 0, 1);
+    const overlayFps = needsFpsConvert(target.fps, overlay.fps) ? `fps=${target.fps},` : '';
     filters.push(
-      `[${overlayIndex}:v:0]setpts=PTS-STARTPTS,fps=${target.fps},` +
-        `scale=${target.width}:${target.height}:force_original_aspect_ratio=increase:flags=bicubic,` +
+      `[${overlayIndex}:v:0]setpts=PTS-STARTPTS,${overlayFps}` +
+        `scale=${target.width}:${target.height}:force_original_aspect_ratio=increase:flags=${SCALE_FLAGS},` +
         `crop=${target.width}:${target.height},setsar=1,format=rgba,` +
         `colorchannelmixer=aa=${opacity.toFixed(3)}[ovl]`
     );
@@ -1029,7 +1083,7 @@ function renderVideo(params) {
   const target = {
     width: evenRound(frame.width || source.width),
     height: evenRound(frame.height || source.height),
-    fps: source.fps,
+    fps: chooseOutputFps(source.fps),
     fit: FIT_MODES[params.fit] ? params.fit : DEFAULTS.fit,
     pixelFormat: plan.pixelFormat
   };
@@ -1088,6 +1142,7 @@ function renderVideo(params) {
       .output(outputFile);
 
     command.on('start', (commandLine) => {
+      lowerFfmpegPriority(command);
       if (typeof onCommand === 'function') onCommand(command);
       if (typeof onDebug === 'function') onDebug(commandLine);
     });

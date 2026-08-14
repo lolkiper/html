@@ -155,13 +155,13 @@ async function main() {
   const hybridPlan = resolveEncodePlan('h264', 'hybrid', { h264: null, h265: null, cores: 8 });
   const cpuPlan = resolveEncodePlan('h264', 'cpu', { h264: null, h265: null, cores: 8 });
   check(
-    hybridPlan.threads.encodeThreads === 4 && hybridPlan.threads.filterThreads === 4,
-    'hybrid без GPU занимает половину ядер, а не все 8',
+    hybridPlan.threads.encodeThreads === 2 && hybridPlan.threads.filterThreads === 2,
+    'hybrid без GPU занимает 2 из 8 ядер, а не все',
     `encode=${hybridPlan.threads.encodeThreads} filter=${hybridPlan.threads.filterThreads}`
   );
   check(
-    cpuPlan.threads.encodeThreads === 8,
-    'режим «только процессор» может взять все ядра',
+    cpuPlan.threads.encodeThreads === 3,
+    'режим «только процессор» берёт треть ядер (не больше 4)',
     `encode=${cpuPlan.threads.encodeThreads}`
   );
   [SOURCE_DIR, OUTPUT_DIR, ASSETS_DIR].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
