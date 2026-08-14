@@ -168,8 +168,8 @@ async function main() {
   );
   const paceArgs = paceGlobalArgs().join(' ');
   check(
-    ENCODE_PACE_SPEED <= 1.5,
-    'потолок кодирования не выше 1.5× realtime',
+    ENCODE_PACE_SPEED >= 3 && ENCODE_PACE_SPEED <= 4,
+    'потолок кодирования около 50% Video Encode (3–4×)',
     `speed=${ENCODE_PACE_SPEED}`
   );
   check(
@@ -235,8 +235,8 @@ async function main() {
   );
   check(progressStates.length > 5, 'прогресс приходил в интерфейс', `событий: ${progressStates.length}`);
   check(
-    logs.some((line) => line.includes('вход читается не быстрее') && line.includes('без стартового выброса')),
-    'в логе есть ограничение скорости чтения без выброса'
+    logs.some((line) => line.includes('до ') && line.includes('одной сессией')),
+    'в логе есть ограничение скорости и одна сессия кодирования'
   );
 
   const out1 = path.join(OUTPUT_DIR, 'es1.mov');
@@ -558,6 +558,7 @@ async function main() {
     width: 640, height: 360, fps: 30
   });
 
+  const seqLogs = [];
   const seqBatch = new BatchProcessor(
     {
       sourceDir: seqDir,
@@ -570,10 +571,19 @@ async function main() {
       percent: 75,
       encoder: 'h264'
     },
-    { onLog: (level, message) => console.log(`    [${level}] ${message}`) }
+    {
+      onLog: (level, message) => {
+        seqLogs.push(`${level}: ${message}`);
+        console.log(`    [${level}] ${message}`);
+      }
+    }
   );
   const seqSummary = await seqBatch.run();
   check(seqSummary.done === 2, 'последовательный крупный план: два файла собраны', `done=${seqSummary.done}`);
+  check(
+    seqLogs.some((line) => line.includes('Кодирование одной сессией')),
+    'два файла одного размера кодируются одной сессией энкодера'
+  );
 
   const seq1 = path.join(seqOut, 'es1.mov');
   const seq2 = path.join(seqOut, 'es2.mov');

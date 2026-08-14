@@ -32,14 +32,11 @@ const SCALE_FLAGS = 'fast_bilinear';
 /** 60 fps исходник гоняется в 30 — вдвое меньше кадров на фильтрах. */
 const MAX_OUTPUT_FPS = 30;
 /**
- * Потолок относительно realtime. Фильтр realtime стоит в КОНЦЕ графа, поэтому
- * FFmpeg всё равно вычитывает входы пачкой и NVENC на стыке файлов уходит в 100%.
- * -readrate душит демультиплексор с первого пакета; burst=0 — без 0.5 с разгона.
- * 1.5× при 30 fps ≈ 45 кадров/с, Video Encode на RTX 3060 ~15–25%.
+ * Потолок относительно realtime. 4× при 30 fps ≈ 120 кадров/с — около половины
+ * NVENC на RTX 3060 1080p. Скачок до 100% даёт не скорость, а новая сессия
+ * энкодера на каждый файл: очередь одного размера идёт одним процессом.
  */
-const ENCODE_PACE_SPEED = 1.5;
-/** Пауза между роликами, чтобы сессия NVENC успела закрыться и график сбросился. */
-const INTER_FILE_PAUSE_MS = 900;
+const ENCODE_PACE_SPEED = 4;
 
 function paceGlobalArgs() {
   return [
@@ -48,19 +45,8 @@ function paceGlobalArgs() {
   ];
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function pauseBetweenFiles(isCancelled) {
-  const step = 100;
-  let left = INTER_FILE_PAUSE_MS;
-  while (left > 0) {
-    if (typeof isCancelled === 'function' && isCancelled()) return;
-    const chunk = Math.min(step, left);
-    await sleep(chunk);
-    left -= chunk;
-  }
+function prefixed(prefix, name) {
+  return prefix ? `${prefix}${name}` : name;
 }
 
 /** Пресеты кодеков для контейнера .mov. */
@@ -146,8 +132,8 @@ const GPU_H264 = [
     id: 'h264_nvenc',
     vendor: 'NVIDIA NVENC',
     extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1'],
+      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-forced-idr', '1'],
+      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-forced-idr', '1'],
       ['-gpu', '0', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
       ['-gpu', '1', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
       ['-gpu', '0', '-preset', 'p1'],
@@ -191,8 +177,8 @@ const GPU_H265 = [
     id: 'hevc_nvenc',
     vendor: 'NVIDIA NVENC',
     extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-tag:v', 'hvc1'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-tag:v', 'hvc1'],
+      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-forced-idr', '1', '-tag:v', 'hvc1'],
+      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-forced-idr', '1', '-tag:v', 'hvc1'],
       ['-gpu', '0', '-preset', 'p4', '-tag:v', 'hvc1'],
       ['-gpu', '1', '-preset', 'p4', '-tag:v', 'hvc1'],
       ['-gpu', '0', '-tag:v', 'hvc1'],
@@ -816,20 +802,23 @@ function planCloseupInputs(closeup, startSec, neededSec) {
   };
 }
 
-function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeupFps }) {
+function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeupFps, prefix = '' }) {
   const fps = needsFpsConvert(target.fps, closeupFps) ? `fps=${target.fps},` : '';
+  const tail = prefixed(prefix, 'cu_tail');
+  const loop = prefixed(prefix, 'cu_loop');
+  const src = prefixed(prefix, 'cu_src');
   if (wrap) {
     const dur = Math.max(0.05, duration).toFixed(3);
     return {
       filters: [
-        `[${closeupIndex}:v:0]setpts=PTS-STARTPTS[cu_tail]`,
-        `[${closeupIndex + 1}:v:0]setpts=PTS-STARTPTS[cu_loop]`,
-        `[cu_tail][cu_loop]concat=n=2:v=1:a=0,` +
-          `trim=duration=${dur},setpts=PTS-STARTPTS,${fps}setsar=1[cu_src]`
+        `[${closeupIndex}:v:0]setpts=PTS-STARTPTS[${tail}]`,
+        `[${closeupIndex + 1}:v:0]setpts=PTS-STARTPTS[${loop}]`,
+        `[${tail}][${loop}]concat=n=2:v=1:a=0,` +
+          `trim=duration=${dur},setpts=PTS-STARTPTS,${fps}setsar=1[${src}]`
       ],
       // Дальше coverFilter дописывает `,scale=...` — поэтому здесь уже должна
       // быть цепочка фильтров, а не голая метка `[cu_src],scale` (пустой фильтр).
-      prep: '[cu_src]setsar=1'
+      prep: `[${src}]setsar=1`
     };
   }
 
@@ -855,7 +844,8 @@ function buildSplitFilters({
   outputLabel,
   target,
   split,
-  duration
+  duration,
+  prefix = ''
 }) {
   const width = target.width;
   const height = target.height;
@@ -868,6 +858,7 @@ function buildSplitFilters({
 
   const filters = [];
   const layout = { width, height, leftWidth, rightWidth, feather };
+  const L = (name) => prefixed(prefix, name);
 
   const leftSrc = { width: montage.width, height: montage.height };
   const rightSrc = { width: closeup.width, height: closeup.height };
@@ -876,7 +867,8 @@ function buildSplitFilters({
     wrap: Boolean(closeupWrap),
     target,
     duration,
-    closeupFps: closeup.fps
+    closeupFps: closeup.fps,
+    prefix
   });
   filters.push(...closeupPrep.filters);
   const rightPrep = closeupPrep.prep;
@@ -886,17 +878,17 @@ function buildSplitFilters({
       coverFilter(
         `[${baseLabel}]setsar=1,`,
         leftSrc, leftWidth, height, split.leftZoom, split.leftOffset, width,
-        'splitLeft'
+        L('splitLeft')
       )
     );
     filters.push(
       coverFilter(
         `${rightPrep},`,
         rightSrc, rightWidth, height, split.rightZoom, split.rightOffset, width,
-        'splitRight'
+        L('splitRight')
       )
     );
-    filters.push(`[splitLeft][splitRight]hstack=inputs=2:shortest=1[${outputLabel}]`);
+    filters.push(`[${L('splitLeft')}][${L('splitRight')}]hstack=inputs=2:shortest=1[${outputLabel}]`);
     return { filters, layout };
   }
 
@@ -907,18 +899,18 @@ function buildSplitFilters({
     coverFilter(
       `[${baseLabel}]setsar=1,`,
       leftSrc, leftWidth + feather, height, split.leftZoom, split.leftOffset, width,
-      'splitLeftWide'
+      L('splitLeftWide')
     )
   );
-  filters.push(`[splitLeftWide]pad=${width}:${height}:0:0:black[splitBase]`);
+  filters.push(`[${L('splitLeftWide')}]pad=${width}:${height}:0:0:black[${L('splitBase')}]`);
   filters.push(
     coverFilter(
       `${rightPrep},`,
       rightSrc, rightWindow, height, split.rightZoom, split.rightOffset, width,
-      'splitRightRgb'
+      L('splitRightRgb')
     )
   );
-  filters.push(`[splitRightRgb]format=${alphaFormatFor(target.pixelFormat)}[splitRight]`);
+  filters.push(`[${L('splitRightRgb')}]format=${alphaFormatFor(target.pixelFormat)}[${L('splitRight')}]`);
 
   const maskDuration = Math.max(1, duration + 1).toFixed(3);
   // Raised-cosine вместо линейного lerp: по краям стык полностью непрозрачный,
@@ -928,11 +920,11 @@ function buildSplitFilters({
   const ease = `0.5-0.5*cos(PI*clip(X/${denom},0,1))`;
   filters.push(
     `color=c=black:s=${rightWindow}x${height}:r=${target.fps}:d=${maskDuration},` +
-      `format=gray,geq=lum='255*(${ease})'[splitMask]`
+      `format=gray,geq=lum='255*(${ease})'[${L('splitMask')}]`
   );
-  filters.push(`[splitRight][splitMask]alphamerge=shortest=1[splitSoft]`);
+  filters.push(`[${L('splitRight')}][${L('splitMask')}]alphamerge=shortest=1[${L('splitSoft')}]`);
   filters.push(
-    `[splitBase][splitSoft]overlay=x=${seam}:y=0:shortest=1:format=yuv444:alpha=straight[${outputLabel}]`
+    `[${L('splitBase')}][${L('splitSoft')}]overlay=x=${seam}:y=0:shortest=1:format=yuv444:alpha=straight[${outputLabel}]`
   );
 
   return { filters, layout };
@@ -955,10 +947,14 @@ function buildGraph({
   target,
   splitAt,
   overlayOpacity,
-  duration
+  duration,
+  labelPrefix = '',
+  inputBase = 0,
+  applyPace = true
 }) {
   const inputs = [];
   const filters = [];
+  const L = (name) => prefixed(labelPrefix, name);
 
   const headDuration = splitAt;
   const tailDuration = Math.max(0, source.duration - splitAt);
@@ -975,17 +971,17 @@ function buildGraph({
       }
     : target;
 
-  // 0 — голова исходника
+  const headIndex = inputBase + inputs.length;
   inputs.push({ file: source.file, options: ['-t', headDuration.toFixed(3)] });
-  // 1 — хвост исходника
+  const tailIndex = inputBase + inputs.length;
   inputs.push({ file: source.file, options: ['-ss', splitAt.toFixed(3)] });
-  // 2 — Shorts
+  const shortsIndex = inputBase + inputs.length;
   inputs.push({ file: shorts.file, options: [] });
 
   let overlayIndex = -1;
   if (overlay) {
     // Бесконечный луп: короткий оверлей повторяется, длинный обрежется по shortest=1.
-    overlayIndex = inputs.length;
+    overlayIndex = inputBase + inputs.length;
     inputs.push({ file: overlay.file, options: ['-stream_loop', '-1'] });
   }
 
@@ -995,21 +991,21 @@ function buildGraph({
     // Правая половина идёт по таймлайну партии: ролик N продолжает с того места,
     // где закончился ролик N-1. Если файл кончился — начинается сначала.
     const planned = planCloseupInputs(closeup, closeupStart, duration);
-    closeupIndex = inputs.length;
+    closeupIndex = inputBase + inputs.length;
     closeupWrap = planned.wrap;
     planned.inputs.forEach((input) => inputs.push(input));
   }
 
   const segments = [
-    { videoInput: 0, audioSource: source, audioInput: 0, duration: headDuration, fps: source.fps, width: source.width, height: source.height },
-    { videoInput: 2, audioSource: shorts, audioInput: 2, duration: shorts.duration, fps: shorts.fps, width: shorts.width, height: shorts.height },
-    { videoInput: 1, audioSource: source, audioInput: 1, duration: tailDuration, fps: source.fps, width: source.width, height: source.height }
+    { videoInput: headIndex, audioSource: source, audioInput: headIndex, duration: headDuration, fps: source.fps, width: source.width, height: source.height },
+    { videoInput: shortsIndex, audioSource: shorts, audioInput: shortsIndex, duration: shorts.duration, fps: shorts.fps, width: shorts.width, height: shorts.height },
+    { videoInput: tailIndex, audioSource: source, audioInput: tailIndex, duration: tailDuration, fps: source.fps, width: source.width, height: source.height }
   ];
 
   const concatLabels = [];
   segments.forEach((segment, i) => {
-    const videoLabel = `v${i}`;
-    const audioLabel = `a${i}`;
+    const videoLabel = L(`v${i}`);
+    const audioLabel = L(`a${i}`);
 
     filters.push(videoSegmentFilter(
       `${segment.videoInput}:v:0`,
@@ -1029,9 +1025,9 @@ function buildGraph({
     concatLabels.push(`[${videoLabel}][${audioLabel}]`);
   });
 
-  filters.push(`${concatLabels.join('')}concat=n=${segments.length}:v=1:a=1[cv][ca]`);
+  filters.push(`${concatLabels.join('')}concat=n=${segments.length}:v=1:a=1[${L('cv')}][${L('ca')}]`);
 
-  let videoOut = 'cv';
+  let videoOut = L('cv');
   let layout = null;
 
   if (closeup) {
@@ -1041,14 +1037,15 @@ function buildGraph({
       closeupWrap,
       closeup,
       montage,
-      outputLabel: 'sv',
+      outputLabel: L('sv'),
       target,
       split: normalizeSplit(split),
-      duration
+      duration,
+      prefix: labelPrefix
     });
     filters.push(...built.filters);
     layout = built.layout;
-    videoOut = 'sv';
+    videoOut = L('sv');
   }
 
   // Оверлей ложится последним — поверх уже собранного split-screen.
@@ -1059,34 +1056,105 @@ function buildGraph({
       `[${overlayIndex}:v:0]setpts=PTS-STARTPTS,${overlayFps}` +
         `scale=${target.width}:${target.height}:force_original_aspect_ratio=increase:flags=${SCALE_FLAGS},` +
         `crop=${target.width}:${target.height},setsar=1,format=rgba,` +
-        `colorchannelmixer=aa=${opacity.toFixed(3)}[ovl]`
+        `colorchannelmixer=aa=${opacity.toFixed(3)}[${L('ovl')}]`
     );
-    filters.push(`[${videoOut}][ovl]overlay=x=0:y=0:shortest=1:eof_action=pass:format=auto[vout]`);
-    videoOut = 'vout';
+    filters.push(`[${videoOut}][${L('ovl')}]overlay=x=0:y=0:shortest=1:eof_action=pass:format=auto[${L('vout')}]`);
+    videoOut = L('vout');
   }
 
   // Наложения работают в форматах с альфой и могут отдать 4:4:4, который не
   // возьмёт профиль кодека, — поэтому кадр всегда приводится к целевому формату.
-  filters.push(`[${videoOut}]format=${target.pixelFormat}[vfinal]`);
+  filters.push(`[${videoOut}]format=${target.pixelFormat}[${L('vfinal')}]`);
 
-  // realtime — страховка, если сборка FFmpeg без -readrate. Основной тормоз —
-  // чтение входа (см. paceGlobalArgs), иначе декодер всё равно бежит вперёд.
-  if (target.pixelFormat === 'yuv420p') {
+  const audioOut = L('ca');
+  const pace = Boolean(applyPace && target.pixelFormat === 'yuv420p');
+  if (pace) {
     filters.push(
-      `[vfinal]setpts=PTS-STARTPTS,realtime=speed=${ENCODE_PACE_SPEED}[vpaced]`
+      `[${L('vfinal')}]setpts=PTS-STARTPTS,realtime=speed=${ENCODE_PACE_SPEED}[${L('vpaced')}]`
     );
     filters.push(
-      `[ca]asetpts=PTS-STARTPTS,arealtime=speed=${ENCODE_PACE_SPEED}[apaced]`
+      `[${audioOut}]asetpts=PTS-STARTPTS,arealtime=speed=${ENCODE_PACE_SPEED}[${L('apaced')}]`
     );
-    return { inputs, filters, videoOut: 'vpaced', audioOut: 'apaced', layout, pace: true };
+    return { inputs, filters, videoOut: L('vpaced'), audioOut: L('apaced'), layout, pace: true };
   }
 
-  return { inputs, filters, videoOut: 'vfinal', audioOut: 'ca', layout, pace: false };
+  return { inputs, filters, videoOut: L('vfinal'), audioOut, layout, pace: false };
 }
 
 // ---------------------------------------------------------------------------
 // Обработка одного файла
 // ---------------------------------------------------------------------------
+
+function resolveTarget(frameKey, fitKey, source, plan) {
+  const frame = FRAME_PRESETS[frameKey] || FRAME_PRESETS[DEFAULTS.frame];
+  return {
+    width: evenRound(frame.width || source.width),
+    height: evenRound(frame.height || source.height),
+    fps: chooseOutputFps(source.fps),
+    fit: FIT_MODES[fitKey] ? fitKey : DEFAULTS.fit,
+    pixelFormat: plan.pixelFormat
+  };
+}
+
+function resolveSplitAt(source, percent) {
+  const minSegment = Math.max(0.05, 2 / source.fps);
+  return clamp(
+    (source.duration * percent) / 100,
+    minSegment,
+    Math.max(minSegment, source.duration - minSegment)
+  );
+}
+
+function targetGroupKey(target) {
+  return `${target.width}x${target.height}@${Number(target.fps).toFixed(3)}@${target.pixelFormat}`;
+}
+
+function groupJobsByTarget(jobs) {
+  const groups = [];
+  jobs.forEach((job) => {
+    const key = targetGroupKey(job.target);
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.jobs.push(job);
+    else groups.push({ key, jobs: [job] });
+  });
+  return groups;
+}
+
+function applyInputs(command, inputs, plan, pace) {
+  inputs.forEach((input) => {
+    const added = command.input(input.file);
+    if (plan.hwaccel) added.inputOptions(['-hwaccel', plan.hwaccel]);
+    if (pace) added.inputOptions(paceGlobalArgs());
+    if (input.options && input.options.length) added.inputOptions(input.options);
+  });
+}
+
+function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDebug }) {
+  return new Promise((resolve, reject) => {
+    command.on('start', (commandLine) => {
+      lowerFfmpegPriority(command);
+      if (typeof onCommand === 'function') onCommand(command);
+      if (typeof onDebug === 'function') onDebug(commandLine);
+    });
+    command.on('stderr', (line) => {
+      if (typeof onDebug === 'function') onDebug(line);
+    });
+    command.on('progress', (progress) => {
+      if (typeof onProgress !== 'function' || totalDuration <= 0) return;
+      const done = timemarkToSeconds(progress.timemark);
+      onProgress(clamp((done / totalDuration) * 100, 0, 99.9), done);
+    });
+    command.on('error', (err) => {
+      if (plan && plan.usingGpu) {
+        reject(new GpuUnavailableError(err));
+        return;
+      }
+      reject(err);
+    });
+    command.on('end', () => resolve());
+    command.run();
+  });
+}
 
 /**
  * @param {object} params
@@ -1125,22 +1193,8 @@ function renderVideo(params) {
 
   const hardware = params.hardware || detectHardware();
   const plan = params.plan || resolveEncodePlan(encoder, params.accel, hardware);
-  const frame = FRAME_PRESETS[params.frame] || FRAME_PRESETS[DEFAULTS.frame];
-  const target = {
-    width: evenRound(frame.width || source.width),
-    height: evenRound(frame.height || source.height),
-    fps: chooseOutputFps(source.fps),
-    fit: FIT_MODES[params.fit] ? params.fit : DEFAULTS.fit,
-    pixelFormat: plan.pixelFormat
-  };
-
-  // У головы и хвоста должно остаться хотя бы по паре кадров, иначе concat получит пустой вход.
-  const minSegment = Math.max(0.05, 2 / source.fps);
-  const splitAt = clamp(
-    (source.duration * percent) / 100,
-    minSegment,
-    Math.max(minSegment, source.duration - minSegment)
-  );
+  const target = resolveTarget(params.frame, params.fit, source, plan);
+  const splitAt = resolveSplitAt(source, percent);
   const totalDuration = source.duration + shorts.duration;
 
   const { inputs, filters, videoOut, audioOut, layout, pace } = buildGraph({
@@ -1156,76 +1210,216 @@ function renderVideo(params) {
     duration: totalDuration
   });
 
-  return new Promise((resolve, reject) => {
-    const command = ffmpeg();
+  const command = ffmpeg();
+  applyInputs(command, inputs, plan, pace);
+  command._global([
+    '-filter_complex_threads', String(plan.threads.filterThreads),
+    '-filter_threads', String(plan.threads.filterThreads)
+  ]);
+  command
+    .complexFilter(filters)
+    .outputOptions([
+      '-map', `[${videoOut}]`,
+      '-map', `[${audioOut}]`,
+      ...plan.videoOptions,
+      ...plan.audioOptions,
+      '-ar', String(AUDIO_SAMPLE_RATE),
+      '-ac', '2',
+      '-r', String(target.fps),
+      '-vsync', 'cfr',
+      ...(plan.extraOptions || []),
+      '-y'
+    ])
+    .format('mov')
+    .output(outputFile);
 
-    inputs.forEach((input) => {
-      const added = command.input(input.file);
-      // Аппаратное декодирование — до -i. На фильтрах кадры всё равно в RAM.
-      if (plan.hwaccel) added.inputOptions(['-hwaccel', plan.hwaccel]);
-      // readrate тоже до -i: иначе FFmpeg вычитывает файл пачкой, а realtime
-      // в конце графа уже не спасает Video Encode на старте.
-      if (pace) added.inputOptions(paceGlobalArgs());
-      if (input.options && input.options.length) added.inputOptions(input.options);
+  return runCommand(command, {
+    plan,
+    totalDuration,
+    onProgress: typeof onProgress === 'function' ? (pct) => onProgress(pct) : null,
+    onCommand,
+    onDebug
+  }).then(() => {
+    if (typeof onProgress === 'function') onProgress(100);
+    return {
+      outputFile,
+      splitAt,
+      layout,
+      expectedDuration: totalDuration
+    };
+  });
+}
+
+function copyMediaSlice({ inputFile, outputFile, start, duration, onCommand, onDebug }) {
+  const command = ffmpeg();
+  command.input(inputFile).inputOptions(['-ss', start.toFixed(3), '-t', duration.toFixed(3)]);
+  command.outputOptions(['-c', 'copy', '-avoid_negative_ts', 'make_zero', '-movflags', '+faststart', '-y']);
+  command.format('mov').output(outputFile);
+  return runCommand(command, {
+    plan: { usingGpu: false },
+    totalDuration: duration,
+    onCommand,
+    onDebug
+  });
+}
+
+/**
+ * Несколько роликов одного размера — один ffmpeg и одна сессия NVENC.
+ * Иначе на каждом esN.mov видеокарта открывает энкодер заново и даёт иглу до 100%.
+ */
+function renderJobGroup(params) {
+  const {
+    jobs,
+    shorts,
+    overlay,
+    closeup,
+    split,
+    overlayOpacity,
+    plan,
+    onProgress,
+    onCommand,
+    onDebug
+  } = params;
+
+  if (!jobs.length) return Promise.resolve();
+  if (jobs.length === 1) {
+    const job = jobs[0];
+    return renderVideo({
+      source: job.source,
+      shorts,
+      overlay,
+      closeup,
+      closeupStart: job.closeupStart,
+      split,
+      outputFile: job.outputFile,
+      percent: job.percent,
+      encoder: job.encoder,
+      plan,
+      hardware: job.hardware,
+      frame: job.frame,
+      fit: job.fit,
+      overlayOpacity,
+      onProgress: (filePercent) => onProgress && onProgress({ job, filePercent, groupSeconds: filePercent / 100 * job.duration }),
+      onCommand,
+      onDebug
     });
+  }
 
-    command._global([
-      '-filter_complex_threads', String(plan.threads.filterThreads),
-      '-filter_threads', String(plan.threads.filterThreads)
-    ]);
+  const inputs = [];
+  const filters = [];
+  const concatPads = [];
+  const target = jobs[0].target;
+  let totalDuration = 0;
+  const boundaries = [0];
 
-    command
-      .complexFilter(filters)
-      .outputOptions([
-        '-map', `[${videoOut}]`,
-        '-map', `[${audioOut}]`,
-        ...plan.videoOptions,
-        ...plan.audioOptions,
-        '-ar', String(AUDIO_SAMPLE_RATE),
-        '-ac', '2',
-        '-r', String(target.fps),
-        '-vsync', 'cfr',
-        ...(plan.extraOptions || []),
-        '-y'
-      ])
-      .format('mov')
-      .output(outputFile);
-
-    command.on('start', (commandLine) => {
-      lowerFfmpegPriority(command);
-      if (typeof onCommand === 'function') onCommand(command);
-      if (typeof onDebug === 'function') onDebug(commandLine);
+  jobs.forEach((job, i) => {
+    const graph = buildGraph({
+      source: job.source,
+      shorts,
+      overlay,
+      closeup,
+      closeupStart: job.closeupStart,
+      split,
+      target: job.target,
+      splitAt: job.splitAt,
+      overlayOpacity,
+      duration: job.duration,
+      labelPrefix: `j${i}_`,
+      inputBase: inputs.length,
+      applyPace: false
     });
+    inputs.push(...graph.inputs);
+    filters.push(...graph.filters);
+    concatPads.push(`[${graph.videoOut}][${graph.audioOut}]`);
+    totalDuration += job.duration;
+    boundaries.push(totalDuration);
+  });
 
-    command.on('stderr', (line) => {
-      if (typeof onDebug === 'function') onDebug(line);
-    });
+  filters.push(`${concatPads.join('')}concat=n=${jobs.length}:v=1:a=1[allv][alla]`);
+  const pace = target.pixelFormat === 'yuv420p';
+  let videoOut = 'allv';
+  let audioOut = 'alla';
+  if (pace) {
+    filters.push(`[allv]setpts=PTS-STARTPTS,realtime=speed=${ENCODE_PACE_SPEED}[vpaced]`);
+    filters.push(`[alla]asetpts=PTS-STARTPTS,arealtime=speed=${ENCODE_PACE_SPEED}[apaced]`);
+    videoOut = 'vpaced';
+    audioOut = 'apaced';
+  }
 
-    command.on('progress', (progress) => {
-      if (typeof onProgress !== 'function' || totalDuration <= 0) return;
-      const done = timemarkToSeconds(progress.timemark);
-      onProgress(clamp((done / totalDuration) * 100, 0, 99.9));
-    });
+  const keyTimes = boundaries.slice(0, -1).map((t) => Math.max(0, t).toFixed(3)).join(',');
+  const tempFile = path.join(path.dirname(jobs[0].outputFile), `.shorts-batch-${process.pid}-${Date.now()}.mov`);
 
-    command.on('error', (err) => {
-      if (plan.usingGpu) {
-        reject(new GpuUnavailableError(err));
-        return;
+  const command = ffmpeg();
+  applyInputs(command, inputs, plan, pace);
+  command._global([
+    '-filter_complex_threads', String(plan.threads.filterThreads),
+    '-filter_threads', String(plan.threads.filterThreads)
+  ]);
+  command
+    .complexFilter(filters)
+    .outputOptions([
+      '-map', `[${videoOut}]`,
+      '-map', `[${audioOut}]`,
+      ...plan.videoOptions,
+      ...plan.audioOptions,
+      '-ar', String(AUDIO_SAMPLE_RATE),
+      '-ac', '2',
+      '-r', String(target.fps),
+      '-vsync', 'cfr',
+      '-force_key_frames', keyTimes,
+      ...(plan.extraOptions || []),
+      '-y'
+    ])
+    .format('mov')
+    .output(tempFile);
+
+  return runCommand(command, {
+    plan,
+    totalDuration,
+    onProgress: (pct, seconds) => {
+      if (typeof onProgress !== 'function') return;
+      let acc = 0;
+      let job = jobs[jobs.length - 1];
+      let filePercent = 100;
+      for (let i = 0; i < jobs.length; i += 1) {
+        const next = acc + jobs[i].duration;
+        if (seconds < next || i === jobs.length - 1) {
+          job = jobs[i];
+          filePercent = jobs[i].duration > 0
+            ? clamp(((seconds - acc) / jobs[i].duration) * 100, 0, 99.9)
+            : 100;
+          break;
+        }
+        acc = next;
       }
-      reject(err);
-    });
-
-    command.on('end', () => {
-      if (typeof onProgress === 'function') onProgress(100);
-      resolve({
-        outputFile,
-        splitAt,
-        layout,
-        expectedDuration: totalDuration
-      });
-    });
-
-    command.run();
+      onProgress({ job, filePercent, groupSeconds: seconds, groupPercent: pct });
+    },
+    onCommand,
+    onDebug
+  }).then(async () => {
+    let offset = 0;
+    try {
+      for (const job of jobs) {
+        await copyMediaSlice({
+          inputFile: tempFile,
+          outputFile: job.outputFile,
+          start: offset,
+          duration: job.duration,
+          onCommand,
+          onDebug
+        });
+        offset += job.duration;
+        if (typeof onProgress === 'function') {
+          onProgress({ job, filePercent: 100, groupSeconds: offset, groupPercent: 100 });
+        }
+      }
+    } finally {
+      safeUnlink(tempFile);
+    }
+  }).catch((err) => {
+    safeUnlink(tempFile);
+    jobs.forEach((job) => safeUnlink(job.outputFile));
+    throw err;
   });
 }
 
@@ -1335,8 +1529,8 @@ class BatchProcessor {
       if (plan.pixelFormat === 'yuv420p') {
         this.log(
           'info',
-          `Скорость: вход читается не быстрее ${ENCODE_PACE_SPEED}×, без стартового выброса ` +
-            `(иначе на стыке файлов Video Encode на мгновение уходит в 100%)`
+          `Скорость: до ${ENCODE_PACE_SPEED}× (~50% Video Encode). ` +
+            'Ролики одного размера кодируются одной сессией — без скачка до 100% на стыке файлов'
         );
       }
       if (hardware.compiledGpu && hardware.compiledGpu.length) {
@@ -1389,6 +1583,7 @@ class BatchProcessor {
       }
 
       let closeupHead = 0;
+      const jobs = [];
 
       for (let i = 0; i < sources.length; i += 1) {
         if (this.cancelled) break;
@@ -1398,19 +1593,8 @@ class BatchProcessor {
         const outputFile = path.join(s.outputDir, `${prefix}${i + 1}.mov`);
         const humanIndex = `${i + 1}/${sources.length}`;
 
-        this.emitProgress({
-          fileIndex: i,
-          total: sources.length,
-          fileName,
-          outputName: path.basename(outputFile),
-          filePercent: 0,
-          overallPercent: (i / sources.length) * 100,
-          status: `Обработка ${humanIndex}: ${fileName}`
-        });
-
         try {
           const source = await probeMedia(sourceFile);
-
           if (source.duration <= 0.2) {
             throw new Error('Слишком короткое или повреждённое видео.');
           }
@@ -1437,16 +1621,128 @@ class BatchProcessor {
             );
           }
 
-          this.currentOutput = outputFile;
-
-          const renderOnce = (encodePlan) => renderVideo({
+          const target = resolveTarget(frame, fit, source, plan);
+          const splitAt = resolveSplitAt(source, percent);
+          const duration = source.duration + shorts.duration;
+          jobs.push({
+            index: i,
             source,
+            outputFile,
+            fileName,
+            humanIndex,
+            closeupStart,
+            target,
+            splitAt,
+            duration,
+            percent,
+            encoder,
+            hardware,
+            frame,
+            fit
+          });
+          if (closeup) closeupHead += duration;
+        } catch (err) {
+          if (this.cancelled) break;
+          summary.failed += 1;
+          this.log('error', `[${humanIndex}] Ошибка на файле ${fileName}: ${shortenFfmpegError(err.message)}`);
+          safeUnlink(outputFile);
+        }
+      }
+
+      const groups = groupJobsByTarget(jobs);
+      const reuseEncoder = plan.pixelFormat === 'yuv420p' && groups.some((group) => group.jobs.length > 1);
+      const encodeGroups = reuseEncoder
+        ? groups
+        : jobs.map((job) => ({ key: 'one', jobs: [job] }));
+      if (reuseEncoder) {
+        this.log('info', 'Кодирование одной сессией: видеокарта не переоткрывает энкодер между файлами');
+      }
+
+      const bindCommand = (command) => {
+        this.currentCommand = command;
+        if (this.cancelled) {
+          try {
+            command.kill('SIGKILL');
+          } catch (err) {
+            /* процесс мог ещё не стартовать */
+          }
+        }
+      };
+
+      const emitJobProgress = (job, filePercent) => {
+        this.emitProgress({
+          fileIndex: job.index,
+          total: sources.length,
+          fileName: job.fileName,
+          outputName: path.basename(job.outputFile),
+          filePercent,
+          overallPercent: ((job.index + filePercent / 100) / sources.length) * 100,
+          status: `Обработка ${job.humanIndex}: ${job.fileName} — ${filePercent.toFixed(1)}%`
+        });
+      };
+
+      const markJobDone = (job) => {
+        const size = fs.existsSync(job.outputFile) ? fs.statSync(job.outputFile).size : 0;
+        summary.done += 1;
+        summary.results.push({ source: job.source.file, output: job.outputFile, size });
+        this.log(
+          'success',
+          `[${job.humanIndex}] Готово: ${path.basename(job.outputFile)} ` +
+            `(${(size / 1024 / 1024).toFixed(1)} МБ)`
+        );
+        this.emitProgress({
+          fileIndex: job.index,
+          total: sources.length,
+          fileName: job.fileName,
+          filePercent: 100,
+          overallPercent: ((job.index + 1) / sources.length) * 100,
+          status: `Завершено ${job.index + 1} из ${sources.length}`
+        });
+      };
+
+      const renderJobList = async (jobList, encodePlan) => {
+        if (jobList.length > 1 && encodePlan.pixelFormat === 'yuv420p') {
+          await renderJobGroup({
+            jobs: jobList,
             shorts,
             overlay,
             closeup,
-            closeupStart,
             split,
-            outputFile,
+            overlayOpacity,
+            plan: encodePlan,
+            onCommand: bindCommand,
+            onDebug: (line) => {
+              if (this.settings.verbose) this.log('debug', line);
+            },
+            onProgress: ({ job, filePercent }) => emitJobProgress(job, filePercent)
+          });
+          jobList.forEach((job) => {
+            this.currentOutput = job.outputFile;
+            markJobDone(job);
+          });
+          return;
+        }
+
+        for (const job of jobList) {
+          if (this.cancelled) break;
+          this.currentOutput = job.outputFile;
+          this.emitProgress({
+            fileIndex: job.index,
+            total: sources.length,
+            fileName: job.fileName,
+            outputName: path.basename(job.outputFile),
+            filePercent: 0,
+            overallPercent: (job.index / sources.length) * 100,
+            status: `Обработка ${job.humanIndex}: ${job.fileName}`
+          });
+          await renderVideo({
+            source: job.source,
+            shorts,
+            overlay,
+            closeup,
+            closeupStart: job.closeupStart,
+            split,
+            outputFile: job.outputFile,
             percent,
             encoder,
             plan: encodePlan,
@@ -1454,86 +1750,67 @@ class BatchProcessor {
             frame,
             fit,
             overlayOpacity,
-            onCommand: (command) => {
-              this.currentCommand = command;
-              if (this.cancelled) {
-                try {
-                  command.kill('SIGKILL');
-                } catch (err) {
-                  /* процесс мог ещё не стартовать */
-                }
-              }
-            },
+            onCommand: bindCommand,
             onDebug: (line) => {
               if (this.settings.verbose) this.log('debug', line);
             },
-            onProgress: (filePercent) => {
-              this.emitProgress({
-                fileIndex: i,
-                total: sources.length,
-                fileName,
-                outputName: path.basename(outputFile),
-                filePercent,
-                overallPercent: ((i + filePercent / 100) / sources.length) * 100,
-                status: `Обработка ${humanIndex}: ${fileName} — ${filePercent.toFixed(1)}%`
-              });
-            }
+            onProgress: (filePercent) => emitJobProgress(job, filePercent)
           });
+          if (this.cancelled) {
+            safeUnlink(job.outputFile);
+            break;
+          }
+          markJobDone(job);
+        }
+      };
 
+      for (const group of encodeGroups) {
+        if (this.cancelled) break;
+        try {
           try {
-            await renderOnce(plan);
+            await renderJobList(group.jobs, plan);
           } catch (err) {
             if (this.cancelled) throw err;
             if (err && err.gpuFallback) {
               this.log(
                 'warn',
-                `[${humanIndex}] Видеокарта не приняла кадр (${shortenFfmpegError(err.message)}), повтор на процессоре`
+                `Видеокарта не приняла кадр (${shortenFfmpegError(err.message)}), повтор на процессоре`
               );
-              safeUnlink(outputFile);
-              await renderOnce(cpuPlan);
+              group.jobs.forEach((job) => safeUnlink(job.outputFile));
+              await renderJobList(group.jobs, cpuPlan);
             } else {
               throw err;
             }
           }
-
-          if (this.cancelled) {
-            safeUnlink(outputFile);
-            break;
-          }
-
-          const size = fs.existsSync(outputFile) ? fs.statSync(outputFile).size : 0;
-          summary.done += 1;
-          summary.results.push({ source: sourceFile, output: outputFile, size });
-          if (closeup) closeupHead += source.duration + shorts.duration;
-          this.log(
-            'success',
-            `[${humanIndex}] Готово: ${path.basename(outputFile)} ` +
-              `(${(size / 1024 / 1024).toFixed(1)} МБ)`
-          );
         } catch (err) {
           if (this.cancelled) {
-            safeUnlink(outputFile);
+            group.jobs.forEach((job) => safeUnlink(job.outputFile));
             break;
           }
-          summary.failed += 1;
-          this.log('error', `[${humanIndex}] Ошибка на файле ${fileName}: ${shortenFfmpegError(err.message)}`);
-          safeUnlink(outputFile);
+          this.log(
+            'warn',
+            `Общая сессия не записалась (${shortenFfmpegError(err.message)}), каждый файл отдельно`
+          );
+          for (const job of group.jobs) {
+            if (this.cancelled) break;
+            try {
+              await renderJobList([job], plan);
+            } catch (jobErr) {
+              if (this.cancelled) {
+                safeUnlink(job.outputFile);
+                break;
+              }
+              summary.failed += 1;
+              this.log(
+                'error',
+                `[${job.humanIndex}] Ошибка на файле ${job.fileName}: ${shortenFfmpegError(jobErr.message)}`
+              );
+              safeUnlink(job.outputFile);
+            }
+          }
         } finally {
           this.currentCommand = null;
           this.currentOutput = null;
-        }
-
-        this.emitProgress({
-          fileIndex: i,
-          total: sources.length,
-          fileName,
-          filePercent: 100,
-          overallPercent: ((i + 1) / sources.length) * 100,
-          status: `Завершено ${i + 1} из ${sources.length}`
-        });
-
-        if (i < sources.length - 1 && !this.cancelled) {
-          await pauseBetweenFiles(() => this.cancelled);
         }
       }
 
