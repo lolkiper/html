@@ -233,6 +233,7 @@ async function main() {
     logs.some((line) => line.startsWith('error:') && line.includes('clip3.mp4')),
     'ошибка по битому файлу попала в лог'
   );
+  check(progressStates.length > 5, 'прогресс приходил в интерфейс', `событий: ${progressStates.length}`);
   check(
     logs.some((line) => line.includes('вход читается не быстрее') && line.includes('без стартового выброса')),
     'в логе есть ограничение скорости чтения без выброса'
