@@ -62,6 +62,37 @@ function colorsMatch(actual, expected, tolerance = 30) {
   return actual.every((value, i) => Math.abs(value - expected[i]) <= tolerance);
 }
 
+/** Цвет конкретной точки кадра — по нему проверяется геометрия раскладки. */
+function samplePoint(file, time, x, y) {
+  const buffer = execFileSync(
+    ffmpegPath,
+    [
+      '-hide_banner', '-loglevel', 'error',
+      '-ss', String(time), '-i', file,
+      '-frames:v', '1',
+      '-vf', `crop=2:2:${Math.round(x)}:${Math.round(y)},scale=1:1`,
+      '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'
+    ],
+    { maxBuffer: 1024 }
+  );
+  return [buffer[0], buffer[1], buffer[2]];
+}
+
+/** Кадр из четырёх вертикальных полос — удобно ловить сдвиг и зум. */
+function makeStripedVideo({ file, colors, width, height, duration, fps }) {
+  const stripe = width / colors.length;
+  const boxes = colors
+    .map((color, i) => `drawbox=x=${i * stripe}:y=0:w=${stripe}:h=${height}:color=${color}:t=fill`)
+    .join(',');
+  ffmpegRun([
+    '-f', 'lavfi',
+    '-i', `color=c=black:size=${width}x${height}:rate=${fps}:duration=${duration}`,
+    '-vf', boxes,
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    file
+  ]);
+}
+
 function makeSolidVideo({ file, color, width, height, duration, fps }) {
   ffmpegRun([
     '-f', 'lavfi',
@@ -234,7 +265,102 @@ async function main() {
   check(colorsMatch(samplePixel(blended, 5.5), [255, 128, 128]), 'оверлей зациклился до самого конца',
     String(samplePixel(blended, 5.5)));
 
-  console.log('\n5) Проверяем остановку обработки…');
+  console.log('\n5) Проверяем раскладку split-screen…');
+  const splitDir = path.join(ROOT, 'split');
+  const splitOut = path.join(ROOT, 'split-out');
+  fs.mkdirSync(splitDir, { recursive: true });
+
+  // Кадр 1920x1080 из полос по 480 px: у левой половины сдвиг -25% (это -480 px),
+  // значит в неё должны попасть вторая и третья полосы исходника.
+  const stripedSource = path.join(splitDir, 'striped.mp4');
+  const stripedCloseup = path.join(ASSETS_DIR, 'closeup.mp4');
+  makeStripedVideo({
+    file: stripedSource,
+    colors: ['red', 'lime', 'blue', 'yellow'],
+    width: 1920, height: 1080, duration: 4, fps: 30
+  });
+  makeStripedVideo({
+    file: stripedCloseup,
+    colors: ['magenta', 'cyan', 'white', 'gray'],
+    width: 1920, height: 1080, duration: 3, fps: 30
+  });
+
+  const runSplit = async (outputDir, feather) => {
+    const batch = new BatchProcessor(
+      {
+        sourceDir: splitDir,
+        shortsFile: greenShorts,
+        useOverlay: false,
+        useSplit: true,
+        closeupFile: stripedCloseup,
+        split: { leftShare: 50, feather, leftZoom: 1, leftOffset: -25, rightZoom: 1.8, rightOffset: 25 },
+        outputDir,
+        percent: 75,
+        encoder: 'h264'
+      },
+      { onLog: (level, message) => console.log(`    [${level}] ${message}`) }
+    );
+    const result = await batch.run();
+    return { result, file: path.join(outputDir, 'es1.mov') };
+  };
+
+  const hard = await runSplit(splitOut, 0);
+  check(hard.result.done === 1, 'split-screen: файл собран', `done=${hard.result.done}`);
+
+  const splitInfo = await probeMedia(hard.file);
+  check(
+    splitInfo.width === 1920 && splitInfo.height === 1080,
+    'split-screen: размер кадра не изменился',
+    `${splitInfo.width}x${splitInfo.height}`
+  );
+
+  // Левая половина без зума со сдвигом -480 px показывает полосы 2 и 3.
+  check(colorsMatch(samplePoint(hard.file, 1, 240, 540), [0, 255, 0]),
+    'левая половина сдвинута: в четверти кадра вторая полоса исходника',
+    String(samplePoint(hard.file, 1, 240, 540)));
+  check(colorsMatch(samplePoint(hard.file, 1, 720, 540), [0, 0, 255]),
+    'левая половина сдвинута: у границы третья полоса исходника',
+    String(samplePoint(hard.file, 1, 720, 540)));
+
+  // Правая половина: зум 1.8 и сдвиг +480 показывают полосы 2 и 3 второго видео.
+  check(colorsMatch(samplePoint(hard.file, 1, 1000, 540), [0, 255, 255]),
+    'правая половина: зум и сдвиг дают ожидаемый кусок второго видео',
+    String(samplePoint(hard.file, 1, 1000, 540)));
+  check(colorsMatch(samplePoint(hard.file, 1, 1800, 540), [255, 255, 255]),
+    'правая половина: у правого края видна следующая полоса второго видео',
+    String(samplePoint(hard.file, 1, 1800, 540)));
+
+  // Граница без смягчения должна быть резкой.
+  check(colorsMatch(samplePoint(hard.file, 1, 950, 540), [0, 0, 255]),
+    'чёткая граница: слева от стыка ещё исходник',
+    String(samplePoint(hard.file, 1, 950, 540)));
+  check(colorsMatch(samplePoint(hard.file, 1, 970, 540), [0, 255, 255]),
+    'чёткая граница: справа от стыка уже второе видео',
+    String(samplePoint(hard.file, 1, 970, 540)));
+
+  // Shorts в середине ролика тоже попадает в левую половину.
+  check(colorsMatch(samplePoint(hard.file, 4, 240, 540), [0, 255, 0]),
+    'split-screen: в середине слева играет Shorts',
+    String(samplePoint(hard.file, 4, 240, 540)));
+
+  const softOut = path.join(ROOT, 'split-out-soft');
+  const soft = await runSplit(softOut, 40);
+  check(soft.result.done === 1, 'мягкая граница: файл собран', `done=${soft.result.done}`);
+
+  const seam = samplePoint(soft.file, 1, 940, 540);
+  check(colorsMatch(samplePoint(soft.file, 1, 900, 540), [0, 0, 255], 40),
+    'мягкая граница: до растушёвки чистый исходник',
+    String(samplePoint(soft.file, 1, 900, 540)));
+  check(
+    seam[1] > 60 && seam[1] < 200 && seam[2] > 150,
+    'мягкая граница: в середине стыка половины смешаны',
+    `rgb=${seam}`
+  );
+  check(colorsMatch(samplePoint(soft.file, 1, 1000, 540), [0, 255, 255], 40),
+    'мягкая граница: за стыком чистое второе видео',
+    String(samplePoint(soft.file, 1, 1000, 540)));
+
+  console.log('\n6) Проверяем остановку обработки…');
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -262,7 +388,7 @@ async function main() {
     'недописанный файл удалён'
   );
 
-  console.log('\n6) Проверяем ProRes и работу без оверлея…');
+  console.log('\n7) Проверяем ProRes и работу без оверлея…');
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
   const proresBatch = new BatchProcessor(
     {

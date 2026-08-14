@@ -50,11 +50,25 @@ const ENCODERS = {
   }
 };
 
+/**
+ * Раскладка split-screen. Сдвиги заданы в процентах от ширины кадра, чтобы
+ * настройки не зависели от разрешения: -25% это привычные -480 px при ширине 1920.
+ */
+const SPLIT_DEFAULTS = {
+  leftShare: 50,
+  feather: 8,
+  leftZoom: 1,
+  leftOffset: -25,
+  rightZoom: 1.8,
+  rightOffset: 25
+};
+
 const DEFAULTS = {
   percent: 90,
   encoder: 'h264',
   overlayOpacity: 100,
-  outputPrefix: 'es'
+  outputPrefix: 'es',
+  split: SPLIT_DEFAULTS
 };
 
 // ---------------------------------------------------------------------------
@@ -285,6 +299,124 @@ function silentSegmentFilter(outputLabel, duration) {
   );
 }
 
+function evenRound(value) {
+  return Math.max(2, Math.round(value / 2) * 2);
+}
+
+/** Приводит настройки раскладки к безопасным значениям. */
+function normalizeSplit(config = {}) {
+  const number = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  return {
+    leftShare: clamp(number(config.leftShare, SPLIT_DEFAULTS.leftShare), 20, 80),
+    feather: clamp(Math.round(number(config.feather, SPLIT_DEFAULTS.feather)), 0, 200),
+    // Зум меньше единицы оставил бы в кадре пустоту, поэтому нижняя граница — 1.
+    leftZoom: clamp(number(config.leftZoom, SPLIT_DEFAULTS.leftZoom), 1, 4),
+    rightZoom: clamp(number(config.rightZoom, SPLIT_DEFAULTS.rightZoom), 1, 4),
+    leftOffset: clamp(number(config.leftOffset, SPLIT_DEFAULTS.leftOffset), -100, 100),
+    rightOffset: clamp(number(config.rightOffset, SPLIT_DEFAULTS.rightOffset), -100, 100)
+  };
+}
+
+/** Формат с альфой под глубину цвета итогового кодека. */
+function alphaFormatFor(pixelFormat) {
+  return /10le|12le/.test(pixelFormat) ? 'yuva444p10le' : 'yuva444p';
+}
+
+/**
+ * Делит кадр на две половины: слева смонтированный ролик, справа второе видео.
+ *
+ * Каждая половина — это окно в «слое»: видео масштабируется на zoom, центр слоя
+ * сдвигается на offset (как Position X в монтажке), а в кадр попадает только та
+ * часть слоя, которая приходится на свою половину. Поэтому левая часть при
+ * сдвиге -25% показывает центр исходника, а правая с зумом 1.8 — крупный план,
+ * обрезанный слева.
+ *
+ * @returns {{filters: string[], layout: object}}
+ */
+function buildSplitFilters({ baseLabel, closeupIndex, outputLabel, target, split, duration }) {
+  const width = target.width;
+  const height = target.height;
+
+  const leftWidth = clamp(evenRound((width * split.leftShare) / 100), 2, width - 2);
+  const rightWidth = width - leftWidth;
+  const featherLimit = Math.max(0, Math.min(leftWidth, rightWidth) - 2);
+  const requested = clamp(split.feather, 0, featherLimit);
+  // Градиент шириной в один пиксель смысла не имеет и ломает формулу маски.
+  const feather = requested > 0 ? Math.max(2, requested) : 0;
+
+  const layerOf = (zoom) => ({ width: evenRound(width * zoom), height: evenRound(height * zoom) });
+  const leftLayer = layerOf(split.leftZoom);
+  const rightLayer = layerOf(split.rightZoom);
+
+  // Левый край слоя на холсте, затем — какая точка слоя попадает в окно половины.
+  const layerLeft = (layer, offsetPercent) => (width - layer.width) / 2 + (width * offsetPercent) / 100;
+  const cropX = (layer, offsetPercent, canvasX, windowWidth) =>
+    clamp(Math.round(canvasX - layerLeft(layer, offsetPercent)), 0, Math.max(0, layer.width - windowWidth));
+  const cropY = (layer) => clamp(Math.round((layer.height - height) / 2), 0, Math.max(0, layer.height - height));
+
+  const zoomLeft =
+    leftLayer.width === width && leftLayer.height === height
+      ? ''
+      : `,scale=${leftLayer.width}:${leftLayer.height}:flags=bicubic`;
+  const leftChain = `[${baseLabel}]setsar=1${zoomLeft}`;
+
+  // Второе видео сначала заполняет кадр целиком, потом увеличивается на zoom.
+  const rightChain =
+    `[${closeupIndex}:v:0]setpts=PTS-STARTPTS,fps=${target.fps},` +
+    `scale=${rightLayer.width}:${rightLayer.height}:force_original_aspect_ratio=increase:flags=bicubic,` +
+    `crop=${rightLayer.width}:${rightLayer.height},setsar=1`;
+
+  const filters = [];
+  const layout = { width, height, leftWidth, rightWidth, feather };
+
+  if (feather === 0) {
+    filters.push(
+      `${leftChain},crop=${leftWidth}:${height}:` +
+        `${cropX(leftLayer, split.leftOffset, 0, leftWidth)}:${cropY(leftLayer)}[splitLeft]`
+    );
+    filters.push(
+      `${rightChain},crop=${rightWidth}:${height}:` +
+        `${cropX(rightLayer, split.rightOffset, leftWidth, rightWidth)}:${cropY(rightLayer)}[splitRight]`
+    );
+    // shortest=1 обязателен: второе видео зациклено и само по себе бесконечно.
+    filters.push(`[splitLeft][splitRight]hstack=inputs=2:shortest=1[${outputLabel}]`);
+    return { filters, layout };
+  }
+
+  // Мягкая граница: правая половина берётся с запасом в feather пикселей и
+  // накладывается на левую с альфа-градиентом, чтобы стык не был резким.
+  const rightWindow = rightWidth + feather;
+  const seam = leftWidth - feather;
+
+  filters.push(
+    `${leftChain},crop=${leftWidth + feather}:${height}:` +
+      `${cropX(leftLayer, split.leftOffset, 0, leftWidth + feather)}:${cropY(leftLayer)},` +
+      `pad=${width}:${height}:0:0:black[splitBase]`
+  );
+  filters.push(
+    `${rightChain},crop=${rightWindow}:${height}:` +
+      `${cropX(rightLayer, split.rightOffset, seam, rightWindow)}:${cropY(rightLayer)},` +
+      `format=${alphaFormatFor(target.pixelFormat)}[splitRight]`
+  );
+
+  // Маска прозрачности: линейный градиент считается один раз на единственном
+  // кадре и дальше просто повторяется (фильтр gradients растягивает переход
+  // всего на несколько пикселей, независимо от заданной ширины).
+  const maskDuration = Math.max(1, duration + 1).toFixed(3);
+  filters.push(
+    `color=c=black:s=${feather}x${height}:r=1:d=1,format=gray,` +
+      `geq=lum='255*X/${feather - 1}',loop=loop=-1:size=1,fps=${target.fps}[splitGradient]`
+  );
+  filters.push(
+    `color=c=white:s=${rightWidth}x${height}:r=${target.fps}:d=${maskDuration},format=gray[splitSolid]`
+  );
+  filters.push(`[splitGradient][splitSolid]hstack=inputs=2[splitMask]`);
+  filters.push(`[splitRight][splitMask]alphamerge=shortest=1[splitSoft]`);
+  filters.push(`[splitBase][splitSoft]overlay=x=${seam}:y=0:shortest=1:format=auto[${outputLabel}]`);
+
+  return { filters, layout };
+}
+
 /**
  * Собирает список входов, граф фильтров и карту потоков для одного файла.
  *
@@ -292,7 +424,7 @@ function silentSegmentFilter(outputLabel, duration) {
  * split+trim: так ffmpeg не буферизует хвост видео в памяти, пока пишется
  * начало ролика.
  */
-function buildGraph({ source, shorts, overlay, target, splitAt, overlayOpacity }) {
+function buildGraph({ source, shorts, overlay, closeup, split, target, splitAt, overlayOpacity, duration }) {
   const inputs = [];
   const filters = [];
 
@@ -311,6 +443,13 @@ function buildGraph({ source, shorts, overlay, target, splitAt, overlayOpacity }
     // Бесконечный луп: короткий оверлей повторяется, длинный обрежется по shortest=1.
     overlayIndex = inputs.length;
     inputs.push({ file: overlay.file, options: ['-stream_loop', '-1'] });
+  }
+
+  let closeupIndex = -1;
+  if (closeup) {
+    // Второе видео живёт по тем же правилам: короткое зациклится, длинное обрежется.
+    closeupIndex = inputs.length;
+    inputs.push({ file: closeup.file, options: ['-stream_loop', '-1'] });
   }
 
   const segments = [
@@ -339,6 +478,23 @@ function buildGraph({ source, shorts, overlay, target, splitAt, overlayOpacity }
   filters.push(`${concatLabels.join('')}concat=n=${segments.length}:v=1:a=1[cv][ca]`);
 
   let videoOut = 'cv';
+  let layout = null;
+
+  if (closeup) {
+    const built = buildSplitFilters({
+      baseLabel: videoOut,
+      closeupIndex,
+      outputLabel: 'sv',
+      target,
+      split: normalizeSplit(split),
+      duration
+    });
+    filters.push(...built.filters);
+    layout = built.layout;
+    videoOut = 'sv';
+  }
+
+  // Оверлей ложится последним — поверх уже собранного split-screen.
   if (overlay) {
     const opacity = clamp(Number(overlayOpacity) / 100, 0, 1);
     filters.push(
@@ -347,14 +503,15 @@ function buildGraph({ source, shorts, overlay, target, splitAt, overlayOpacity }
         `crop=${target.width}:${target.height},setsar=1,format=rgba,` +
         `colorchannelmixer=aa=${opacity.toFixed(3)}[ovl]`
     );
-    filters.push(
-      `[cv][ovl]overlay=x=0:y=0:shortest=1:eof_action=pass:format=auto,` +
-        `format=${target.pixelFormat}[vout]`
-    );
+    filters.push(`[${videoOut}][ovl]overlay=x=0:y=0:shortest=1:eof_action=pass:format=auto[vout]`);
     videoOut = 'vout';
   }
 
-  return { inputs, filters, videoOut, audioOut: 'ca' };
+  // Наложения работают в форматах с альфой и могут отдать 4:4:4, который не
+  // возьмёт профиль кодека, — поэтому кадр всегда приводится к целевому формату.
+  filters.push(`[${videoOut}]format=${target.pixelFormat}[vfinal]`);
+
+  return { inputs, filters, videoOut: 'vfinal', audioOut: 'ca', layout };
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +523,8 @@ function buildGraph({ source, shorts, overlay, target, splitAt, overlayOpacity }
  * @param {object} params.source      результат probeMedia() для исходника
  * @param {object} params.shorts      результат probeMedia() для Shorts
  * @param {object|null} params.overlay результат probeMedia() для оверлея
+ * @param {object|null} params.closeup результат probeMedia() для правой половины
+ * @param {object} params.split       настройки раскладки split-screen
  * @param {string} params.outputFile  путь к esN.mov
  * @param {number} params.percent     процент обрезки (50..99)
  * @param {string} params.encoder     ключ ENCODERS
@@ -379,6 +538,8 @@ function renderVideo(params) {
     source,
     shorts,
     overlay,
+    closeup,
+    split,
     outputFile,
     percent,
     encoder,
@@ -405,13 +566,16 @@ function renderVideo(params) {
   );
   const totalDuration = source.duration + shorts.duration;
 
-  const { inputs, filters, videoOut, audioOut } = buildGraph({
+  const { inputs, filters, videoOut, audioOut, layout } = buildGraph({
     source,
     shorts,
     overlay,
+    closeup,
+    split,
     target,
     splitAt,
-    overlayOpacity
+    overlayOpacity,
+    duration: totalDuration
   });
 
   return new Promise((resolve, reject) => {
@@ -462,6 +626,7 @@ function renderVideo(params) {
       resolve({
         outputFile,
         splitAt,
+        layout,
         expectedDuration: totalDuration
       });
     });
@@ -518,6 +683,9 @@ class BatchProcessor {
     if (!s.shortsFile || !fs.existsSync(s.shortsFile)) errors.push('Файл Shorts не найден.');
     if (s.useOverlay && (!s.overlayFile || !fs.existsSync(s.overlayFile))) {
       errors.push('Оверлей включён, но файл не выбран или не найден.');
+    }
+    if (s.useSplit && (!s.closeupFile || !fs.existsSync(s.closeupFile))) {
+      errors.push('Split-screen включён, но видео для правой половины не выбрано или не найдено.');
     }
     if (!s.outputDir) errors.push('Не выбрана папка для сохранения результата.');
 
@@ -580,6 +748,23 @@ class BatchProcessor {
         );
       }
 
+      const split = normalizeSplit(s.split);
+      let closeup = null;
+      if (s.useSplit) {
+        closeup = await probeMedia(s.closeupFile);
+        this.log(
+          'info',
+          `Split-screen: ${path.basename(closeup.file)} — ${closeup.width}x${closeup.height}, ` +
+            `${formatDuration(closeup.duration)} (звук второго видео не используется)`
+        );
+        this.log(
+          'info',
+          `Раскладка: левая часть ${split.leftShare}% (зум ${split.leftZoom.toFixed(2)}, ` +
+            `сдвиг ${split.leftOffset}%), правая — зум ${split.rightZoom.toFixed(2)}, ` +
+            `сдвиг ${split.rightOffset}%, граница ${split.feather ? `мягкая ${split.feather} px` : 'чёткая'}`
+        );
+      }
+
       for (let i = 0; i < sources.length; i += 1) {
         if (this.cancelled) break;
 
@@ -622,6 +807,8 @@ class BatchProcessor {
             source,
             shorts,
             overlay,
+            closeup,
+            split,
             outputFile,
             percent,
             encoder,
@@ -702,6 +889,8 @@ module.exports = {
   BatchProcessor,
   ENCODERS,
   DEFAULTS,
+  SPLIT_DEFAULTS,
+  normalizeSplit,
   VIDEO_EXTENSIONS,
   ProcessingCancelledError,
   ffmpegPath,
