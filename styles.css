@@ -398,9 +398,75 @@ input[type='range']:disabled {
   box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.25);
 }
 
-.overlay-body[data-disabled='true'] {
+.overlay-body[data-disabled='true'],
+.split-body[data-disabled='true'] {
   opacity: 0.45;
   pointer-events: none;
+}
+
+/* ---------------------------------------------------------- Сплит-скрин */
+.split-columns {
+  margin-top: 2px;
+}
+
+.split-column {
+  background: #131a28;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 12px 13px 13px;
+}
+
+.split-column h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.split-column .field:last-child {
+  margin-bottom: 0;
+}
+
+.split-preview {
+  display: flex;
+  align-items: stretch;
+  height: 68px;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.split-preview__left,
+.split-preview__right {
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #dfe7fa;
+  text-align: center;
+  padding: 0 6px;
+  overflow: hidden;
+  transition: flex-basis 0.2s ease;
+}
+
+.split-preview__left {
+  flex: 0 0 50%;
+  background: linear-gradient(180deg, #2b3a5c, #223049);
+}
+
+.split-preview__right {
+  flex: 1 1 auto;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+
+/* Полоса стыка расширяется вместе с настройкой мягкости границы. */
+.split-preview__seam {
+  flex: 0 0 2px;
+  background: linear-gradient(90deg, #223049, #6a63ff);
+  transition: flex-basis 0.2s ease;
 }
 
 /* --------------------------------------------------------------- Схема */

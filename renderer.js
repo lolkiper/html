@@ -24,6 +24,26 @@ const el = {
   overlayOpacity: document.getElementById('overlay-opacity'),
   overlayOpacityValue: document.getElementById('overlay-opacity-value'),
 
+  useSplit: document.getElementById('use-split'),
+  splitBody: document.getElementById('split-body'),
+  closeupFile: document.getElementById('closeup-file'),
+  closeupFileNote: document.getElementById('closeup-file-note'),
+  leftShare: document.getElementById('left-share'),
+  leftShareValue: document.getElementById('left-share-value'),
+  feather: document.getElementById('feather'),
+  featherValue: document.getElementById('feather-value'),
+  leftZoom: document.getElementById('left-zoom'),
+  leftZoomValue: document.getElementById('left-zoom-value'),
+  leftOffset: document.getElementById('left-offset'),
+  leftOffsetValue: document.getElementById('left-offset-value'),
+  rightZoom: document.getElementById('right-zoom'),
+  rightZoomValue: document.getElementById('right-zoom-value'),
+  rightOffset: document.getElementById('right-offset'),
+  rightOffsetValue: document.getElementById('right-offset-value'),
+  splitPreviewLeft: document.getElementById('split-preview-left'),
+  splitPreviewSeam: document.getElementById('split-preview-seam'),
+  splitHint: document.getElementById('split-hint'),
+
   outputDir: document.getElementById('output-dir'),
   percent: document.getElementById('percent'),
   percentRange: document.getElementById('percent-range'),
@@ -57,6 +77,9 @@ const state = {
   running: false,
   logLines: []
 };
+
+const CLOSEUP_HINT = 'Короткое видео зациклится, длинное — обрежется. Звук берётся из основного ролика.';
+const OVERLAY_HINT = 'Короткий оверлей зациклится, длинный — обрежется по длине результата.';
 
 // ------------------------------------------------------------------ Утилиты
 
@@ -144,7 +167,9 @@ function setRunning(running) {
   const lockable = [
     el.sourceDir, el.shortsFile, el.overlayFile, el.outputDir,
     el.percent, el.percentRange, el.encoder, el.useOverlay,
-    el.overlayOpacity, el.verbose
+    el.overlayOpacity, el.verbose,
+    el.useSplit, el.closeupFile, el.leftShare, el.feather,
+    el.leftZoom, el.leftOffset, el.rightZoom, el.rightOffset
   ];
   lockable.forEach((node) => {
     node.disabled = running;
@@ -158,6 +183,38 @@ function updateOverlayState() {
   const enabled = el.useOverlay.checked;
   el.overlayBody.dataset.disabled = String(!enabled);
   el.schemeOverlay.dataset.off = String(!enabled);
+}
+
+function signedPercent(value) {
+  const number = Number(value);
+  if (number === 0) return '0%';
+  return `${number > 0 ? '+' : '−'}${Math.abs(number)}%`;
+}
+
+function updateSplitState() {
+  el.splitBody.dataset.disabled = String(!el.useSplit.checked);
+}
+
+/** Подписи ползунков и мини-схема раскладки. */
+function updateSplitControls() {
+  const share = Number(el.leftShare.value);
+  const feather = Number(el.feather.value);
+  const leftOffset = Number(el.leftOffset.value);
+
+  el.leftShareValue.textContent = `${share}%`;
+  el.featherValue.textContent = feather ? `${feather} px` : 'чёткая';
+  el.leftZoomValue.textContent = `${Number(el.leftZoom.value).toFixed(2)}×`;
+  el.rightZoomValue.textContent = `${Number(el.rightZoom.value).toFixed(2)}×`;
+  el.leftOffsetValue.textContent = signedPercent(leftOffset);
+  el.rightOffsetValue.textContent = signedPercent(el.rightOffset.value);
+
+  el.splitPreviewLeft.style.flexBasis = `${share}%`;
+  el.splitPreviewSeam.style.flexBasis = `${Math.max(2, feather / 3)}px`;
+
+  const pixels = Math.round((1920 * leftOffset) / 100);
+  el.splitHint.textContent =
+    `Сдвиг задан в процентах от ширины кадра: ${signedPercent(leftOffset)} это ` +
+    `${pixels} px при ширине 1920.`;
 }
 
 function updateScheme() {
@@ -179,6 +236,16 @@ function collectSettings() {
     useOverlay: el.useOverlay.checked,
     overlayFile: el.overlayFile.value.trim(),
     overlayOpacity: Number(el.overlayOpacity.value),
+    useSplit: el.useSplit.checked,
+    closeupFile: el.closeupFile.value.trim(),
+    split: {
+      leftShare: Number(el.leftShare.value),
+      feather: Number(el.feather.value),
+      leftZoom: Number(el.leftZoom.value),
+      leftOffset: Number(el.leftOffset.value),
+      rightZoom: Number(el.rightZoom.value),
+      rightOffset: Number(el.rightOffset.value)
+    },
     outputDir: el.outputDir.value.trim(),
     percent: clamp(Number(el.percent.value) || 90, 50, 99),
     encoder: el.encoder.value,
@@ -206,9 +273,22 @@ function restoreSettings() {
   el.sourceDir.value = saved.sourceDir || '';
   el.shortsFile.value = saved.shortsFile || '';
   el.overlayFile.value = saved.overlayFile || '';
+  el.closeupFile.value = saved.closeupFile || '';
   el.outputDir.value = saved.outputDir || '';
   el.useOverlay.checked = Boolean(saved.useOverlay);
+  el.useSplit.checked = Boolean(saved.useSplit);
   el.verbose.checked = Boolean(saved.verbose);
+
+  const split = saved.split || {};
+  const restoreRange = (node, value) => {
+    if (Number.isFinite(Number(value))) node.value = value;
+  };
+  restoreRange(el.leftShare, split.leftShare);
+  restoreRange(el.feather, split.feather);
+  restoreRange(el.leftZoom, split.leftZoom);
+  restoreRange(el.leftOffset, split.leftOffset);
+  restoreRange(el.rightZoom, split.rightZoom);
+  restoreRange(el.rightOffset, split.rightOffset);
 
   if (Number.isFinite(saved.percent)) {
     el.percent.value = clamp(saved.percent, 50, 99);
@@ -279,11 +359,10 @@ function refreshAllInfo() {
   refreshSourceInfo();
   refreshMediaInfo(el.shortsFile, el.shortsFileNote, 'Один видеофайл любого формата.');
   if (el.useOverlay.checked) {
-    refreshMediaInfo(
-      el.overlayFile,
-      el.overlayFileNote,
-      'Короткий оверлей зациклится, длинный — обрежется по длине результата.'
-    );
+    refreshMediaInfo(el.overlayFile, el.overlayFileNote, OVERLAY_HINT);
+  }
+  if (el.useSplit.checked) {
+    refreshMediaInfo(el.closeupFile, el.closeupFileNote, CLOSEUP_HINT);
   }
 }
 
@@ -305,6 +384,10 @@ const PICKERS = {
   'overlay-file': async () => window.api.pickVideo({
     title: 'Выберите видео-оверлей',
     defaultPath: el.overlayFile.value.trim()
+  }),
+  'closeup-file': async () => window.api.pickVideo({
+    title: 'Выберите видео для правой половины',
+    defaultPath: el.closeupFile.value.trim()
   })
 };
 
@@ -325,16 +408,15 @@ document.querySelectorAll('[data-pick]').forEach((button) => {
       refreshMediaInfo(el.shortsFile, el.shortsFileNote, 'Один видеофайл любого формата.');
     }
     if (key === 'overlay-file') {
-      refreshMediaInfo(
-        el.overlayFile,
-        el.overlayFileNote,
-        'Короткий оверлей зациклится, длинный — обрежется по длине результата.'
-      );
+      refreshMediaInfo(el.overlayFile, el.overlayFileNote, OVERLAY_HINT);
+    }
+    if (key === 'closeup-file') {
+      refreshMediaInfo(el.closeupFile, el.closeupFileNote, CLOSEUP_HINT);
     }
   });
 });
 
-['source-dir', 'output-dir', 'shorts-file', 'overlay-file'].forEach((id) => {
+['source-dir', 'output-dir', 'shorts-file', 'overlay-file', 'closeup-file'].forEach((id) => {
   document.getElementById(id).addEventListener('change', () => {
     saveSettings();
     refreshAllInfo();
@@ -346,12 +428,21 @@ el.useOverlay.addEventListener('change', () => {
   updateOverlayState();
   saveSettings();
   if (el.useOverlay.checked) {
-    refreshMediaInfo(
-      el.overlayFile,
-      el.overlayFileNote,
-      'Короткий оверлей зациклится, длинный — обрежется по длине результата.'
-    );
+    refreshMediaInfo(el.overlayFile, el.overlayFileNote, OVERLAY_HINT);
   }
+});
+
+el.useSplit.addEventListener('change', () => {
+  updateSplitState();
+  saveSettings();
+  if (el.useSplit.checked) {
+    refreshMediaInfo(el.closeupFile, el.closeupFileNote, CLOSEUP_HINT);
+  }
+});
+
+[el.leftShare, el.feather, el.leftZoom, el.leftOffset, el.rightZoom, el.rightOffset].forEach((node) => {
+  node.addEventListener('input', updateSplitControls);
+  node.addEventListener('change', saveSettings);
 });
 
 el.overlayOpacity.addEventListener('input', () => {
@@ -416,6 +507,9 @@ el.start.addEventListener('click', async () => {
   if (!settings.shortsFile) problems.push('Не выбран файл Shorts.');
   if (!settings.outputDir) problems.push('Не выбрана папка для сохранения.');
   if (settings.useOverlay && !settings.overlayFile) problems.push('Включён оверлей, но файл не выбран.');
+  if (settings.useSplit && !settings.closeupFile) {
+    problems.push('Включён сплит-скрин, но видео для правой половины не выбрано.');
+  }
   if (problems.length) {
     problems.forEach((message) => appendLog('error', message));
     setBadge('Ошибка', 'error');
@@ -489,6 +583,7 @@ window.api.onDone((payload) => {
   clearLog();
   updateScheme();
   updateOverlayState();
+  updateSplitState();
 
   const info = await window.api.getAppInfo();
 
@@ -502,12 +597,22 @@ window.api.onDone((payload) => {
   el.percent.value = info.defaults.percent;
   el.percentRange.value = info.defaults.percent;
 
+  const splitDefaults = info.defaults.split || {};
+  el.leftShare.value = splitDefaults.leftShare;
+  el.feather.value = splitDefaults.feather;
+  el.leftZoom.value = splitDefaults.leftZoom;
+  el.leftOffset.value = splitDefaults.leftOffset;
+  el.rightZoom.value = splitDefaults.rightZoom;
+  el.rightOffset.value = splitDefaults.rightOffset;
+
   el.chipVersion.textContent = `v${info.version}`;
   el.chipFfmpeg.textContent = `FFmpeg: ${info.ffmpegPath}`;
   el.chipFfmpeg.title = `FFmpeg: ${info.ffmpegPath}\nFFprobe: ${info.ffprobePath}`;
 
   restoreSettings();
   updateOverlayState();
+  updateSplitState();
+  updateSplitControls();
   updateScheme();
 
   el.openOutput.disabled = !el.outputDir.value.trim();
