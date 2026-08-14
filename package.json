@@ -35,7 +35,9 @@
       "processor.js",
       "renderer.js",
       "index.html",
-      "styles.css"
+      "styles.css",
+      "!node_modules/ffprobe-static/bin/${/*}",
+      "node_modules/ffprobe-static/bin/${os}${/*}"
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",

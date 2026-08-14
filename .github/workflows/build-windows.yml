@@ -31,6 +31,20 @@ jobs:
       - name: Build installer and portable exe
         run: npx electron-builder --win --publish never
 
+      # Сборка исключает бинарники ffprobe для чужих платформ — убеждаемся,
+      # что нужный при этом остался на месте и приложение не окажется битым.
+      - name: Verify bundled binaries
+        shell: pwsh
+        run: |
+          $root = 'dist/win-unpacked/resources/app.asar.unpacked/node_modules'
+          foreach ($binary in @("$root/ffmpeg-static/ffmpeg.exe", "$root/ffprobe-static/bin/win32/x64/ffprobe.exe")) {
+            if (-not (Test-Path $binary)) { throw "Missing bundled binary: $binary" }
+            Write-Host ("OK {0} ({1:N1} MB)" -f $binary, ((Get-Item $binary).Length / 1MB))
+          }
+          Get-ChildItem dist -Filter *.exe | ForEach-Object {
+            Write-Host ("{0} — {1:N1} MB" -f $_.Name, ($_.Length / 1MB))
+          }
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
