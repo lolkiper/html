@@ -679,7 +679,9 @@ function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration }) {
         `[cu_tail][cu_loop]concat=n=2:v=1:a=0,` +
           `trim=duration=${dur},setpts=PTS-STARTPTS,fps=${target.fps},setsar=1[cu_src]`
       ],
-      prep: '[cu_src]'
+      // Дальше coverFilter дописывает `,scale=...` — поэтому здесь уже должна
+      // быть цепочка фильтров, а не голая метка `[cu_src],scale` (пустой фильтр).
+      prep: '[cu_src]setsar=1'
     };
   }
 

@@ -588,14 +588,17 @@ async function main() {
   check(wrapSummary.done === 2, 'обёртка крупного плана: два файла собраны', `done=${wrapSummary.done}`);
 
   const wrap2 = path.join(seqWrapOut, 'es2.mov');
-  // Крупный план 7с: 0–4 magenta, 4–7 yellow. es1 (6с) забирает 0–6.
-  // es2 начинается с 6-й: 1с yellow, затем снова magenta с начала файла.
-  check(colorsMatch(samplePoint(wrap2, 0.4, 810, 540), [255, 255, 0]),
-    'es2 справа сразу после обёртки: ещё хвост жёлтого',
-    String(samplePoint(wrap2, 0.4, 810, 540)));
-  check(colorsMatch(samplePoint(wrap2, 2.0, 810, 540), [255, 0, 255]),
-    'es2 справа после конца файла: крупный план начался сначала (пурпурный)',
-    String(samplePoint(wrap2, 2.0, 810, 540)));
+  check(fs.existsSync(wrap2), 'обёртка: es2.mov записан');
+  if (fs.existsSync(wrap2)) {
+    // Крупный план 7с: 0–4 magenta, 4–7 yellow. es1 (6с) забирает 0–6.
+    // es2 начинается с 6-й: 1с yellow, затем снова magenta с начала файла.
+    check(colorsMatch(samplePoint(wrap2, 0.4, 810, 540), [255, 255, 0]),
+      'es2 справа сразу после обёртки: ещё хвост жёлтого',
+      String(samplePoint(wrap2, 0.4, 810, 540)));
+    check(colorsMatch(samplePoint(wrap2, 2.0, 810, 540), [255, 0, 255]),
+      'es2 справа после конца файла: крупный план начался сначала (пурпурный)',
+      String(samplePoint(wrap2, 2.0, 810, 540)));
+  }
 
   console.log('\n6) Проверяем остановку обработки…');
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });
