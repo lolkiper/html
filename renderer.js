@@ -629,7 +629,7 @@ window.api.onDone((payload) => {
   const hardware = info.hardware || {};
   if (hardware.gpu) {
     el.accelNote.textContent =
-      `Найдена ${hardware.gpu}. Склейка на 1–2 ядрах CPU, кодирование на видеокарте, процесс с низким приоритетом.`;
+      `Найдена ${hardware.gpu}. Склейка на 1–2 ядрах CPU, кодирование не быстрее 1.5×, без выброса на стыке файлов.`;
   } else if (hardware.compiledGpu && hardware.compiledGpu.length) {
     el.accelNote.textContent =
       `FFmpeg видит ${hardware.compiledGpu.join(', ')}, но тестовый кадр не прошёл` +

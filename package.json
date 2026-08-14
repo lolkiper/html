@@ -1,7 +1,7 @@
 {
   "name": "shorts-inserter",
   "productName": "Shorts Inserter",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "Batch tool that inserts a Shorts clip into the middle of every source video and optionally blends a full-length overlay. Electron + FFmpeg, no DaVinci Resolve required.",
   "main": "main.js",
   "author": "Shorts Inserter",

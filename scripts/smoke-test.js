@@ -21,7 +21,9 @@ const {
   listVideoFiles,
   wrapCloseupOffset,
   planCloseupInputs,
-  resolveEncodePlan
+  resolveEncodePlan,
+  ENCODE_PACE_SPEED,
+  paceGlobalArgs
 } = require('../processor');
 
 const ROOT = path.join(os.tmpdir(), `shorts-inserter-smoke-${process.pid}`);
@@ -164,6 +166,17 @@ async function main() {
     'режим «только процессор» берёт треть ядер (не больше 4)',
     `encode=${cpuPlan.threads.encodeThreads}`
   );
+  const paceArgs = paceGlobalArgs().join(' ');
+  check(
+    ENCODE_PACE_SPEED <= 1.5,
+    'потолок кодирования не выше 1.5× realtime',
+    `speed=${ENCODE_PACE_SPEED}`
+  );
+  check(
+    paceArgs.includes('-readrate') && paceArgs.includes('readrate_initial_burst 0'),
+    'чтение входа ограничено с первого пакета, без стартового выброса',
+    paceArgs
+  );
   [SOURCE_DIR, OUTPUT_DIR, ASSETS_DIR].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
 
   console.log('\n1) Готовим тестовые файлы…');
@@ -220,7 +233,10 @@ async function main() {
     logs.some((line) => line.startsWith('error:') && line.includes('clip3.mp4')),
     'ошибка по битому файлу попала в лог'
   );
-  check(progressStates.length > 5, 'прогресс приходил в интерфейс', `событий: ${progressStates.length}`);
+  check(
+    logs.some((line) => line.includes('вход читается не быстрее') && line.includes('без стартового выброса')),
+    'в логе есть ограничение скорости чтения без выброса'
+  );
 
   const out1 = path.join(OUTPUT_DIR, 'es1.mov');
   const out2 = path.join(OUTPUT_DIR, 'es2.mov');

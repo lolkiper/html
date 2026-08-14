@@ -32,11 +32,36 @@ const SCALE_FLAGS = 'fast_bilinear';
 /** 60 fps исходник гоняется в 30 — вдвое меньше кадров на фильтрах. */
 const MAX_OUTPUT_FPS = 30;
 /**
- * Потолок скорости кодирования относительно realtime.
- * 8× при 30 fps ≈ 240 кадров/с — RTX 3060 NVENC заполняется и в диспетчере
- * это игла до 100% на каждом файле. 2.5× ≈ 75 кадров/с, энкодер ~30%.
+ * Потолок относительно realtime. Фильтр realtime стоит в КОНЦЕ графа, поэтому
+ * FFmpeg всё равно вычитывает входы пачкой и NVENC на стыке файлов уходит в 100%.
+ * -readrate душит демультиплексор с первого пакета; burst=0 — без 0.5 с разгона.
+ * 1.5× при 30 fps ≈ 45 кадров/с, Video Encode на RTX 3060 ~15–25%.
  */
-const ENCODE_PACE_SPEED = 2.5;
+const ENCODE_PACE_SPEED = 1.5;
+/** Пауза между роликами, чтобы сессия NVENC успела закрыться и график сбросился. */
+const INTER_FILE_PAUSE_MS = 900;
+
+function paceGlobalArgs() {
+  return [
+    '-readrate', String(ENCODE_PACE_SPEED),
+    '-readrate_initial_burst', '0'
+  ];
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pauseBetweenFiles(isCancelled) {
+  const step = 100;
+  let left = INTER_FILE_PAUSE_MS;
+  while (left > 0) {
+    if (typeof isCancelled === 'function' && isCancelled()) return;
+    const chunk = Math.min(step, left);
+    await sleep(chunk);
+    left -= chunk;
+  }
+}
 
 /** Пресеты кодеков для контейнера .mov. */
 const ENCODERS = {
@@ -121,8 +146,8 @@ const GPU_H264 = [
     id: 'h264_nvenc',
     vendor: 'NVIDIA NVENC',
     extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '8', '-strict_gop', '1', '-bf', '0', '-async_depth', '1'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '8', '-strict_gop', '1', '-bf', '0', '-async_depth', '1'],
+      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1'],
+      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1'],
       ['-gpu', '0', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
       ['-gpu', '1', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
       ['-gpu', '0', '-preset', 'p1'],
@@ -166,8 +191,8 @@ const GPU_H265 = [
     id: 'hevc_nvenc',
     vendor: 'NVIDIA NVENC',
     extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '8', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-tag:v', 'hvc1'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '8', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-tag:v', 'hvc1'],
+      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-tag:v', 'hvc1'],
+      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-tag:v', 'hvc1'],
       ['-gpu', '0', '-preset', 'p4', '-tag:v', 'hvc1'],
       ['-gpu', '1', '-preset', 'p4', '-tag:v', 'hvc1'],
       ['-gpu', '0', '-tag:v', 'hvc1'],
@@ -1044,8 +1069,8 @@ function buildGraph({
   // возьмёт профиль кодека, — поэтому кадр всегда приводится к целевому формату.
   filters.push(`[${videoOut}]format=${target.pixelFormat}[vfinal]`);
 
-  // ProRes и так медленный. H.264/H.265 без лимита мгновенно забивают NVENC
-  // очередью кадров — в диспетчере это иглы до 100% на каждом новом файле.
+  // realtime — страховка, если сборка FFmpeg без -readrate. Основной тормоз —
+  // чтение входа (см. paceGlobalArgs), иначе декодер всё равно бежит вперёд.
   if (target.pixelFormat === 'yuv420p') {
     filters.push(
       `[vfinal]setpts=PTS-STARTPTS,realtime=speed=${ENCODE_PACE_SPEED}[vpaced]`
@@ -1053,10 +1078,10 @@ function buildGraph({
     filters.push(
       `[ca]asetpts=PTS-STARTPTS,arealtime=speed=${ENCODE_PACE_SPEED}[apaced]`
     );
-    return { inputs, filters, videoOut: 'vpaced', audioOut: 'apaced', layout };
+    return { inputs, filters, videoOut: 'vpaced', audioOut: 'apaced', layout, pace: true };
   }
 
-  return { inputs, filters, videoOut: 'vfinal', audioOut: 'ca', layout };
+  return { inputs, filters, videoOut: 'vfinal', audioOut: 'ca', layout, pace: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -1118,7 +1143,7 @@ function renderVideo(params) {
   );
   const totalDuration = source.duration + shorts.duration;
 
-  const { inputs, filters, videoOut, audioOut, layout } = buildGraph({
+  const { inputs, filters, videoOut, audioOut, layout, pace } = buildGraph({
     source,
     shorts,
     overlay,
@@ -1138,6 +1163,9 @@ function renderVideo(params) {
       const added = command.input(input.file);
       // Аппаратное декодирование — до -i. На фильтрах кадры всё равно в RAM.
       if (plan.hwaccel) added.inputOptions(['-hwaccel', plan.hwaccel]);
+      // readrate тоже до -i: иначе FFmpeg вычитывает файл пачкой, а realtime
+      // в конце графа уже не спасает Video Encode на старте.
+      if (pace) added.inputOptions(paceGlobalArgs());
       if (input.options && input.options.length) added.inputOptions(input.options);
     });
 
@@ -1304,6 +1332,13 @@ class BatchProcessor {
       this.log('info', `FFmpeg: ${ffmpegPath}`);
       this.log('info', `Кодек: ${ENCODERS[encoder].label}, обрезка: ${percent}%`);
       this.log('info', `Нагрузка: ${plan.label}`);
+      if (plan.pixelFormat === 'yuv420p') {
+        this.log(
+          'info',
+          `Скорость: вход читается не быстрее ${ENCODE_PACE_SPEED}×, без стартового выброса ` +
+            `(иначе на стыке файлов Video Encode на мгновение уходит в 100%)`
+        );
+      }
       if (hardware.compiledGpu && hardware.compiledGpu.length) {
         this.log('info', `GPU-кодеки в FFmpeg: ${hardware.compiledGpu.join(', ')}`);
       }
@@ -1496,6 +1531,10 @@ class BatchProcessor {
           overallPercent: ((i + 1) / sources.length) * 100,
           status: `Завершено ${i + 1} из ${sources.length}`
         });
+
+        if (i < sources.length - 1 && !this.cancelled) {
+          await pauseBetweenFiles(() => this.cancelled);
+        }
       }
 
       summary.cancelled = this.cancelled;
@@ -1531,5 +1570,7 @@ module.exports = {
   wrapCloseupOffset,
   planCloseupInputs,
   isVideoFile,
-  shortenFfmpegError
+  shortenFfmpegError,
+  ENCODE_PACE_SPEED,
+  paceGlobalArgs
 };
