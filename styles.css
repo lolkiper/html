@@ -521,11 +521,17 @@ input[type='range']:disabled {
   border-radius: 8px;
 }
 
+/* Кнопки запуска не должны уезжать за пределы прокручиваемой колонки. */
 .actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  padding-bottom: 4px;
+  padding: 12px 0 6px;
+  margin-top: auto;
+  background: linear-gradient(180deg, rgba(13, 17, 23, 0) 0%, rgba(13, 17, 23, 0.94) 45%, var(--bg) 100%);
 }
 
 .actions .btn--primary {

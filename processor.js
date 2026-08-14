@@ -396,7 +396,13 @@ function renderVideo(params) {
     pixelFormat: preset.pixelFormat
   };
 
-  const splitAt = clamp((source.duration * percent) / 100, 0.05, Math.max(0.05, source.duration - 0.05));
+  // У головы и хвоста должно остаться хотя бы по паре кадров, иначе concat получит пустой вход.
+  const minSegment = Math.max(0.05, 2 / source.fps);
+  const splitAt = clamp(
+    (source.duration * percent) / 100,
+    minSegment,
+    Math.max(minSegment, source.duration - minSegment)
+  );
   const totalDuration = source.duration + shorts.duration;
 
   const { inputs, filters, videoOut, audioOut } = buildGraph({
