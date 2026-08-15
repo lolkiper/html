@@ -22,6 +22,8 @@ const {
   listVideoFiles,
   wrapCloseupOffset,
   planCloseupInputs,
+  isolateJobTimeline,
+  segmentInputOptions,
   resolveEncodePlan,
   ENCODE_PACE_SPEED,
   INTER_FILE_DELAY_MS,
@@ -123,6 +125,24 @@ function makeSolidVideo({ file, color, width, height, duration, fps }) {
     '-f', 'lavfi',
     '-i', `color=c=${color}:size=${width}x${height}:rate=${fps}:duration=${duration}`,
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    file
+  ]);
+}
+
+/** Два цвета подряд и редкие кейфреймы — ловит перенос хвоста 20% на следующий Shorts. */
+function makeTwoToneVideo({ file, headColor, tailColor, duration, headShare, fps, gop = 250 }) {
+  const headDur = duration * headShare;
+  const tailDur = Math.max(0.05, duration - headDur);
+  ffmpegRun([
+    '-filter_complex',
+    `color=c=${headColor}:s=640x360:r=${fps}:d=${headDur.toFixed(3)}[h];` +
+      `color=c=${tailColor}:s=640x360:r=${fps}:d=${tailDur.toFixed(3)}[t];` +
+      '[h][t]concat=n=2:v=1:a=0[v]',
+    '-map', '[v]',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-x264-params', `keyint=${gop}:min-keyint=${gop}:scenecut=0`,
+    '-pix_fmt', 'yuv420p',
     file
   ]);
 }
@@ -587,6 +607,22 @@ async function main() {
   check(Math.abs(wrapCloseupOffset(6, 10) - 6) < 1e-9, 'смещение: внутри файла без обёртки');
   check(wrapCloseupOffset(10, 10) === 0, 'смещение: ровно длина файла — снова начало');
   check(Math.abs(wrapCloseupOffset(14, 10) - 4) < 1e-9, 'смещение: после конца файла — остаток');
+  check(
+    Math.abs(wrapCloseupOffset(5.985, 6) - 5.985) < 1e-9,
+    'смещение у конца файла не прыгает в 0 и не повторяет начало следующего Shorts'
+  );
+  const frozen = isolateJobTimeline({ closeupStart: 3.5, splitAt: 4, duration: 6, percent: 80 });
+  frozen.closeupStart = 99;
+  const nextFrozen = isolateJobTimeline({ closeupStart: 6, splitAt: 4, duration: 6, percent: 80 });
+  check(nextFrozen.closeupStart === 6, 'таймлайн следующего Shorts не наследует playhead предыдущего');
+  const tailOpts = segmentInputOptions(4, 1).join(' ');
+  check(
+    tailOpts.includes('-ss 4.000') && tailOpts.includes('-t 1.000') && tailOpts.includes('-accurate_seek'),
+    'хвост 20% читается со своей позиции и со своим лимитом',
+    tailOpts
+  );
+  const headOpts = segmentInputOptions(0, 4).join(' ');
+  check(headOpts.includes('-ss 0') && headOpts.includes('-t 4.000'), 'голова 80% всегда с нуля, не с хвоста предыдущего');
 
   const seqDir = path.join(ROOT, 'seq');
   const seqOut = path.join(ROOT, 'seq-out');
@@ -689,6 +725,150 @@ async function main() {
       'es2 справа после конца файла: крупный план начался сначала (пурпурный)',
       String(samplePoint(wrap2, 2.0, 810, 540)));
   }
+
+  console.log('\n5c) 10 подряд Shorts: 80%+20% без переноса хвоста на следующий ролик…');
+  const chainDir = path.join(ROOT, 'chain');
+  const chainOut = path.join(ROOT, 'chain-out');
+  fs.mkdirSync(chainDir, { recursive: true });
+
+  const chainClips = [
+    { head: 'red', headRgb: [255, 0, 0], tail: 'white', tailRgb: [255, 255, 255] },
+    { head: 'lime', headRgb: [0, 255, 0], tail: 'black', tailRgb: [0, 0, 0] },
+    { head: 'blue', headRgb: [0, 0, 255], tail: 'gray', tailRgb: [128, 128, 128] },
+    { head: 'yellow', headRgb: [255, 255, 0], tail: 'navy', tailRgb: [0, 0, 128] },
+    { head: 'cyan', headRgb: [0, 255, 255], tail: 'maroon', tailRgb: [128, 0, 0] },
+    { head: 'magenta', headRgb: [255, 0, 255], tail: 'olive', tailRgb: [128, 128, 0] },
+    { head: 'orange', headRgb: [255, 165, 0], tail: 'teal', tailRgb: [0, 128, 128] },
+    { head: 'pink', headRgb: [255, 192, 203], tail: 'purple', tailRgb: [128, 0, 128] },
+    { head: 'brown', headRgb: [165, 42, 42], tail: 'silver', tailRgb: [192, 192, 192] },
+    { head: 'green', headRgb: [0, 128, 0], tail: 'gold', tailRgb: [255, 215, 0] }
+  ];
+  const closeupChapters = [
+    { color: 'magenta', rgb: [255, 0, 255] },
+    { color: 'yellow', rgb: [255, 255, 0] },
+    { color: 'cyan', rgb: [0, 255, 255] },
+    { color: 'orange', rgb: [255, 165, 0] },
+    { color: 'white', rgb: [255, 255, 255] },
+    { color: 'red', rgb: [255, 0, 0] },
+    { color: 'lime', rgb: [0, 255, 0] },
+    { color: 'blue', rgb: [0, 0, 255] },
+    { color: 'pink', rgb: [255, 192, 203] },
+    { color: 'purple', rgb: [128, 0, 128] }
+  ];
+
+  chainClips.forEach((clip, i) => {
+    makeTwoToneVideo({
+      file: path.join(chainDir, `${String(i + 1).padStart(2, '0')}-${clip.head}.mp4`),
+      headColor: clip.head,
+      tailColor: clip.tail,
+      duration: 5,
+      headShare: 0.8,
+      fps: 30,
+      gop: 250
+    });
+  });
+
+  const chainCloseup = path.join(ASSETS_DIR, 'chain-closeup.mp4');
+  makeConcatColorVideo({
+    file: chainCloseup,
+    parts: closeupChapters.map((chapter) => ({ color: chapter.color, duration: 7 })),
+    width: 640,
+    height: 360,
+    fps: 30
+  });
+
+  const chainBatch = new BatchProcessor(
+    {
+      sourceDir: chainDir,
+      shortsFile: greenShorts,
+      useSplit: true,
+      closeupFile: chainCloseup,
+      split: { leftShare: 50, feather: 0, leftZoom: 1, leftOffset: 0, rightZoom: 1, rightOffset: 0 },
+      outputDir: chainOut,
+      frame: 'square1080',
+      percent: 80,
+      encoder: 'h264'
+    },
+    { onLog: (level, message) => console.log(`    [${level}] ${message}`) }
+  );
+  const chainSummary = await chainBatch.run();
+  check(chainSummary.done === 10, 'цепочка: собраны 10 Shorts подряд', `done=${chainSummary.done}`);
+
+  const leftoverChainTemps = fs.readdirSync(chainOut).filter((name) => (
+    name.startsWith('.shorts-') || name.startsWith('shorts-seg-')
+  ));
+  check(leftoverChainTemps.length === 0, 'цепочка: временные данные предыдущего Shorts не остаются', leftoverChainTemps.join(', '));
+
+  for (let i = 0; i < chainClips.length; i += 1) {
+    const file = path.join(chainOut, `es${i + 1}.mov`);
+    const clip = chainClips[i];
+    const prev = i > 0 ? chainClips[i - 1] : null;
+    check(fs.existsSync(file), `цепочка: есть es${i + 1}.mov`);
+    if (!fs.existsSync(file)) continue;
+
+    const startLeft = samplePoint(file, 0.35, 270, 540);
+    const midLeft = samplePoint(file, 4.6, 270, 540);
+    const endLeft = samplePoint(file, 6.6, 270, 540);
+    const startRight = samplePoint(file, 0.35, 810, 540);
+
+    check(
+      colorsMatch(startLeft, clip.headRgb, 45),
+      `es${i + 1} начинается с 80% своего исходника (${clip.head}), а не с хвоста предыдущего`,
+      `rgb=${startLeft}`
+    );
+    if (prev) {
+      check(
+        !colorsMatch(startLeft, prev.tailRgb, 40),
+        `es${i + 1}: 20% предыдущего (${prev.tail}) не перенесены в начало`,
+        `rgb=${startLeft}`
+      );
+    }
+    check(
+      colorsMatch(midLeft, [0, 255, 0], 45),
+      `es${i + 1}: после 80% вставлен Shorts`,
+      `rgb=${midLeft}`
+    );
+    check(
+      colorsMatch(endLeft, clip.tailRgb, 50),
+      `es${i + 1}: в конце свой хвост 20% (${clip.tail})`,
+      `rgb=${endLeft}`
+    );
+    check(
+      colorsMatch(startRight, closeupChapters[i].rgb, 45),
+      `es${i + 1} справа: крупный план с своей секунды (${closeupChapters[i].color}), без повтора предыдущего хвоста`,
+      `rgb=${startRight}`
+    );
+  }
+
+  const namedTransitions = [
+    ['A', 'B', 0, 1],
+    ['B', 'C', 1, 2],
+    ['C', 'D', 2, 3],
+    ['D', 'E', 3, 4]
+  ];
+  namedTransitions.forEach(([from, to, a, b]) => {
+    const first = path.join(chainOut, `es${a + 1}.mov`);
+    const second = path.join(chainOut, `es${b + 1}.mov`);
+    if (!fs.existsSync(first) || !fs.existsSync(second)) return;
+    const endOfFirst = samplePoint(first, 6.6, 270, 540);
+    const startOfSecond = samplePoint(second, 0.35, 270, 540);
+    const endRight = samplePoint(first, 6.6, 810, 540);
+    const startRight = samplePoint(second, 0.35, 810, 540);
+    check(
+      colorsMatch(endOfFirst, chainClips[a].tailRgb, 50) &&
+        colorsMatch(startOfSecond, chainClips[b].headRgb, 45) &&
+        !colorsMatch(startOfSecond, chainClips[a].tailRgb, 40),
+      `переход ${from} → ${to}: конец es${a + 1} = 20% ${from}, начало es${b + 1} = 80% ${to}`,
+      `end=${endOfFirst} start=${startOfSecond}`
+    );
+    check(
+      colorsMatch(endRight, closeupChapters[a].rgb, 45) &&
+        colorsMatch(startRight, closeupChapters[b].rgb, 45) &&
+        !colorsMatch(startRight, closeupChapters[a].rgb, 35),
+      `переход ${from} → ${to} справа: крупный план продолжается, хвост ${from} не повторяется в начале ${to}`,
+      `endR=${endRight} startR=${startRight}`
+    );
+  });
 
   console.log('\n6) Проверяем остановку обработки…');
   fs.rmSync(OUTPUT_DIR, { recursive: true, force: true });

@@ -679,10 +679,13 @@ function fitStep(target, src) {
   );
 }
 
-function videoSegmentFilter(inputLabel, outputLabel, target, inputFps, srcSize) {
+function videoSegmentFilter(inputLabel, outputLabel, target, inputFps, srcSize, duration) {
+  const trim = Number.isFinite(duration) && duration > 0
+    ? `trim=duration=${duration.toFixed(3)},setpts=PTS-STARTPTS`
+    : 'setpts=PTS-STARTPTS';
   return (
     `[${inputLabel}]${filterChain(
-      'setpts=PTS-STARTPTS',
+      trim,
       needsFpsConvert(target.fps, inputFps) ? `fps=${target.fps}` : '',
       fitStep(target, srcSize),
       'setsar=1',
@@ -691,12 +694,35 @@ function videoSegmentFilter(inputLabel, outputLabel, target, inputFps, srcSize) 
   );
 }
 
+/** Один вход ролика: своя позиция и свой лимит, без хвоста предыдущего файла. */
+function segmentInputOptions(start, duration) {
+  const options = ['-accurate_seek', '-ss', Number.isFinite(start) && start > 0 ? start.toFixed(3) : '0'];
+  if (Number.isFinite(duration) && duration > 0) options.push('-t', duration.toFixed(3));
+  return options;
+}
+
+/**
+ * Замороженные числа одного Shorts. Следующий ролик не должен увидеть
+ * хвост 20%, playhead или длительность предыдущей операции.
+ */
+function isolateJobTimeline({ closeupStart, splitAt, duration, percent }) {
+  return {
+    closeupStart: Number(closeupStart) || 0,
+    splitAt: Number(splitAt),
+    duration: Number(duration),
+    percent: Number(percent)
+  };
+}
+
 const AUDIO_FORMAT_FILTER =
   `aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=${AUDIO_LAYOUT}`;
 
-function audioSegmentFilter(inputLabel, outputLabel) {
+function audioSegmentFilter(inputLabel, outputLabel, duration) {
+  const trim = Number.isFinite(duration) && duration > 0
+    ? `atrim=duration=${duration.toFixed(3)},`
+    : '';
   return (
-    `[${inputLabel}]asetpts=PTS-STARTPTS,aresample=${AUDIO_SAMPLE_RATE}:first_pts=0,` +
+    `[${inputLabel}]${trim}asetpts=PTS-STARTPTS,aresample=${AUDIO_SAMPLE_RATE}:first_pts=0,` +
     `${AUDIO_FORMAT_FILTER}[${outputLabel}]`
   );
 }
@@ -781,7 +807,9 @@ function wrapCloseupOffset(start, duration) {
   if (!Number.isFinite(start) || !Number.isFinite(duration) || duration <= 0) return 0;
   let offset = start % duration;
   if (offset < 0) offset += duration;
-  if (offset < 0.02 || duration - offset < 0.02) return 0;
+  // Только численный хвост float, без порога 20 мс: иначе playhead у конца
+  // файла прыгает в 0 и начало крупного плана повторяется в следующем Shorts.
+  if (offset < 1e-4 || duration - offset < 1e-4) return 0;
   return offset;
 }
 
@@ -797,15 +825,17 @@ function planCloseupInputs(closeup, startSec, neededSec) {
   const offset = wrapCloseupOffset(startSec, duration);
   const needed = Math.max(0.05, Number(neededSec) || 0);
   const remaining = duration - offset;
-  const pad = 0.2;
+  const pad = 0.05;
 
-  if (!closeup || !closeup.file) return { inputs: [], wrap: false, offset: 0 };
+  if (!closeup || !closeup.file) return { inputs: [], wrap: false, offset: 0, remaining, needed };
 
   if (offset === 0) {
     return {
       inputs: [{ file: closeup.file, options: ['-stream_loop', '-1'] }],
       wrap: false,
-      offset: 0
+      offset: 0,
+      remaining,
+      needed
     };
   }
 
@@ -816,33 +846,39 @@ function planCloseupInputs(closeup, startSec, neededSec) {
         options: ['-ss', offset.toFixed(3), '-t', (needed + pad).toFixed(3)]
       }],
       wrap: false,
-      offset
+      offset,
+      remaining,
+      needed
     };
   }
 
   return {
     inputs: [
-      { file: closeup.file, options: ['-ss', offset.toFixed(3)] },
+      { file: closeup.file, options: ['-ss', offset.toFixed(3), '-t', (remaining + pad).toFixed(3)] },
       { file: closeup.file, options: ['-stream_loop', '-1'] }
     ],
     wrap: true,
-    offset
+    offset,
+    remaining,
+    needed
   };
 }
 
-function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeupFps, prefix = '' }) {
+function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeupFps, prefix = '', remaining = 0 }) {
   const fps = needsFpsConvert(target.fps, closeupFps) ? `fps=${target.fps},` : '';
   const tail = prefixed(prefix, 'cu_tail');
   const loop = prefixed(prefix, 'cu_loop');
   const src = prefixed(prefix, 'cu_src');
+  const dur = Math.max(0.05, duration);
   if (wrap) {
-    const dur = Math.max(0.05, duration).toFixed(3);
+    const tailDur = Math.max(0.05, Number(remaining) || 0).toFixed(3);
+    const loopDur = Math.max(0.05, dur - Number(tailDur)).toFixed(3);
     return {
       filters: [
-        `[${closeupIndex}:v:0]setpts=PTS-STARTPTS[${tail}]`,
-        `[${closeupIndex + 1}:v:0]setpts=PTS-STARTPTS[${loop}]`,
+        `[${closeupIndex}:v:0]trim=duration=${tailDur},setpts=PTS-STARTPTS[${tail}]`,
+        `[${closeupIndex + 1}:v:0]trim=duration=${loopDur},setpts=PTS-STARTPTS[${loop}]`,
         `[${tail}][${loop}]concat=n=2:v=1:a=0,` +
-          `trim=duration=${dur},setpts=PTS-STARTPTS,${fps}setsar=1[${src}]`
+          `trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,${fps}setsar=1[${src}]`
       ],
       // Дальше coverFilter дописывает `,scale=...` — поэтому здесь уже должна
       // быть цепочка фильтров, а не голая метка `[cu_src],scale` (пустой фильтр).
@@ -852,7 +888,7 @@ function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeup
 
   return {
     filters: [],
-    prep: `[${closeupIndex}:v:0]setpts=PTS-STARTPTS,${fps}setsar=1`
+    prep: `[${closeupIndex}:v:0]trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,${fps}setsar=1`
   };
 }
 
@@ -873,7 +909,8 @@ function buildSplitFilters({
   target,
   split,
   duration,
-  prefix = ''
+  prefix = '',
+  closeupRemaining = 0
 }) {
   const width = target.width;
   const height = target.height;
@@ -896,7 +933,8 @@ function buildSplitFilters({
     target,
     duration,
     closeupFps: closeup.fps,
-    prefix
+    prefix,
+    remaining: closeupRemaining
   });
   filters.push(...closeupPrep.filters);
   const rightPrep = closeupPrep.prep;
@@ -1000,11 +1038,11 @@ function buildGraph({
     : target;
 
   const headIndex = inputBase + inputs.length;
-  inputs.push({ file: source.file, options: ['-t', headDuration.toFixed(3)] });
+  inputs.push({ file: source.file, options: segmentInputOptions(0, headDuration) });
   const tailIndex = inputBase + inputs.length;
-  inputs.push({ file: source.file, options: ['-ss', splitAt.toFixed(3)] });
+  inputs.push({ file: source.file, options: segmentInputOptions(splitAt, tailDuration) });
   const shortsIndex = inputBase + inputs.length;
-  inputs.push({ file: shorts.file, options: [] });
+  inputs.push({ file: shorts.file, options: segmentInputOptions(0, shorts.duration) });
 
   let overlayIndex = -1;
   if (overlay) {
@@ -1015,12 +1053,16 @@ function buildGraph({
 
   let closeupIndex = -1;
   let closeupWrap = false;
+  let closeupRemaining = 0;
   if (closeup) {
     // Правая половина идёт по таймлайну партии: ролик N продолжает с того места,
     // где закончился ролик N-1. Если файл кончился — начинается сначала.
+    // Playhead и буфер входов считаются заново для этого Shorts — хвост
+    // предыдущей операции сюда не подмешивается.
     const planned = planCloseupInputs(closeup, closeupStart, duration);
     closeupIndex = inputBase + inputs.length;
     closeupWrap = planned.wrap;
+    closeupRemaining = planned.remaining;
     planned.inputs.forEach((input) => inputs.push(input));
   }
 
@@ -1040,12 +1082,13 @@ function buildGraph({
       videoLabel,
       montage,
       segment.fps,
-      { width: segment.width, height: segment.height }
+      { width: segment.width, height: segment.height },
+      segment.duration
     ));
 
     // Сегмент без звука заменяется тишиной, иначе concat не соберёт дорожку.
     if (segment.audioSource.hasAudio) {
-      filters.push(audioSegmentFilter(`${segment.audioInput}:a:0`, audioLabel));
+      filters.push(audioSegmentFilter(`${segment.audioInput}:a:0`, audioLabel, segment.duration));
     } else {
       filters.push(silentSegmentFilter(audioLabel, segment.duration));
     }
@@ -1069,7 +1112,8 @@ function buildGraph({
       target,
       split: normalizeSplit(split),
       duration,
-      prefix: labelPrefix
+      prefix: labelPrefix,
+      closeupRemaining
     });
     filters.push(...built.filters);
     layout = built.layout;
@@ -1245,15 +1289,25 @@ function renderVideo(params) {
   const hardware = params.hardware || detectHardware();
   const plan = params.plan || resolveEncodePlan(encoder, params.accel, hardware);
   const target = resolveTarget(params.frame, params.fit, source, plan);
-  const splitAt = resolveSplitAt(source, percent);
-  const totalDuration = source.duration + shorts.duration;
+  const timeline = isolateJobTimeline({
+    closeupStart: params.closeupStart,
+    splitAt: Number.isFinite(Number(params.splitAt)) && Number(params.splitAt) > 0
+      ? Number(params.splitAt)
+      : resolveSplitAt(source, percent),
+    duration: Number.isFinite(Number(params.duration)) && Number(params.duration) > 0
+      ? Number(params.duration)
+      : source.duration + shorts.duration,
+    percent
+  });
+  const splitAt = timeline.splitAt;
+  const totalDuration = timeline.duration;
 
   const { inputs, filters, videoOut, audioOut, layout, pace } = buildGraph({
     source,
     shorts,
     overlay,
     closeup,
-    closeupStart: Number(params.closeupStart) || 0,
+    closeupStart: timeline.closeupStart,
     split,
     target,
     splitAt,
@@ -1489,37 +1543,42 @@ class BatchProcessor {
               `(${percent}%) → ${path.basename(outputFile)}`
           );
 
-          const closeupStart = closeup
-            ? wrapCloseupOffset(closeupHead, closeup.duration)
-            : 0;
+          const target = resolveTarget(frame, fit, source, plan);
+          const splitAt = resolveSplitAt(source, percent);
+          const duration = source.duration + shorts.duration;
+          const timeline = isolateJobTimeline({
+            closeupStart: closeup ? wrapCloseupOffset(closeupHead, closeup.duration) : 0,
+            splitAt,
+            duration,
+            percent
+          });
           if (closeup) {
             this.log(
               'info',
-              `[${humanIndex}] Крупный план справа: с ${formatDuration(closeupStart)} ` +
+              `[${humanIndex}] Крупный план справа: с ${formatDuration(timeline.closeupStart)} ` +
                 `(таймлайн второго видео)`
             );
           }
 
-          const target = resolveTarget(frame, fit, source, plan);
-          const splitAt = resolveSplitAt(source, percent);
-          const duration = source.duration + shorts.duration;
           jobs.push({
             index: i,
             source,
             outputFile,
             fileName,
             humanIndex,
-            closeupStart,
+            closeupStart: timeline.closeupStart,
             target,
-            splitAt,
-            duration,
-            percent,
+            splitAt: timeline.splitAt,
+            duration: timeline.duration,
+            percent: timeline.percent,
             encoder,
             hardware,
             frame,
             fit
           });
-          if (closeup) closeupHead += duration;
+          // Playhead двигаем по плану этого ролика, не по фактическому хвосту.
+          // Иначе 20% текущего файла оседают как «остаток» следующего Shorts.
+          if (closeup) closeupHead += timeline.duration;
         } catch (err) {
           if (this.cancelled) break;
           summary.failed += 1;
@@ -1590,9 +1649,11 @@ class BatchProcessor {
           overlay,
           closeup,
           closeupStart: job.closeupStart,
+          splitAt: job.splitAt,
+          duration: job.duration,
           split,
           outputFile: job.outputFile,
-          percent,
+          percent: job.percent,
           encoder,
           plan: encodePlan,
           hardware,
@@ -1690,6 +1751,9 @@ module.exports = {
   formatDuration,
   wrapCloseupOffset,
   planCloseupInputs,
+  isolateJobTimeline,
+  segmentInputOptions,
+  resolveSplitAt,
   isVideoFile,
   shortenFfmpegError,
   ENCODE_PACE_SPEED,
