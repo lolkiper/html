@@ -618,7 +618,7 @@ async function main() {
   check(comboSummary.done === 1, 'сплит вместе с оверлеем: файл собран', `done=${comboSummary.done}`);
 
   // Холст здесь квадратный по умолчанию, поэтому половины делятся по x = 540.
-  const combo = outH264(comboOut, 1);
+  const combo = path.join(comboOut, `es1${outputExtension('prores')}`);
   check(colorsMatch(samplePoint(combo, 1, 270, 540), [128, 128, 0], 40),
     'сплит + оверлей: слева исходник, смешанный с оверлеем',
     String(samplePoint(combo, 1, 270, 540)));
