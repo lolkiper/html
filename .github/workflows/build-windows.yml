@@ -1,0 +1,76 @@
+name: Build Windows
+
+# Собирает установщик и portable-версию на настоящей Windows-машине:
+# на Linux electron-builder для этого требует wine.
+on:
+  push:
+    branches:
+      - 'cursor/**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure FFmpeg has GPU encoders
+        run: node scripts/ensure-gpu-ffmpeg.js
+
+      - name: Ensure yt-dlp
+        run: node scripts/ensure-ytdlp.js
+
+      - name: Build installer and portable exe
+        run: npx electron-builder --win --publish never
+
+      # Сборка исключает бинарники ffprobe для чужих платформ — убеждаемся,
+      # что нужный при этом остался на месте и приложение не окажется битым.
+      - name: Verify bundled binaries
+        shell: pwsh
+        run: |
+          $root = 'dist/win-unpacked/resources/app.asar.unpacked/node_modules'
+          $ytdlp = 'dist/win-unpacked/resources/app.asar.unpacked/vendor/yt-dlp/yt-dlp.exe'
+          $deno = 'dist/win-unpacked/resources/app.asar.unpacked/vendor/yt-dlp/deno.exe'
+          $aria2 = 'dist/win-unpacked/resources/app.asar.unpacked/vendor/yt-dlp/aria2c.exe'
+          foreach ($binary in @("$root/ffmpeg-static/ffmpeg.exe", "$root/ffprobe-static/bin/win32/x64/ffprobe.exe", $ytdlp, $deno, $aria2)) {
+            if (-not (Test-Path $binary)) { throw "Missing bundled binary: $binary" }
+            Write-Host ("OK {0} ({1:N1} MB)" -f $binary, ((Get-Item $binary).Length / 1MB))
+          }
+          $encoders = & "$root/ffmpeg-static/ffmpeg.exe" -hide_banner -encoders 2>&1 | Out-String
+          $gpu = @('h264_nvenc', 'h264_amf', 'h264_qsv') | Where-Object { $encoders -match $_ }
+          if (-not $gpu.Count) { throw 'Bundled ffmpeg.exe has no GPU encoders (nvenc/amf/qsv)' }
+          Write-Host ("GPU encoders: {0}" -f ($gpu -join ', '))
+          Get-ChildItem dist -Filter *.exe | ForEach-Object {
+            Write-Host ("{0} — {1:N1} MB" -f $_.Name, ($_.Length / 1MB))
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shorts-inserter-windows
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true

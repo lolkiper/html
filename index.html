@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self';"
+    />
+    <title>Shorts Inserter</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand__text">
+            <h1>Shorts Inserter</h1>
+            <p>Вставка Shorts, скачивание YouTube, умное переименование и проверка авторских прав</p>
+          </div>
+        </div>
+        <div class="topbar__meta">
+          <span class="chip" id="chip-version">v—</span>
+          <span class="chip chip--muted" id="chip-ffmpeg" title="Путь к FFmpeg">FFmpeg: —</span>
+          <span class="chip chip--muted" id="chip-ytdlp" title="Путь к yt-dlp">yt-dlp: —</span>
+        </div>
+      </header>
+
+      <nav class="tabs" id="app-tabs" aria-label="Разделы">
+        <button type="button" class="tab is-active" data-view="insert">Вставка Shorts</button>
+        <button type="button" class="tab" data-view="download">Скачивание YouTube</button>
+        <button type="button" class="tab" data-view="rename">Умное переименование</button>
+        <button type="button" class="tab" data-view="copyright">Copyright Check</button>
+      </nav>
+
+      <main class="layout view" id="view-insert">
+        <!-- ------------------------- Левая колонка ------------------------- -->
+        <section class="column column--settings">
+          <article class="card">
+            <div class="card__head">
+              <h2>1. Источники</h2>
+              <span class="card__hint">Что и куда вставляем</span>
+            </div>
+
+            <div class="field">
+              <label for="source-dir">Папка с исходными видео</label>
+              <div class="picker">
+                <input type="text" id="source-dir" placeholder="Не выбрана" spellcheck="false" />
+                <button class="btn btn--ghost" data-pick="source-dir">Обзор…</button>
+              </div>
+              <p class="field__note" id="source-dir-note">Выберите папку — покажем количество найденных видео.</p>
+            </div>
+
+            <div class="field">
+              <label for="shorts-file">Файл Shorts (вставляется в середину)</label>
+              <div class="picker">
+                <input type="text" id="shorts-file" placeholder="Не выбран" spellcheck="false" />
+                <button class="btn btn--ghost" data-pick="shorts-file">Обзор…</button>
+              </div>
+              <p class="field__note" id="shorts-file-note">Один видеофайл любого формата.</p>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>2. Сплит-скрин</h2>
+              <label class="switch">
+                <input type="checkbox" id="use-split" />
+                <span class="switch__track"><span class="switch__thumb"></span></span>
+                <span class="switch__label">Разделить экран</span>
+              </label>
+            </div>
+
+            <div class="split-body" id="split-body" data-disabled="true">
+              <div class="field">
+                <label for="closeup-file">Видео для правой половины (крупный план)</label>
+                <div class="picker">
+                  <input type="text" id="closeup-file" placeholder="Не выбрано" spellcheck="false" />
+                  <button class="btn btn--ghost" data-pick="closeup-file">Обзор…</button>
+                </div>
+                <p class="field__note" id="closeup-file-note">
+                  Для каждого следующего ролика крупный план продолжается с того места, где закончился предыдущий. Если видео кончится — начнётся сначала. Звук берётся из основного ролика.
+                </p>
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="left-share">Ширина левой части: <b id="left-share-value">50%</b></label>
+                  <input type="range" id="left-share" min="20" max="80" step="1" value="50" />
+                </div>
+                <div class="field">
+                  <label for="feather">Мягкость границы: <b id="feather-value">48 px</b></label>
+                  <input type="range" id="feather" min="0" max="160" step="2" value="48" />
+                </div>
+              </div>
+
+              <div class="grid-2 split-columns">
+                <div class="split-column">
+                  <h3>Левая часть — основной ролик</h3>
+                  <div class="field">
+                    <label for="left-zoom">Увеличение: <b id="left-zoom-value">1.00×</b></label>
+                    <input type="range" id="left-zoom" min="1" max="3" step="0.05" value="1" />
+                  </div>
+                  <div class="field">
+                    <label for="left-offset">Сдвиг по X: <b id="left-offset-value">0%</b></label>
+                    <input type="range" id="left-offset" min="-50" max="50" step="1" value="0" />
+                  </div>
+                </div>
+
+                <div class="split-column">
+                  <h3>Правая часть — крупный план</h3>
+                  <div class="field">
+                    <label for="right-zoom">Увеличение: <b id="right-zoom-value">1.80×</b></label>
+                    <input type="range" id="right-zoom" min="1" max="3" step="0.05" value="1.8" />
+                  </div>
+                  <div class="field">
+                    <label for="right-offset">Сдвиг по X: <b id="right-offset-value">0%</b></label>
+                    <input type="range" id="right-offset" min="-50" max="50" step="1" value="0" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="split-preview" aria-hidden="true">
+                <div class="split-preview__left" id="split-preview-left"><span>Основной ролик</span></div>
+                <div class="split-preview__seam" id="split-preview-seam"></div>
+                <div class="split-preview__right"><span>Крупный план</span></div>
+              </div>
+              <p class="field__note" id="split-hint">
+                Итог — квадрат 1080×1080. Нулевой сдвиг ставит центр ролика в центр своей половины.
+              </p>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>3. Оверлей</h2>
+              <label class="switch">
+                <input type="checkbox" id="use-overlay" />
+                <span class="switch__track"><span class="switch__thumb"></span></span>
+                <span class="switch__label">Использовать оверлей</span>
+              </label>
+            </div>
+
+            <div class="overlay-body" id="overlay-body" data-disabled="true">
+              <div class="field">
+                <label for="overlay-file">Файл оверлея (накладывается поверх всего, включая сплит)</label>
+                <div class="picker">
+                  <input type="text" id="overlay-file" placeholder="Не выбран" spellcheck="false" />
+                  <button class="btn btn--ghost" data-pick="overlay-file">Обзор…</button>
+                </div>
+                <p class="field__note" id="overlay-file-note">
+                  Короткий оверлей зациклится, длинный — обрежется по длине результата.
+                </p>
+              </div>
+
+              <div class="field">
+                <label for="overlay-opacity">Непрозрачность оверлея: <b id="overlay-opacity-value">100%</b></label>
+                <input type="range" id="overlay-opacity" min="5" max="100" step="5" value="100" />
+              </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>4. Экспорт</h2>
+              <span class="card__hint">Результат: es1.mp4, es2.mp4, …</span>
+            </div>
+
+            <div class="field">
+              <label for="output-dir">Папка для сохранения</label>
+              <div class="picker">
+                <input type="text" id="output-dir" placeholder="Не выбрана" spellcheck="false" />
+                <button class="btn btn--ghost" data-pick="output-dir">Обзор…</button>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="field">
+                <label for="frame">Размер итогового кадра</label>
+                <select id="frame"></select>
+                <p class="field__note">Для TikTok и Shorts — квадрат 1080×1080, как в готовом примере.</p>
+              </div>
+
+              <div class="field">
+                <label for="fit">Если пропорции не совпадают</label>
+                <select id="fit"></select>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="field">
+                <label for="percent">Процент обрезки (50–99)</label>
+                <div class="percent-row">
+                  <input type="number" id="percent" min="50" max="99" step="1" value="90" />
+                  <input type="range" id="percent-range" min="50" max="99" step="1" value="90" />
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="encoder">Кодек результата</label>
+                <select id="encoder"></select>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="field">
+                <label for="export-mode">Режим экспорта</label>
+                <select id="export-mode"></select>
+              </div>
+              <div class="field">
+                <label for="resource-usage">Нагрузка на ПК</label>
+                <select id="resource-usage"></select>
+                <p class="field__note" id="accel-note">Hardware encoder если есть. Один файл — один ffmpeg.</p>
+              </div>
+            </div>
+
+            <div class="scheme" aria-hidden="true">
+              <div class="scheme__bar">
+                <span class="scheme__part scheme__part--head" id="scheme-head">Исходник 90%</span>
+                <span class="scheme__part scheme__part--shorts">Shorts</span>
+                <span class="scheme__part scheme__part--tail" id="scheme-tail">10%</span>
+              </div>
+              <div class="scheme__overlay" id="scheme-overlay">Оверлей поверх всего хронометража</div>
+            </div>
+
+            <label class="checkbox">
+              <input type="checkbox" id="verbose" />
+              <span>Подробный лог FFmpeg (для диагностики)</span>
+            </label>
+          </article>
+
+          <div class="actions">
+            <button class="btn btn--primary" id="start">Начать обработку</button>
+            <button class="btn btn--danger" id="stop" disabled>Остановить</button>
+            <button class="btn btn--ghost" id="open-output" disabled>Открыть папку результата</button>
+          </div>
+        </section>
+
+        <!-- ------------------------- Правая колонка ------------------------- -->
+        <section class="column column--status">
+          <article class="card card--progress">
+            <div class="card__head">
+              <h2>Прогресс</h2>
+              <span class="badge" id="badge-state">Ожидание</span>
+            </div>
+
+            <p class="status" id="status">Готово к запуску.</p>
+            <p class="field__note" id="encode-meta">Кодек: — · Кадр: — · FPS: — · ETA: —</p>
+
+            <div class="progress">
+              <div class="progress__label">
+                <span>Текущий файл</span>
+                <span id="file-percent">0%</span>
+              </div>
+              <div class="progress__track"><div class="progress__fill" id="file-bar"></div></div>
+            </div>
+
+            <div class="progress">
+              <div class="progress__label">
+                <span>Всего</span>
+                <span id="overall-percent">0%</span>
+              </div>
+              <div class="progress__track">
+                <div class="progress__fill progress__fill--overall" id="overall-bar"></div>
+              </div>
+            </div>
+
+            <div class="counters">
+              <div class="counter"><span id="counter-done">0</span><small>готово</small></div>
+              <div class="counter"><span id="counter-failed">0</span><small>ошибок</small></div>
+              <div class="counter"><span id="counter-total">0</span><small>всего</small></div>
+            </div>
+          </article>
+
+          <article class="card card--log">
+            <div class="card__head">
+              <h2>Лог выполнения</h2>
+              <div class="card__tools">
+                <button class="btn btn--mini" id="copy-log">Копировать</button>
+                <button class="btn btn--mini" id="clear-log">Очистить</button>
+              </div>
+            </div>
+            <div class="log" id="log" role="log" aria-live="polite"></div>
+          </article>
+        </section>
+      </main>
+
+      <main class="layout view" id="view-download" hidden>
+        <section class="column column--settings">
+          <article class="card">
+            <div class="card__head">
+              <h2>1. Список ссылок</h2>
+              <span class="card__hint">YouTube и Shorts, по одной на строку</span>
+            </div>
+            <div class="field">
+              <label for="dl-links">Ссылки (100–200+)</label>
+              <textarea id="dl-links" rows="12" spellcheck="false" placeholder="https://youtube.com/shorts/&#10;https://youtube.com/shorts/&#10;https://www.youtube.com/watch?v="></textarea>
+              <p class="field__note" id="dl-links-note">Пустые строки и дубликаты уберутся автоматически, порядок сохранится.</p>
+            </div>
+            <div class="actions actions--inline">
+              <button class="btn btn--ghost" id="dl-import">Импортировать TXT</button>
+              <button class="btn btn--ghost" id="dl-clear">Очистить список</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>2. Папка</h2>
+              <span class="card__hint">Все ролики в одну папку</span>
+            </div>
+            <div class="field">
+              <label for="dl-dir">Куда сохранять</label>
+              <div class="picker">
+                <input type="text" id="dl-dir" placeholder="Не выбрана" spellcheck="false" />
+                <button class="btn btn--ghost" id="dl-pick-dir">Выбрать папку</button>
+              </div>
+              <p class="field__note" id="dl-dir-note">
+                В папке появятся видео, nazvaniya.txt, download_queue.json и download_log.txt. Отдельная папка на ролик не создаётся.
+              </p>
+            </div>
+          </article>
+
+          <div class="actions">
+            <button class="btn btn--primary" id="dl-start">Начать скачивание</button>
+            <button class="btn btn--ghost" id="dl-pause" disabled>Пауза</button>
+            <button class="btn btn--ghost" id="dl-resume" disabled>Продолжить</button>
+            <button class="btn btn--danger" id="dl-stop" disabled>Стоп</button>
+            <button class="btn btn--ghost" id="dl-open" disabled>Открыть папку</button>
+          </div>
+        </section>
+
+        <section class="column column--status">
+          <article class="card card--progress">
+            <div class="card__head">
+              <h2>Очередь</h2>
+              <span class="badge" id="dl-badge">Ожидание</span>
+            </div>
+            <p class="status" id="dl-status">Вставьте ссылки и выберите папку.</p>
+            <div class="progress">
+              <div class="progress__label">
+                <span id="dl-current-label">Текущее видео</span>
+                <span id="dl-file-percent">0%</span>
+              </div>
+              <div class="progress__track"><div class="progress__fill" id="dl-file-bar"></div></div>
+            </div>
+            <div class="progress">
+              <div class="progress__label">
+                <span>Всего</span>
+                <span id="dl-overall-percent">0 / 0</span>
+              </div>
+              <div class="progress__track">
+                <div class="progress__fill progress__fill--overall" id="dl-overall-bar"></div>
+              </div>
+            </div>
+            <p class="field__note" id="dl-speed-note">Скорость: — · ETA: —</p>
+            <p class="field__note" id="dl-quality-note">Качество последнего файла: —</p>
+            <div class="counters counters--6">
+              <div class="counter"><span id="dl-total">0</span><small>всего</small></div>
+              <div class="counter"><span id="dl-done">0</span><small>готово</small></div>
+              <div class="counter"><span id="dl-active">0</span><small>качается</small></div>
+              <div class="counter"><span id="dl-wait">0</span><small>ждут</small></div>
+              <div class="counter"><span id="dl-retry">0</span><small>retry</small></div>
+              <div class="counter"><span id="dl-perm">0</span><small>навсегда</small></div>
+            </div>
+          </article>
+
+          <article class="card card--table">
+            <div class="card__head">
+              <h2>Список</h2>
+              <span class="card__hint">№ · URL · статус · название · качество · попытки</span>
+            </div>
+            <div class="table-wrap" id="dl-table-wrap">
+              <table class="queue-table" id="dl-table">
+                <thead>
+                  <tr>
+                    <th>№</th>
+                    <th>URL</th>
+                    <th>Статус</th>
+                    <th>Название</th>
+                    <th>Качество</th>
+                    <th>Попытки</th>
+                  </tr>
+                </thead>
+                <tbody id="dl-table-body">
+                  <tr class="queue-table__empty"><td colspan="6">Список пуст</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card card--errors">
+            <div class="card__head">
+              <h2>Ошибки / Retry</h2>
+            </div>
+            <div class="error-list" id="dl-errors">
+              <p class="log__empty">Пока нет ошибок.</p>
+            </div>
+          </article>
+
+          <article class="card card--log">
+            <div class="card__head">
+              <h2>Лог скачивания</h2>
+              <div class="card__tools">
+                <button class="btn btn--mini" id="dl-copy-log">Копировать</button>
+                <button class="btn btn--mini" id="dl-clear-log">Очистить</button>
+              </div>
+            </div>
+            <div class="log" id="dl-log" role="log" aria-live="polite"></div>
+          </article>
+        </section>
+      </main>
+
+      <main class="layout view" id="view-rename" hidden>
+        <section class="column column--settings">
+          <article class="card">
+            <div class="card__head">
+              <h2>1. Папка и TXT</h2>
+              <span class="card__hint">Номер = строка в nazvaniya.txt</span>
+            </div>
+            <div class="field">
+              <label for="rn-dir">Папка с видео</label>
+              <div class="picker">
+                <input type="text" id="rn-dir" placeholder="Не выбрана" spellcheck="false" />
+                <button class="btn btn--ghost" id="rn-pick-dir">Выбрать папку</button>
+              </div>
+              <p class="field__note" id="rn-dir-note">Видео найдено: —</p>
+            </div>
+            <div class="field">
+              <label for="rn-txt">Файл названий (nazvaniya.txt)</label>
+              <div class="picker">
+                <input type="text" id="rn-txt" placeholder="Не выбран" spellcheck="false" />
+                <button class="btn btn--ghost" id="rn-pick-txt">Выбрать TXT</button>
+              </div>
+              <p class="field__note" id="rn-txt-note">Названий в TXT: —</p>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>2. Настройки</h2>
+              <span class="card__hint">Сначала предпросмотр, потом файлы</span>
+            </div>
+            <div class="field">
+              <label for="rn-min">Минимальная похожесть: <b id="rn-min-value">60%</b></label>
+              <input type="range" id="rn-min" min="40" max="95" step="1" value="60" />
+            </div>
+            <label class="checkbox">
+              <input type="checkbox" id="rn-remove" checked />
+              <span>Удалять видео без совпадения</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="rn-reports" checked />
+              <span>Создавать отчёты</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="rn-keep-txt" checked />
+              <span>Не трогать исходный nazvaniya.txt</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="rn-copyright" />
+              <span>Проверять авторские права после переименования</span>
+            </label>
+            <p class="field__note">
+              Одна строка TXT = одно видео. Уже существующие 1.mp4 / 37.mp4 не перезаписываются. Удаление только после подтверждения.
+            </p>
+          </article>
+
+          <div class="actions">
+            <button class="btn btn--ghost" id="rn-preview">Предпросмотр</button>
+            <button class="btn btn--primary" id="rn-apply" disabled>Начать переименование</button>
+            <button class="btn btn--ghost" id="rn-open-report" disabled>Открыть отчёт</button>
+            <button class="btn btn--ghost" id="rn-open-dir" disabled>Открыть папку</button>
+          </div>
+        </section>
+
+        <section class="column column--status">
+          <article class="card card--progress">
+            <div class="card__head">
+              <h2>Результат</h2>
+              <span class="badge" id="rn-badge">Ожидание</span>
+            </div>
+            <p class="status" id="rn-status">Выберите папку и nazvaniya.txt, затем нажмите «Предпросмотр».</p>
+            <div class="counters counters--6">
+              <div class="counter"><span id="rn-titles">0</span><small>TXT</small></div>
+              <div class="counter"><span id="rn-videos">0</span><small>видео</small></div>
+              <div class="counter"><span id="rn-matched">0</span><small>совпало</small></div>
+              <div class="counter"><span id="rn-low">0</span><small>слабо</small></div>
+              <div class="counter"><span id="rn-conflict">0</span><small>конфликт</small></div>
+              <div class="counter"><span id="rn-missing">0</span><small>нет видео</small></div>
+            </div>
+            <p class="field__note" id="rn-delete-note"></p>
+          </article>
+
+          <article class="card card--table">
+            <div class="card__head">
+              <h2>Таблица сопоставления</h2>
+              <span class="card__hint">Видео · TXT № · название · похожесть · статус</span>
+            </div>
+            <div class="table-wrap" id="rn-table-wrap">
+              <table class="queue-table">
+                <thead>
+                  <tr>
+                    <th>Видео</th>
+                    <th>TXT №</th>
+                    <th>Название TXT</th>
+                    <th>%</th>
+                    <th>Статус</th>
+                  </tr>
+                </thead>
+                <tbody id="rn-table-body">
+                  <tr class="queue-table__empty"><td colspan="5">Сначала сделайте предпросмотр</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card card--log">
+            <div class="card__head">
+              <h2>Лог переименования</h2>
+            </div>
+            <div class="log" id="rn-log" role="log" aria-live="polite"></div>
+          </article>
+        </section>
+      </main>
+
+      <main class="layout view" id="view-copyright" hidden>
+        <section class="column column--settings">
+          <article class="card">
+            <div class="card__head">
+              <h2>1. Тестовый канал</h2>
+              <span class="card__hint">Только OAuth, без пароля Google</span>
+            </div>
+            <div class="field">
+              <label for="cc-client-id">OAuth Client ID</label>
+              <input type="text" id="cc-client-id" placeholder="….apps.googleusercontent.com" spellcheck="false" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="cc-client-secret">OAuth Client Secret</label>
+              <input type="password" id="cc-client-secret" placeholder="Из Google Cloud Console" spellcheck="false" autocomplete="off" />
+            </div>
+            <p class="field__note">
+              Desktop OAuth-клиент из Google Cloud. Пароль аккаунта Google не хранится — только refresh/access token.
+              Загрузка только как <b>private</b>. Модуль не обходит Content ID и ограничения YouTube.
+            </p>
+            <div class="actions actions--inline">
+              <button class="btn btn--primary" id="cc-connect">Проверить подключение</button>
+              <button class="btn btn--ghost" id="cc-disconnect">Отключить</button>
+            </div>
+            <p class="cc-status" id="cc-status">Канал не подключён</p>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>2. Папка</h2>
+              <span class="card__hint">После rename: 1.mp4, 2.mp4, …</span>
+            </div>
+            <div class="field">
+              <label for="cc-dir">Папка с видео</label>
+              <div class="picker">
+                <input type="text" id="cc-dir" placeholder="Не выбрана" spellcheck="false" />
+                <button class="btn btn--ghost" id="cc-pick-dir">Выбрать папку</button>
+              </div>
+              <p class="field__note" id="cc-dir-note">
+                В папке появятся copyright_queue.json и copyright_check.log. Исходный файл не удаляется, пока нет подтверждённого BLOCKED.
+              </p>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>3. Настройки</h2>
+              <span class="card__hint">CLAIM не равен BLOCK</span>
+            </div>
+            <label class="checkbox">
+              <input type="checkbox" id="cc-enabled" />
+              <span>Проверять авторские права после скачивания</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="cc-auto-delete" />
+              <span>Automatically delete test uploads</span>
+            </label>
+            <div class="field">
+              <label for="cc-wait">MAX_PROCESSING_WAIT, минут</label>
+              <input type="number" id="cc-wait" min="2" max="120" step="1" value="15" />
+              <p class="field__note">Не проверять claims сразу после загрузки. При timeout файл остаётся, статус CHECK_ERROR.</p>
+            </div>
+          </article>
+
+          <div class="actions">
+            <button class="btn btn--primary" id="cc-start">Начать проверку</button>
+            <button class="btn btn--danger" id="cc-stop" disabled>Стоп</button>
+            <button class="btn btn--ghost" id="cc-retry">RETRY CHECK</button>
+            <button class="btn btn--ghost" id="cc-retry-all">RETRY ALL FAILED</button>
+            <button class="btn btn--ghost" id="cc-open" disabled>Открыть папку</button>
+          </div>
+        </section>
+
+        <section class="column column--status">
+          <article class="card card--progress">
+            <div class="card__head">
+              <h2>Статистика</h2>
+              <span class="badge" id="cc-badge">Ожидание</span>
+            </div>
+            <p class="status" id="cc-status-line">Подключите тестовый канал и выберите папку.</p>
+            <div class="counters counters--8">
+              <div class="counter"><span id="cc-total">0</span><small>checked</small></div>
+              <div class="counter"><span id="cc-noclaim">0</span><small>no claims</small></div>
+              <div class="counter"><span id="cc-claims">0</span><small>claims</small></div>
+              <div class="counter"><span id="cc-blocked">0</span><small>blocked</small></div>
+              <div class="counter"><span id="cc-processing">0</span><small>processing</small></div>
+              <div class="counter"><span id="cc-errors">0</span><small>errors</small></div>
+              <div class="counter"><span id="cc-kept">0</span><small>kept</small></div>
+              <div class="counter"><span id="cc-deleted">0</span><small>deleted</small></div>
+            </div>
+          </article>
+
+          <article class="card card--table">
+            <div class="card__head">
+              <h2>Copyright Check</h2>
+              <span class="card__hint"># · File · Upload · Processing · Copyright · Availability · Action</span>
+            </div>
+            <div class="table-wrap" id="cc-table-wrap">
+              <table class="queue-table" id="cc-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>File</th>
+                    <th>Upload</th>
+                    <th>Processing</th>
+                    <th>Copyright</th>
+                    <th>Availability</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-table-body">
+                  <tr class="queue-table__empty"><td colspan="7">Очередь пуста</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card card--log">
+            <div class="card__head">
+              <h2>copyright_check.log</h2>
+              <div class="card__tools">
+                <button class="btn btn--mini" id="cc-copy-log">Копировать</button>
+                <button class="btn btn--mini" id="cc-clear-log">Очистить</button>
+              </div>
+            </div>
+            <div class="log" id="cc-log" role="log" aria-live="polite"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
