@@ -14,6 +14,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
+const ffmpeg = require('fluent-ffmpeg');
 const {
   BatchProcessor,
   ffmpegPath,
@@ -24,8 +25,11 @@ const {
   resolveEncodePlan,
   ENCODE_PACE_SPEED,
   MAX_JOBS_PER_SESSION,
+  FILTER_SCRIPT_THRESHOLD,
   paceGlobalArgs,
-  chunkJobs
+  chunkJobs,
+  attachFilterGraph,
+  isUnknownFfmpegOption
 } = require('../processor');
 
 const ROOT = path.join(os.tmpdir(), `shorts-inserter-smoke-${process.pid}`);
@@ -187,6 +191,29 @@ async function main() {
     MAX_JOBS_PER_SESSION <= 16,
     'в одной сессии ffmpeg не больше 16 файлов',
     `max=${MAX_JOBS_PER_SESSION}`
+  );
+  const shortGraphCmd = ffmpeg();
+  attachFilterGraph(shortGraphCmd, ['[0:v]null[v]']);
+  const shortGraphArgs = shortGraphCmd._getArguments();
+  check(
+    shortGraphArgs.includes('-filter_complex') &&
+      !shortGraphArgs.some((arg) => String(arg).startsWith('-/filter')),
+    'короткий граф идёт как -filter_complex — ffmpeg 6.1 на Windows не знает -/filter_complex'
+  );
+  const longGraphCmd = ffmpeg();
+  const longScript = attachFilterGraph(longGraphCmd, [`[0:v]null[v];${'n'.repeat(FILTER_SCRIPT_THRESHOLD)}`]);
+  const longGraphArgs = longGraphCmd._getArguments();
+  check(
+    longGraphArgs.includes('-filter_complex_script') && !longGraphArgs.includes('-/filter_complex'),
+    'длинный граф пишется в файл через -filter_complex_script, не через -/filter_complex'
+  );
+  check(Boolean(longScript) && fs.existsSync(longScript), 'файл длинного графа создан');
+  if (longScript) fs.unlinkSync(longScript);
+  check(
+    isUnknownFfmpegOption(new Error(
+      "Unrecognized option '/filter_complex'.\nError splitting the argument list: Option not found"
+    )),
+    'неизвестная опция ffmpeg не считается отказом видеокарты'
   );
   [SOURCE_DIR, OUTPUT_DIR, ASSETS_DIR].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
 

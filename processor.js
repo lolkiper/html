@@ -55,10 +55,18 @@ function prefixed(prefix, name) {
   return prefix ? `${prefix}${name}` : name;
 }
 
+/** Выше этого граф уходит в файл через -filter_complex_script, а не в argv. */
+const FILTER_SCRIPT_THRESHOLD = 8000;
+
 function isCommandTooLong(err) {
   if (!err) return false;
   if (err.code === 'ENAMETOOLONG') return true;
   return /ENAMETOOLONG/i.test(String(err.message || ''));
+}
+
+function isUnknownFfmpegOption(err) {
+  const message = String((err && err.message) || '');
+  return /Error splitting the argument list/i.test(message) || /Unrecognized option/i.test(message);
 }
 
 function chunkJobs(jobs, size) {
@@ -534,7 +542,10 @@ function shortenFfmpegError(message) {
     .filter(Boolean)
     .filter((line) => !/^(ff(mpeg|probe) version|built with|configuration:|lib[a-z]+\s+\d)/i.test(line));
   const meaningful = lines.filter((line) => !/^Copyright/i.test(line));
-  return (meaningful[meaningful.length - 1] || lines[0] || 'неизвестная ошибка').slice(0, 400);
+  const last = meaningful[meaningful.length - 1] || lines[0] || 'неизвестная ошибка';
+  const unrecognized = meaningful.find((line) => /Unrecognized option/i.test(line));
+  if (unrecognized && unrecognized !== last) return `${unrecognized} ${last}`.slice(0, 400);
+  return last.slice(0, 400);
 }
 
 /** Метаданные файла: размеры (с учётом поворота), длительность, fps, наличие дорожек. */
@@ -1139,14 +1150,23 @@ function groupJobsByTarget(jobs) {
   return groups;
 }
 
+/**
+ * ffmpeg-static на Windows — 6.1.1. Опция `-/filter_complex` появилась только в 7.0
+ * и на 6.1 даёт «Error splitting the argument list: Option not found» на каждом файле.
+ * Короткий граф — обычный -filter_complex. Длинный — -filter_complex_script (есть с 1.x).
+ */
 function attachFilterGraph(command, filters) {
+  const text = Array.isArray(filters) ? filters.filter(Boolean).join(';') : String(filters || '');
+  if (text.length < FILTER_SCRIPT_THRESHOLD) {
+    command.complexFilter(text);
+    return null;
+  }
   const script = path.join(
     os.tmpdir(),
     `shorts-fc-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.ffilter`
   );
-  const text = Array.isArray(filters) ? filters.filter(Boolean).join(';') : String(filters || '');
   fs.writeFileSync(script, text, 'utf8');
-  command._global(['-/filter_complex', script]);
+  command._complexFilters('-filter_complex_script', script);
   command._filterScriptPath = script;
   return script;
 }
@@ -1185,7 +1205,7 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
       onProgress(clamp((done / totalDuration) * 100, 0, 99.9), done);
     });
     command.on('error', finish((err) => {
-      if (isCommandTooLong(err)) {
+      if (isCommandTooLong(err) || isUnknownFfmpegOption(err)) {
         reject(err);
         return;
       }
@@ -1910,6 +1930,9 @@ module.exports = {
   shortenFfmpegError,
   ENCODE_PACE_SPEED,
   MAX_JOBS_PER_SESSION,
+  FILTER_SCRIPT_THRESHOLD,
   paceGlobalArgs,
-  chunkJobs
+  chunkJobs,
+  attachFilterGraph,
+  isUnknownFfmpegOption
 };
