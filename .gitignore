@@ -1,6 +1,9 @@
 vendor/yt-dlp/yt-dlp
 vendor/yt-dlp/yt-dlp.exe
 vendor/yt-dlp/yt-dlp_macos
+vendor/yt-dlp/deno
+vendor/yt-dlp/deno.exe
+vendor/yt-dlp/*.zip
 vendor/yt-dlp/*.part
 
 node_modules/

@@ -44,7 +44,8 @@ jobs:
         run: |
           $root = 'dist/win-unpacked/resources/app.asar.unpacked/node_modules'
           $ytdlp = 'dist/win-unpacked/resources/app.asar.unpacked/vendor/yt-dlp/yt-dlp.exe'
-          foreach ($binary in @("$root/ffmpeg-static/ffmpeg.exe", "$root/ffprobe-static/bin/win32/x64/ffprobe.exe", $ytdlp)) {
+          $deno = 'dist/win-unpacked/resources/app.asar.unpacked/vendor/yt-dlp/deno.exe'
+          foreach ($binary in @("$root/ffmpeg-static/ffmpeg.exe", "$root/ffprobe-static/bin/win32/x64/ffprobe.exe", $ytdlp, $deno)) {
             if (-not (Test-Path $binary)) { throw "Missing bundled binary: $binary" }
             Write-Host ("OK {0} ({1:N1} MB)" -f $binary, ((Get-Item $binary).Length / 1MB))
           }

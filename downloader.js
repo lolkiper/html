@@ -20,8 +20,12 @@ const LOG_FILE = 'download_log.txt';
 const MIN_OUTPUT_BYTES = 4096;
 const QUEUE_VERSION = 1;
 const STALL_TIMEOUT_MS = 90_000;
-// tv + android_sdkless часто отдают поток без долгого nsig/JS; web — запасной клиент.
-const YOUTUBE_EXTRACTOR_ARGS = 'youtube:player_client=tv,android_sdkless,web';
+const FALLBACK_FORMAT = 'bestvideo*+bestaudio/best';
+/**
+ * tv / android_sdkless / web в 2026 ломают извлечение: LOGIN_REQUIRED, 403, SABR.
+ * default yt-dlp сам перебирает живые клиенты; android_sdkless исключаем явно.
+ */
+const YOUTUBE_EXTRACTOR_ARGS = 'youtube:player_client=default,-android_sdkless';
 
 const STATUS = {
   WAITING: 'WAITING',
@@ -78,6 +82,81 @@ function ytdlpExists(bin) {
     }
   }
   return fs.existsSync(bin);
+}
+
+function vendorRuntimeName(kind) {
+  if (kind === 'quickjs') return process.platform === 'win32' ? 'qjs.exe' : 'qjs';
+  return process.platform === 'win32' ? 'deno.exe' : 'deno';
+}
+
+function siblingFile(bin, name) {
+  if (!bin || !name || bin === 'yt-dlp' || bin === 'yt-dlp.exe') return null;
+  return path.join(path.dirname(bin), name);
+}
+
+function firstExisting(paths) {
+  return (paths || []).find((file) => file && fs.existsSync(file)) || null;
+}
+
+function resolveJsRuntimeArgs(ytdlpPath) {
+  const denoName = vendorRuntimeName('deno');
+  const qjsName = vendorRuntimeName('quickjs');
+  const vendorDir = path.join(__dirname, 'vendor', 'yt-dlp');
+  const deno = firstExisting([
+    siblingFile(ytdlpPath, denoName),
+    unpackedPath(path.join(vendorDir, denoName)),
+    path.join(vendorDir, denoName)
+  ]);
+  if (deno) return ['--js-runtimes', `deno:${deno}`];
+
+  const qjs = firstExisting([
+    siblingFile(ytdlpPath, qjsName),
+    unpackedPath(path.join(vendorDir, qjsName)),
+    path.join(vendorDir, qjsName)
+  ]);
+  if (qjs) return ['--js-runtimes', `quickjs:${qjs}`];
+
+  const major = Number(String(process.versions.node || '0').split('.')[0]);
+  if (major >= 22 && /node(\.exe)?$/i.test(process.execPath || '')) {
+    return ['--js-runtimes', `node:${process.execPath}`];
+  }
+  return [];
+}
+
+function defaultCookieBrowser() {
+  if (process.platform === 'win32') return 'edge';
+  if (process.platform === 'darwin') return 'chrome';
+  return 'chrome';
+}
+
+function isBotCheckError(message) {
+  return /sign in to confirm you.re not a bot|not a bot|use --cookies/i.test(String(message || ''));
+}
+
+function shortYtError(message) {
+  const line = String(message || '')
+    .split('\n')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .pop() || 'неизвестная ошибка yt-dlp';
+  return line.length > 240 ? `${line.slice(0, 237)}...` : line;
+}
+
+function buildBaseYtDlpArgs({ ytdlpPath, cookiesFromBrowser } = {}) {
+  const args = [
+    '--no-playlist',
+    '--encoding',
+    'utf-8',
+    '--socket-timeout',
+    '20',
+    '--extractor-retries',
+    '3',
+    '--extractor-args',
+    YOUTUBE_EXTRACTOR_ARGS,
+    ...resolveJsRuntimeArgs(ytdlpPath)
+  ];
+  if (cookiesFromBrowser) args.push('--cookies-from-browser', cookiesFromBrowser);
+  return args;
 }
 
 function extractVideoId(raw) {
@@ -283,7 +362,7 @@ function parseProgressLine(line) {
 
 function isDownloadTemp(name) {
   const file = String(name || '');
-  return /\.(part|ytdl|temp)$/i.test(file) || /\.f\d+\./i.test(file);
+  return /\.(part|ytdl|temp|info\.json)$/i.test(file) || /\.f\d+\./i.test(file);
 }
 
 function fileMatchesVideoId(name, videoId) {
@@ -304,21 +383,25 @@ function shouldLogYtDlpLine(line) {
   );
 }
 
-function buildYtDlpDownloadArgs({ url, template, format, ffmpegPath, preferMp4 }) {
+function buildYtDlpDownloadArgs({
+  url,
+  template,
+  format,
+  ffmpegPath,
+  preferMp4,
+  ytdlpPath,
+  cookiesFromBrowser
+}) {
   const args = [
-    '--no-playlist',
+    ...buildBaseYtDlpArgs({ ytdlpPath, cookiesFromBrowser }),
     '--newline',
     '--progress',
     '--no-quiet',
     '--no-simulate',
     '--continue',
     '--no-overwrites',
-    '--encoding',
-    'utf-8',
     '--no-mtime',
     '--windows-filenames',
-    '--socket-timeout',
-    '20',
     '--retries',
     '10',
     '--fragment-retries',
@@ -326,10 +409,9 @@ function buildYtDlpDownloadArgs({ url, template, format, ffmpegPath, preferMp4 }
     '--throttled-rate',
     '100K',
     '--no-check-formats',
-    '--extractor-args',
-    YOUTUBE_EXTRACTOR_ARGS,
+    '--write-info-json',
     '-f',
-    format || 'bestvideo*+bestaudio/best',
+    format || FALLBACK_FORMAT,
     '-S',
     'res,fps,vbr,abr',
     '-o',
@@ -528,6 +610,7 @@ class DownloadQueue {
     this.activeDownloads = 0;
     this.currentChild = null;
     this.currentItem = null;
+    this.cookiesFromBrowser = options.cookiesFromBrowser || null;
   }
 
   log(level, message) {
@@ -806,22 +889,60 @@ class DownloadQueue {
     });
   }
 
-  async probeInfo(url) {
-    const { stdout } = await this.runYtDlp([
+  async probeInfo(url, extra = {}) {
+    const { stdout, stderr } = await this.runYtDlp([
       '-J',
-      '--no-playlist',
       '--no-warnings',
-      '--encoding',
-      'utf-8',
-      '--socket-timeout',
-      '20',
-      '--extractor-args',
-      YOUTUBE_EXTRACTOR_ARGS,
+      ...buildBaseYtDlpArgs({
+        ytdlpPath: this.ytdlpPath,
+        cookiesFromBrowser: extra.cookiesFromBrowser || this.cookiesFromBrowser
+      }),
       url
     ]);
     const start = stdout.indexOf('{');
-    if (start < 0) throw new Error('yt-dlp не вернул информацию о видео');
-    return JSON.parse(stdout.slice(start));
+    if (start < 0) {
+      throw new Error(shortYtError(stderr || stdout) || 'yt-dlp не вернул информацию о видео');
+    }
+    const info = JSON.parse(stdout.slice(start));
+    if (!info || typeof info !== 'object') throw new Error('yt-dlp не вернул информацию о видео');
+    return info;
+  }
+
+  applyInfo(item, info) {
+    if (!info || typeof info !== 'object') return;
+    const title = String(info.title || info.fulltitle || '').trim();
+    if (title) item.title = title;
+    const selection = selectBestFormats(info.formats || []);
+    if (selection && selection.video) {
+      item.quality = describeQuality(selection);
+      item.resolution = selection.video.width && selection.video.height
+        ? `${selection.video.width}x${selection.video.height}`
+        : (selection.video.height ? `${selection.video.height}p` : item.resolution);
+      item.fps = Number(selection.video.fps) || item.fps;
+      item.videoCodec = selection.video.vcodec || item.videoCodec;
+    }
+    if (selection && selection.audio) {
+      item.audioCodec = selection.audio.acodec || item.audioCodec;
+      item.audioBitrate = Number(selection.audio.abr || selection.audio.tbr) || item.audioBitrate;
+    }
+    return selection;
+  }
+
+  readSidecarInfo(outputFile) {
+    if (!outputFile) return null;
+    const base = outputFile.replace(/\.[^.]+$/, '');
+    const candidates = [`${base}.info.json`, `${outputFile}.info.json`];
+    for (const file of candidates) {
+      if (!fs.existsSync(file)) continue;
+      try {
+        const info = JSON.parse(readUtf8(file));
+        safeUnlink(file);
+        return info;
+      } catch {
+        safeUnlink(file);
+      }
+    }
+    return null;
   }
 
   async probeOutput(file) {
@@ -885,41 +1006,54 @@ class DownloadQueue {
 
     this.log('info', `#${item.number} START ${item.url}`);
     this.log('info', `#${item.number} FORMAT CHECK`);
-    const info = await this.probeInfo(item.url);
-    const title = String(info.title || info.fulltitle || '').trim() || `video-${item.videoId || item.number}`;
-    item.title = title;
+    let selection = {
+      mode: 'fallback',
+      format: FALLBACK_FORMAT,
+      preferMp4: true
+    };
+    try {
+      const info = await this.probeInfo(item.url);
+      const probed = this.applyInfo(item, info);
+      if (probed) selection = { ...probed, format: FALLBACK_FORMAT };
+      this.log(
+        'info',
+        `#${item.number} BEST VIDEO: ${item.resolution || 'auto'} ${item.fps ? `${item.fps}FPS` : ''}`.trim()
+      );
+      this.log('info', `#${item.number} BEST AUDIO: ${item.audioBitrate ? `${Math.round(item.audioBitrate)}kbps` : 'best'}`);
+    } catch (err) {
+      if (err && err.cancelled) throw err;
+      if (classifyError(err && err.message) === 'PERMANENT') throw err;
+      const message = shortYtError(err && err.message);
+      this.log('warn', `#${item.number} FORMAT CHECK SKIP: ${message}`);
+      if (isBotCheckError(message) && !this.cookiesFromBrowser) {
+        const browser = defaultCookieBrowser();
+        this.log('info', `#${item.number} FORMAT CHECK retry, cookies из ${browser}`);
+        try {
+          const info = await this.probeInfo(item.url, { cookiesFromBrowser: browser });
+          this.cookiesFromBrowser = browser;
+          const probed = this.applyInfo(item, info);
+          if (probed) selection = { ...probed, format: FALLBACK_FORMAT };
+        } catch (err2) {
+          if (err2 && err2.cancelled) throw err2;
+          this.log('warn', `#${item.number} cookies не открыли форматы: ${shortYtError(err2 && err2.message)}`);
+        }
+      }
+    }
+    if (!item.title) item.title = `video-${item.videoId || item.number}`;
     this.persist();
     this.emitProgress({ status: `Downloading #${item.number}` });
 
-    const selection = selectBestFormats(info.formats || []);
-    item.quality = describeQuality(selection);
-    if (selection.video) {
-      item.resolution = selection.video.width && selection.video.height
-        ? `${selection.video.width}x${selection.video.height}`
-        : (selection.video.height ? `${selection.video.height}p` : null);
-      item.fps = Number(selection.video.fps) || null;
-      item.videoCodec = selection.video.vcodec || null;
-    }
-    if (selection.audio) {
-      item.audioCodec = selection.audio.acodec || null;
-      item.audioBitrate = Number(selection.audio.abr || selection.audio.tbr) || null;
-    }
-    this.log(
-      'info',
-      `#${item.number} BEST VIDEO: ${item.resolution || 'n/a'} ${item.fps ? `${item.fps}FPS` : ''}`.trim()
-    );
-    this.log('info', `#${item.number} BEST AUDIO: ${item.audioBitrate ? `${Math.round(item.audioBitrate)}kbps` : 'best'}`);
-    this.persist();
-
-    const safeTitle = sanitizeFilename(title);
+    const safeTitle = sanitizeFilename(item.title);
     const id = item.videoId || `item${item.number}`;
     const template = path.join(this.outputDir, `${item.number}_${id}.%(ext)s`);
-    const args = buildYtDlpDownloadArgs({
+    const makeArgs = (cookiesFromBrowser) => buildYtDlpDownloadArgs({
       url: item.url,
       template,
-      format: selection.format,
+      format: FALLBACK_FORMAT,
       ffmpegPath: this.ffmpegPath,
-      preferMp4: selection.preferMp4
+      preferMp4: selection.preferMp4,
+      ytdlpPath: this.ytdlpPath,
+      cookiesFromBrowser
     });
 
     this.log('info', `#${item.number} DOWNLOAD START`);
@@ -929,7 +1063,7 @@ class DownloadQueue {
     });
 
     let lastLogged = '';
-    await this.runYtDlp(args, (line) => {
+    const onLine = (line) => {
       const progress = parseProgressLine(line);
       if (progress) {
         this.emitProgress({
@@ -945,7 +1079,21 @@ class DownloadQueue {
         const short = line.length > 240 ? `${line.slice(0, 237)}...` : line;
         this.log(/^(WARNING|ERROR)/i.test(line) ? 'warn' : 'info', `#${item.number} ${short}`);
       }
-    });
+    };
+
+    try {
+      await this.runYtDlp(makeArgs(this.cookiesFromBrowser), onLine);
+    } catch (err) {
+      if (err && err.cancelled) throw err;
+      if (!this.cookiesFromBrowser && isBotCheckError(err && err.message)) {
+        const browser = defaultCookieBrowser();
+        this.log('warn', `#${item.number} YouTube просит вход — пробую cookies из ${browser}`);
+        this.cookiesFromBrowser = browser;
+        await this.runYtDlp(makeArgs(browser), onLine);
+      } else {
+        throw err;
+      }
+    }
 
     let outputFile = findExistingOutput(this.outputDir, { ...item, filename: null });
     if (!outputFile) {
@@ -959,8 +1107,11 @@ class DownloadQueue {
       throw new Error('Итоговый файл не появился или слишком маленький');
     }
 
+    const sidecar = this.readSidecarInfo(outputFile);
+    if (sidecar) this.applyInfo(item, sidecar);
+    const prettyTitle = sanitizeFilename(item.title || safeTitle);
     outputFile = await this.remuxIfNeeded(outputFile, selection.preferMp4);
-    outputFile = renameToPrettyFilename(outputFile, item, safeTitle);
+    outputFile = renameToPrettyFilename(outputFile, item, prettyTitle);
     const probed = await this.probeOutput(outputFile);
     if (!probed.hasVideo) throw new Error('В результате нет видеопотока');
     if (selection.audio && !probed.hasAudio) throw new Error('В результате нет аудиопотока');
@@ -1013,7 +1164,7 @@ class DownloadQueue {
       item.status = STATUS.RETRY;
       const delay = retryDelayMs(item.attempts);
       item.nextRetry = new Date(this.now() + delay).toISOString();
-      this.log('error', `#${item.number} ERROR`);
+      this.log('error', `#${item.number} ERROR ${item.lastError}`);
       this.log('warn', `#${item.number} RETRY IN ${Math.round(delay / 1000)}s`);
     }
     this.persist();
@@ -1065,7 +1216,9 @@ class DownloadQueue {
     this.stopped = false;
     this.paused = false;
     this.reconcileExisting();
+    const jsRuntime = resolveJsRuntimeArgs(this.ytdlpPath)[1] || 'auto';
     this.log('info', `Очередь: ${this.items.length} ссылок, папка ${this.outputDir}`);
+    this.log('info', `yt-dlp: ${path.basename(this.ytdlpPath || 'yt-dlp')} · JS ${jsRuntime}`);
 
     try {
       while (this.unfinished() && !this.stopped) {
@@ -1135,8 +1288,13 @@ module.exports = {
   describeQuality,
   parseProgressLine,
   buildYtDlpDownloadArgs,
+  buildBaseYtDlpArgs,
+  resolveJsRuntimeArgs,
+  isBotCheckError,
+  shortYtError,
   shouldLogYtDlpLine,
   YOUTUBE_EXTRACTOR_ARGS,
+  FALLBACK_FORMAT,
   STALL_TIMEOUT_MS,
   mergeUrlsIntoQueue,
   loadQueueFile,

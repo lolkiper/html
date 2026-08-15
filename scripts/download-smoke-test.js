@@ -21,8 +21,13 @@ const {
   selectBestFormats,
   parseProgressLine,
   buildYtDlpDownloadArgs,
+  buildBaseYtDlpArgs,
+  resolveJsRuntimeArgs,
+  isBotCheckError,
   shouldLogYtDlpLine,
   mergeUrlsIntoQueue,
+  YOUTUBE_EXTRACTOR_ARGS,
+  FALLBACK_FORMAT,
   STATUS
 } = require('../downloader');
 
@@ -92,6 +97,8 @@ function createMockRunner(options = {}) {
       const file = String(template).replace('%(ext)s', 'mp4');
       fs.mkdirSync(path.dirname(file), { recursive: true });
       writeDummyVideo(file);
+      const title = options.titles && options.titles[id] ? options.titles[id] : `Title ${id}`;
+      fs.writeFileSync(`${file.replace(/\.mp4$/i, '')}.info.json`, JSON.stringify({ id, title, formats: fakeFormats() }));
       if (typeof onLine === 'function') {
         onLine('[youtube] Extracting URL: ' + url);
         onLine('[download] Destination: ' + file);
@@ -167,7 +174,7 @@ async function main() {
   const dlArgs = buildYtDlpDownloadArgs({
     url: 'https://www.youtube.com/watch?v=AAAAAAAAAAA',
     template: path.join(ROOT, '1_AAAAAAAAAAA.%(ext)s'),
-    format: '137+140',
+    format: FALLBACK_FORMAT,
     ffmpegPath: 'ffmpeg',
     preferMp4: true
   });
@@ -177,6 +184,22 @@ async function main() {
   check(!dlArgs.includes('--print'), 'не используем --print, который глушит прогресс');
   check(dlArgs.includes('--extractor-args'), 'youtube extractor-args заданы');
   check(dlArgs.includes('--windows-filenames'), 'имена файлов Windows-безопасные');
+  check(dlArgs.includes('--write-info-json'), 'название берём из info.json после скачивания');
+  check(dlArgs.includes(FALLBACK_FORMAT), 'скачивание не пинит конкретные format_id с FORMAT CHECK');
+  check(
+    YOUTUBE_EXTRACTOR_ARGS === 'youtube:player_client=default,-android_sdkless',
+    'не форсируем сломанные tv/android_sdkless/web — из‑за них FORMAT CHECK падал на всех ссылках',
+    YOUTUBE_EXTRACTOR_ARGS
+  );
+  check(isBotCheckError('Sign in to confirm you’re not a bot'), 'антибот YouTube распознаётся как временная ошибка');
+  check(classifyError('Sign in to confirm you’re not a bot') === 'TEMPORARY', 'антибот не помечает ссылку как вечную ошибку');
+  const jsArgs = resolveJsRuntimeArgs(process.execPath);
+  check(
+    jsArgs[0] === '--js-runtimes' && /^(deno|quickjs|node):/.test(jsArgs[1] || ''),
+    'для YouTube передаём JS runtime (Deno рядом с yt-dlp или Node 22+)',
+    String(jsArgs)
+  );
+  check(buildBaseYtDlpArgs({ ytdlpPath: process.execPath }).includes('--js-runtimes'), 'базовые аргументы yt-dlp включают JS runtime');
 
   check(MAX_CONCURRENT_DOWNLOADS === 1, 'одновременно качается только одно видео');
 
@@ -241,6 +264,7 @@ async function main() {
   check(lastPercent >= 87, 'прогресс с mock yt-dlp доходит до UI не нулём', `lastPercent=${lastPercent}`);
   check(seenDownloadArgs.length > 0 && seenDownloadArgs[0].includes('--progress'), 'реальный download-вызов идёт с --progress');
   check(seenDownloadArgs.every((args) => !args.includes('--print')), 'ни один download-вызов не использует --print');
+  check(seenDownloadArgs.every((args) => args.includes(FALLBACK_FORMAT)), 'download не пинит format_id из FORMAT CHECK');
 
   const titles = fs.readFileSync(path.join(ROOT, 'nazvaniya.txt'), 'utf8').split(/\r?\n/).filter(Boolean);
   check(titles.length === 3, 'в nazvaniya.txt ровно три успешных названия', titles.join(' | '));
@@ -307,6 +331,37 @@ async function main() {
   check(paused.cancelled === true, 'STOP помечает очередь как остановленную');
   check(fs.existsSync(path.join(pauseDir, 'download_queue.json')), 'download_queue.json сохранён до выхода');
   check(paused.completed <= 1, 'после STOP очередь не докачивает остальные', `completed=${paused.completed}`);
+
+  console.log('\n5) FORMAT CHECK не блокирует скачивание…');
+  const skipDir = path.join(ROOT, 'skip-check');
+  fs.mkdirSync(skipDir, { recursive: true });
+  const skipRunner = createMockRunner({
+    outputDir: skipDir,
+    titles: { SKIPCHECK01: 'После проверки формата' }
+  });
+  const skipLogs = [];
+  const skipQueue = new DownloadQueue({
+    outputDir: skipDir,
+    ffmpegPath: 'ffmpeg',
+    ffprobePath: null,
+    runner: async (args, onLine) => {
+      if (args.includes('-J')) throw new Error('Sign in to confirm you’re not a bot. Use --cookies-from-browser');
+      return skipRunner(args, onLine);
+    },
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    hooks: {
+      onLog: (_level, message) => skipLogs.push(message)
+    }
+  });
+  skipQueue.setLinks('https://youtube.com/shorts/SKIPCHECK01');
+  const skipped = await skipQueue.run();
+  check(skipped.completed === 1, 'после падения FORMAT CHECK видео всё равно скачивается', `completed=${skipped.completed}`);
+  check(skipLogs.some((line) => /FORMAT CHECK SKIP/i.test(line)), 'в лог пишется причина, а не голое ERROR');
+  const skipTitles = fs.readFileSync(path.join(skipDir, 'nazvaniya.txt'), 'utf8');
+  check(skipTitles.includes('После проверки формата'), 'название взято из info.json, а не из упавшего -J');
 
   fs.rmSync(ROOT, { recursive: true, force: true });
   console.log(`\nИтог: ${failures ? `${failures} проверок провалено` : 'все проверки очереди пройдены'}`);
