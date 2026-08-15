@@ -24,7 +24,6 @@ const {
   buildBaseYtDlpArgs,
   buildAria2cDownloaderArgs,
   resolveJsRuntimeArgs,
-  resolveAria2cPath,
   isBotCheckError,
   shouldLogYtDlpLine,
   mergeUrlsIntoQueue,
