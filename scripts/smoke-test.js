@@ -27,12 +27,20 @@ const {
   buildFeatherMaskFilter,
   outputExtension,
   resolveEncodePlan,
+  resolveEncoderKey,
+  perceptualCq,
+  chooseOutputFps,
+  describeEncodeWork,
+  estimateOutputBytes,
+  MAX_EXPORT_JOBS,
   ENCODE_PACE_SPEED,
   INTER_FILE_DELAY_MS,
   FILTER_SCRIPT_THRESHOLD,
   paceGlobalArgs,
   attachFilterGraph,
-  isUnknownFfmpegOption
+  isUnknownFfmpegOption,
+  fitStep,
+  videoSegmentFilter
 } = require('../processor');
 
 const ROOT = path.join(os.tmpdir(), `shorts-inserter-smoke-${process.pid}`);
@@ -185,27 +193,52 @@ function makeVideo({ file, width, height, duration, fps, withAudio, pattern = 't
 
 async function main() {
   console.log(`FFmpeg: ${ffmpegPath}`);
-  const hybridPlan = resolveEncodePlan('h264', 'hybrid', { h264: null, h265: null, cores: 8 });
-  const cpuPlan = resolveEncodePlan('h264', 'cpu', { h264: null, h265: null, cores: 8 });
+  const balancedPlan = resolveEncodePlan('h264', { exportMode: 'balanced', resourceUsage: 'balanced' }, { h264: null, h265: null, cores: 8 });
+  const highPlan = resolveEncodePlan('h264', { exportMode: 'fast', resourceUsage: 'high' }, { h264: null, h265: null, cores: 8 });
+  const lowPlan = resolveEncodePlan('h264', { exportMode: 'auto', resourceUsage: 'low' }, { h264: null, h265: null, cores: 8 });
+  const nvencPlan = resolveEncodePlan('auto', { exportMode: 'balanced', resourceUsage: 'balanced' }, {
+    h264: { id: 'h264_nvenc', vendor: 'NVIDIA NVENC', extra: ['-gpu', '0'] },
+    h265: { id: 'hevc_nvenc', vendor: 'NVIDIA NVENC', extra: ['-gpu', '0'] },
+    cores: 8
+  });
   check(
-    hybridPlan.threads.encodeThreads === 2 && hybridPlan.threads.filterThreads === 2,
-    'hybrid без GPU занимает 2 из 8 ядер, а не все',
-    `encode=${hybridPlan.threads.encodeThreads} filter=${hybridPlan.threads.filterThreads}`
+    balancedPlan.threads.encodeThreads === 2 && balancedPlan.threads.filterThreads === 2 && !balancedPlan.pace,
+    'balanced без GPU: 2 потока и без readrate',
+    `encode=${balancedPlan.threads.encodeThreads} pace=${balancedPlan.pace}`
   );
   check(
-    cpuPlan.threads.encodeThreads === 3,
-    'режим «только процессор» берёт треть ядер (не больше 4)',
-    `encode=${cpuPlan.threads.encodeThreads}`
+    highPlan.threads.encodeThreads <= 6 && highPlan.threads.encodeThreads >= 2,
+    'high не берёт все 8 ядер',
+    `encode=${highPlan.threads.encodeThreads}`
   );
+  check(lowPlan.pace === true && lowPlan.threads.filterThreads === 1, 'low включает мягкий readrate и 1 поток фильтров');
+  check(resolveEncoderKey('auto', { h265: { id: 'hevc_nvenc' } }) === 'h265', 'auto выбирает hardware HEVC');
+  check(resolveEncoderKey('auto', { cores: 8 }) === 'h264', 'auto без GPU не берёт software HEVC');
+  check(nvencPlan.usingGpu && nvencPlan.encoderName === 'hevc_nvenc' && nvencPlan.videoOptions.includes('-cq'), 'NVENC HEVC в CQ, не фиксированный огромный bitrate');
+  check(!nvencPlan.videoOptions.includes('libx264'), 'при доступном NVENC CPU-кодек не используется');
+  check(chooseOutputFps(60) === 60 && chooseOutputFps(30) === 30, 'исходный FPS сохраняется');
+  check(perceptualCq('h264', 'balanced', 1920, 1080) < perceptualCq('h264', 'fast', 1920, 1080), 'fast слабее quality-target, чем balanced');
+  check(perceptualCq('h264', 'balanced', 1280, 720) > perceptualCq('h264', 'balanced', 1920, 1080), '720p получает чуть больший CQ — файл меньше');
+  check(MAX_EXPORT_JOBS === 1, 'одновременно только один encode');
+  const sameSize = fitStep({ width: 1080, height: 1920, fit: 'cover' }, { width: 1080, height: 1920 });
+  check(sameSize === '', 'масштаб пропускается, если кадр уже нужного размера');
+  const work = describeEncodeWork({
+    overlay: null,
+    closeup: null,
+    source: { width: 1080, height: 1920, fps: 60 },
+    shorts: { width: 1080, height: 1920, fps: 60 },
+    target: { width: 1080, height: 1920, fps: 60 }
+  });
+  check(work.mustEncodeVideo && !work.streamCopy && !work.scale && work.keepSourceFps, 'copy всего файла невозможен из-за вставки Shorts, но scale/fps не дублируются');
   const paceArgs = paceGlobalArgs().join(' ');
   check(
     ENCODE_PACE_SPEED >= 3 && ENCODE_PACE_SPEED <= 4,
-    'потолок кодирования около 50% Video Encode (3–4×)',
+    'readrate остаётся только как опция LOW',
     `speed=${ENCODE_PACE_SPEED}`
   );
   check(
     paceArgs.includes('-readrate') && paceArgs.includes('readrate_initial_burst 0'),
-    'чтение входа ограничено с первого пакета, без стартового выброса',
+    'LOW-чтение без стартового выброса',
     paceArgs
   );
   check(
@@ -321,8 +354,9 @@ async function main() {
     'счётчики Готово/Ошибок обновляются во время очереди, а не только в конце'
   );
   check(
-    logs.some((line) => line.includes('до ') && line.includes('пишется сразу')),
-    'в логе есть ограничение скорости и сохранение каждого файла сразу'
+    logs.some((line) => line.includes('один процесс') || line.includes('MAX_EXPORT_JOBS')) &&
+      logs.some((line) => line.includes('esN') || line.includes('сразу')),
+    'в логе есть один encode-процесс и сохранение каждого файла сразу'
   );
 
   const out1 = outH264(OUTPUT_DIR, 1);
@@ -942,6 +976,64 @@ async function main() {
   check(proresSummary.done === 2, 'ProRes: два файла готовы', `done=${proresSummary.done}`);
   const proresInfo = await probeMedia(path.join(OUTPUT_DIR, 'es1.mov'));
   check(proresInfo.videoCodec === 'prores', 'ProRes: кодек в результате верный', proresInfo.videoCodec);
+
+  console.log('\n8) Экспорт: FPS, размер, один pipeline…');
+  const benchSrc = path.join(ROOT, 'bench-src');
+  const benchFast = path.join(ROOT, 'bench-fast');
+  const benchBal = path.join(ROOT, 'bench-bal');
+  [benchSrc, benchFast, benchBal].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  makeSolidVideo({
+    file: path.join(benchSrc, 'clip.mp4'),
+    color: 'red',
+    width: 720,
+    height: 1280,
+    duration: 2,
+    fps: 60
+  });
+  const benchShorts = path.join(ASSETS_DIR, 'bench-shorts.mp4');
+  makeSolidVideo({ file: benchShorts, color: 'green', width: 720, height: 1280, duration: 1, fps: 60 });
+
+  const runBench = async (outputDir, exportMode) => {
+    const started = Date.now();
+    const batch = new BatchProcessor(
+      {
+        sourceDir: benchSrc,
+        shortsFile: benchShorts,
+        useOverlay: false,
+        outputDir,
+        frame: 'source',
+        percent: 80,
+        encoder: 'h264',
+        exportMode,
+        resourceUsage: 'balanced',
+        verbose: false
+      },
+      { onLog: () => {} }
+    );
+    const summary = await batch.run();
+    const file = outH264(outputDir, 1);
+    const info = fs.existsSync(file) ? await probeMedia(file) : null;
+    return {
+      ms: Date.now() - started,
+      size: info ? fs.statSync(file).size : 0,
+      fps: info ? info.fps : 0,
+      done: summary.done,
+      temps: fs.readdirSync(outputDir).filter((name) => name.startsWith('shorts-') || name.startsWith('.shorts-'))
+    };
+  };
+
+  const oldLike = await runBench(benchFast, 'fast');
+  const neu = await runBench(benchBal, 'balanced');
+  check(oldLike.done === 1 && neu.done === 1, 'бенчмарк: оба режима собрали файл');
+  check(Math.abs(neu.fps - 60) < 0.2, '60 fps исходник остаётся 60 fps', `fps=${neu.fps}`);
+  check(oldLike.temps.length === 0 && neu.temps.length === 0, 'после экспорта нет промежуточных файлов');
+  check(MAX_EXPORT_JOBS === 1, 'параллельных encode нет');
+  console.log(
+    `  OLD-like FAST:  ${oldLike.ms} ms, ${(oldLike.size / 1024).toFixed(0)} KB, ${oldLike.fps} fps`
+  );
+  console.log(
+    `  NEW BALANCED:   ${neu.ms} ms, ${(neu.size / 1024).toFixed(0)} KB, ${neu.fps} fps`
+  );
 
   console.log(`\nИтог: ${failures ? `${failures} проверок провалено` : 'все проверки пройдены'}`);
   fs.rmSync(ROOT, { recursive: true, force: true });

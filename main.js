@@ -10,7 +10,8 @@ app.commandLine.appendSwitch('force_high_performance_gpu');
 const {
   BatchProcessor,
   ENCODERS,
-  ACCEL_MODES,
+  EXPORT_MODES,
+  RESOURCE_MODES,
   FRAME_PRESETS,
   FIT_MODES,
   DEFAULTS,
@@ -95,7 +96,8 @@ ipcMain.handle('app:info', () => {
   return {
     version: app.getVersion(),
     encoders: Object.entries(ENCODERS).map(([value, preset]) => ({ value, label: preset.label })),
-    accels: Object.entries(ACCEL_MODES).map(([value, mode]) => ({ value, label: mode.label })),
+    exportModes: Object.entries(EXPORT_MODES).map(([value, mode]) => ({ value, label: mode.label })),
+    resourceModes: Object.entries(RESOURCE_MODES).map(([value, mode]) => ({ value, label: mode.label })),
     frames: Object.entries(FRAME_PRESETS).map(([value, preset]) => ({ value, label: preset.label })),
     fits: Object.entries(FIT_MODES).map(([value, mode]) => ({ value, label: mode.label })),
     defaults: DEFAULTS,

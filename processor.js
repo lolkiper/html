@@ -29,16 +29,19 @@ const AUDIO_LAYOUT = 'stereo';
 
 /** Быстрее bicubic, для Shorts разницы почти нет. */
 const SCALE_FLAGS = 'fast_bilinear';
-/** 60 fps исходник гоняется в 30 — вдвое меньше кадров на фильтрах. */
-const MAX_OUTPUT_FPS = 30;
+/** Запасной FPS, если у исходника нет корректной частоты. */
+const MAX_OUTPUT_FPS = 60;
+const MAX_KEEP_FPS = 120;
 /**
- * Потолок относительно realtime. 4× при 30 fps ≈ 120 кадров/с — около половины
- * NVENC на RTX 3060 1080p. Каждый файл пишется своим процессом сразу в esN.mp4:
- * так ролик появляется в папке, как только готов, и команда не раздувается.
+ * Только режим LOW слегка ограничивает чтение входа, чтобы фильтры не
+ * разгоняли одно ядро до потолка. Balanced/High идут без искусственного потолка:
+ * NVENC сам держит очередь, CPU занят только склейкой.
  */
 const ENCODE_PACE_SPEED = 4;
-/** Пауза между файлами, чтобы NVENC успел закрыть предыдущую сессию. */
+/** Один файл = один ffmpeg. Пауза, чтобы NVENC закрыл предыдущую сессию. */
+const MAX_EXPORT_JOBS = 1;
 const INTER_FILE_DELAY_MS = 120;
+const PROGRESS_INTERVAL_MS = 500;
 const MIN_OUTPUT_BYTES = 64;
 
 function outputContainer(encoderKey) {
@@ -94,25 +97,19 @@ function escapeRegExp(value) {
 
 /** Пресеты кодеков. H.264/H.265 — MP4 для Windows, ProRes — MOV. */
 const ENCODERS = {
+  auto: {
+    label: 'Авто — HEVC на видеокарте, иначе H.264'
+  },
   h264: {
-    label: 'H.264 — быстро (veryfast)',
+    label: 'H.264',
     pixelFormat: 'yuv420p',
-    videoOptions: [
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-profile:v', 'high',
-      '-tag:v', 'avc1',
-      '-x264-params', 'ref=1:bframes=0:rc-lookahead=10:sync-lookahead=0:scenecut=0'
-    ],
-    audioOptions: ['-c:a', 'aac', '-b:a', '128k'],
+    audioBitrate: '96k',
     extraOptions: ['-movflags', '+faststart']
   },
   h265: {
-    label: 'H.265 — быстро (veryfast)',
+    label: 'H.265 / HEVC',
     pixelFormat: 'yuv420p',
-    videoOptions: [
-      '-c:v', 'libx265', '-preset', 'veryfast', '-crf', '24', '-tag:v', 'hvc1',
-      '-x265-params', 'log-level=error'
-    ],
-    audioOptions: ['-c:a', 'aac', '-b:a', '128k'],
+    audioBitrate: '96k',
     extraOptions: ['-movflags', '+faststart']
   },
   prores: {
@@ -122,6 +119,19 @@ const ENCODERS = {
     audioOptions: ['-c:a', 'pcm_s16le'],
     extraOptions: []
   }
+};
+
+const EXPORT_MODES = {
+  auto: { label: 'Авто — баланс качества, скорости и размера' },
+  fast: { label: 'Быстрый — hardware preset, нормальное качество' },
+  balanced: { label: 'Баланс — качество, размер и скорость' },
+  quality: { label: 'Макс. качество — без медленных CPU-пресетов' }
+};
+
+const RESOURCE_MODES = {
+  low: { label: 'Низкая — минимум нагрузки, стабильность' },
+  balanced: { label: 'Баланс — один encode, умеренные потоки' },
+  high: { label: 'Высокая — быстрее фильтры, всё ещё 1 encode' }
 };
 
 /** Размер итогового кадра. */
@@ -153,7 +163,9 @@ const SPLIT_DEFAULTS = {
 
 const DEFAULTS = {
   percent: 90,
-  encoder: 'h264',
+  encoder: 'auto',
+  exportMode: 'auto',
+  resourceUsage: 'balanced',
   accel: 'hybrid',
   overlayOpacity: 100,
   outputPrefix: 'es',
@@ -162,99 +174,25 @@ const DEFAULTS = {
   split: SPLIT_DEFAULTS
 };
 
-/** Как делить работу между процессором и видеокартой. */
+/** Старые подписи нагрузки: оставлены как синонимы resourceUsage. */
 const ACCEL_MODES = {
-  hybrid: {
-    label: 'Минимум нагрузки — 1–2 ядра CPU, кодирование на видеокарте'
-  },
-  cpu: { label: 'Только процессор (быстрый пресет, треть ядер)' },
-  gpu: { label: 'Предпочесть видеокарту (если нет — быстрый процессор)' }
+  hybrid: { label: RESOURCE_MODES.balanced.label },
+  cpu: { label: 'Только процессор (если карта недоступна)' },
+  gpu: { label: RESOURCE_MODES.high.label }
 };
 
 const GPU_H264 = [
-  {
-    id: 'h264_nvenc',
-    vendor: 'NVIDIA NVENC',
-    extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-forced-idr', '1'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-forced-idr', '1'],
-      ['-gpu', '0', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
-      ['-gpu', '1', '-preset', 'p4', '-rc', 'vbr', '-cq', '23', '-b:v', '0'],
-      ['-gpu', '0', '-preset', 'p1'],
-      ['-gpu', '1', '-preset', 'p1'],
-      ['-gpu', '0'],
-      ['-gpu', '1'],
-      []
-    ]
-  },
-  {
-    id: 'h264_amf',
-    vendor: 'AMD AMF',
-    extras: [
-      ['-quality', 'speed', '-rc', 'cqp', '-qp_i', '22', '-qp_p', '24'],
-      ['-quality', 'speed'],
-      []
-    ]
-  },
-  {
-    id: 'h264_qsv',
-    vendor: 'Intel Quick Sync',
-    extras: [
-      ['-preset', 'veryfast'],
-      ['-preset', 'fast'],
-      []
-    ]
-  },
-  {
-    id: 'h264_videotoolbox',
-    vendor: 'Apple VideoToolbox',
-    extras: [
-      ['-profile:v', 'high', '-q:v', '65'],
-      ['-q:v', '65'],
-      []
-    ]
-  }
+  { id: 'h264_nvenc', vendor: 'NVIDIA NVENC', extras: [['-gpu', '0'], ['-gpu', '1'], []] },
+  { id: 'h264_amf', vendor: 'AMD AMF', extras: [[]] },
+  { id: 'h264_qsv', vendor: 'Intel Quick Sync', extras: [[]] },
+  { id: 'h264_videotoolbox', vendor: 'Apple VideoToolbox', extras: [[]] }
 ];
 
 const GPU_H265 = [
-  {
-    id: 'hevc_nvenc',
-    vendor: 'NVIDIA NVENC',
-    extras: [
-      ['-gpu', '0', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-forced-idr', '1', '-tag:v', 'hvc1'],
-      ['-gpu', '1', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr', '-cq', '26', '-b:v', '0', '-rc-lookahead', '0', '-strict_gop', '1', '-bf', '0', '-async_depth', '1', '-forced-idr', '1', '-tag:v', 'hvc1'],
-      ['-gpu', '0', '-preset', 'p4', '-tag:v', 'hvc1'],
-      ['-gpu', '1', '-preset', 'p4', '-tag:v', 'hvc1'],
-      ['-gpu', '0', '-tag:v', 'hvc1'],
-      ['-gpu', '1', '-tag:v', 'hvc1'],
-      ['-tag:v', 'hvc1']
-    ]
-  },
-  {
-    id: 'hevc_amf',
-    vendor: 'AMD AMF',
-    extras: [
-      ['-quality', 'speed', '-tag:v', 'hvc1'],
-      ['-tag:v', 'hvc1']
-    ]
-  },
-  {
-    id: 'hevc_qsv',
-    vendor: 'Intel Quick Sync',
-    extras: [
-      ['-preset', 'veryfast', '-tag:v', 'hvc1'],
-      ['-preset', 'fast', '-tag:v', 'hvc1'],
-      ['-tag:v', 'hvc1']
-    ]
-  },
-  {
-    id: 'hevc_videotoolbox',
-    vendor: 'Apple VideoToolbox',
-    extras: [
-      ['-q:v', '65', '-tag:v', 'hvc1'],
-      ['-tag:v', 'hvc1']
-    ]
-  }
+  { id: 'hevc_nvenc', vendor: 'NVIDIA NVENC', extras: [['-gpu', '0'], ['-gpu', '1'], []] },
+  { id: 'hevc_amf', vendor: 'AMD AMF', extras: [[]] },
+  { id: 'hevc_qsv', vendor: 'Intel Quick Sync', extras: [[]] },
+  { id: 'hevc_videotoolbox', vendor: 'Apple VideoToolbox', extras: [[]] }
 ];
 
 // ---------------------------------------------------------------------------
@@ -428,62 +366,266 @@ function detectHardware() {
   return hardwareCache;
 }
 
-function threadBudget(mode, coreCount) {
+function threadBudget(resourceUsage, coreCount, usingGpu) {
   const cores = Math.max(1, coreCount || (os.cpus() || []).length || 4);
-  if (mode === 'cpu') {
-    const n = Math.max(1, Math.min(4, Math.ceil(cores / 3)));
-    return { cores, filterThreads: n, encodeThreads: n };
+  if (resourceUsage === 'low' || resourceUsage === 'cpu') {
+    return { cores, filterThreads: 1, encodeThreads: resourceUsage === 'cpu' ? Math.max(1, Math.min(4, Math.ceil(cores / 3))) : 1 };
   }
-  // hybrid / gpu: один-два потока на фильтры, кодирование на карте (или veryfast x264).
-  const n = Math.max(1, Math.min(2, Math.floor(cores / 4) || 1));
-  return { cores, filterThreads: n, encodeThreads: n };
+  if (resourceUsage === 'high' || resourceUsage === 'gpu') {
+    const n = Math.max(2, Math.min(usingGpu ? 4 : 6, Math.ceil(cores / 2)));
+    return { cores, filterThreads: Math.min(4, n), encodeThreads: n };
+  }
+  const n = Math.max(2, Math.min(usingGpu ? 2 : 4, Math.floor(cores / 3) || 2));
+  return { cores, filterThreads: Math.min(2, n), encodeThreads: n };
+}
+
+function mapAccelToResource(accel) {
+  if (accel === 'gpu' || accel === 'high') return 'high';
+  if (accel === 'cpu' || accel === 'low') return 'low';
+  return 'balanced';
+}
+
+function normalizeExportMode(value) {
+  if (value === 'max' || value === 'max_quality') return 'quality';
+  return EXPORT_MODES[value] ? value : DEFAULTS.exportMode;
+}
+
+function normalizeResourceUsage(value) {
+  if (RESOURCE_MODES[value]) return value;
+  return mapAccelToResource(value);
+}
+
+function normalizeExportOptions(accelOrOptions) {
+  if (accelOrOptions && typeof accelOrOptions === 'object' && !Array.isArray(accelOrOptions)) {
+    const accel = accelOrOptions.accel;
+    return {
+      exportMode: normalizeExportMode(accelOrOptions.exportMode),
+      resourceUsage: normalizeResourceUsage(accelOrOptions.resourceUsage || accel),
+      forceCpu: Boolean(accelOrOptions.forceCpu) || accel === 'cpu',
+      target: accelOrOptions.target || null
+    };
+  }
+  const accel = String(accelOrOptions || DEFAULTS.accel);
+  return {
+    exportMode: DEFAULTS.exportMode,
+    resourceUsage: mapAccelToResource(accel),
+    forceCpu: accel === 'cpu',
+    target: null
+  };
+}
+
+/** Авто никогда не берёт software HEVC — libx265 легко кладёт CPU в 100%. */
+function resolveEncoderKey(requested, hardware) {
+  if (requested === 'prores' || requested === 'h264' || requested === 'h265') return requested;
+  if (hardware && hardware.h265) return 'h265';
+  return 'h264';
+}
+
+function pixelCount(width, height) {
+  return Math.max(1, Number(width) || 1080) * Math.max(1, Number(height) || 1080);
+}
+
+function perceptualCq(encoderKey, exportMode, width, height) {
+  const mode = exportMode === 'auto' ? 'balanced' : exportMode;
+  const base = encoderKey === 'h265'
+    ? { fast: 30, balanced: 26, quality: 22 }[mode] || 26
+    : { fast: 26, balanced: 23, quality: 20 }[mode] || 23;
+  const pixels = pixelCount(width, height);
+  const p1080 = 1920 * 1080;
+  let adj = 0;
+  if (pixels < p1080 * 0.55) adj += 1;
+  else if (pixels > p1080 * 1.8) adj -= 1;
+  return clamp(base + adj, 16, 34);
+}
+
+function audioBitrateForMode(exportMode) {
+  if (exportMode === 'fast') return '80k';
+  if (exportMode === 'quality') return '128k';
+  return '96k';
+}
+
+function softwareVideoOptions(encoderKey, exportMode, threads, cq) {
+  const mode = exportMode === 'auto' ? 'balanced' : exportMode;
+  if (encoderKey === 'h265') {
+    const preset = mode === 'quality' ? 'fast' : 'veryfast';
+    return [
+      '-c:v', 'libx265', '-preset', preset, '-crf', String(cq), '-tag:v', 'hvc1',
+      '-x265-params', 'log-level=error',
+      '-threads', String(threads)
+    ];
+  }
+  const preset = mode === 'quality' ? 'fast' : 'veryfast';
+  const x264 = mode === 'quality'
+    ? 'ref=2:bframes=2:rc-lookahead=20:scenecut=40'
+    : 'ref=1:bframes=0:rc-lookahead=10:sync-lookahead=0:scenecut=0';
+  return [
+    '-c:v', 'libx264', '-preset', preset, '-crf', String(cq), '-profile:v', 'high',
+    '-tag:v', 'avc1',
+    '-x264-params', x264,
+    '-threads', String(threads)
+  ];
+}
+
+function gpuIndexFromExtra(extra) {
+  const list = Array.isArray(extra) ? extra : [];
+  const idx = list.indexOf('-gpu');
+  if (idx >= 0 && list[idx + 1] != null) return list[idx + 1];
+  return null;
+}
+
+function hardwareVideoOptions(gpu, encoderKey, exportMode, cq) {
+  const mode = exportMode === 'auto' ? 'balanced' : exportMode;
+  const id = gpu && gpu.id;
+  const gpuIndex = gpuIndexFromExtra(gpu && gpu.extra);
+  const hevcTag = encoderKey === 'h265' ? ['-tag:v', 'hvc1'] : [];
+
+  if (id === 'h264_nvenc' || id === 'hevc_nvenc') {
+    const preset = mode === 'fast' ? 'p1' : mode === 'quality' ? 'p5' : 'p4';
+    const opts = [];
+    if (gpuIndex != null) opts.push('-gpu', String(gpuIndex));
+    opts.push('-c:v', id, '-preset', preset, '-tune', mode === 'fast' ? 'll' : 'hq');
+    opts.push('-rc', 'vbr', '-cq', String(cq), '-b:v', '0');
+    if (mode === 'fast') opts.push('-rc-lookahead', '0', '-bf', '0', '-async_depth', '2');
+    else if (mode === 'quality') opts.push('-spatial-aq', '1', '-temporal-aq', '1', '-rc-lookahead', '16', '-bf', '2');
+    else opts.push('-spatial-aq', '1', '-rc-lookahead', '8', '-bf', '2');
+    return withPlayerCompatibleTags(encoderKey, opts.concat(hevcTag));
+  }
+
+  if (id === 'h264_amf' || id === 'hevc_amf') {
+    const quality = mode === 'fast' ? 'speed' : mode === 'quality' ? 'quality' : 'balanced';
+    return withPlayerCompatibleTags(encoderKey, [
+      '-c:v', id, '-quality', quality, '-rc', 'cqp', '-qp_i', String(cq), '-qp_p', String(cq + 2),
+      ...hevcTag
+    ]);
+  }
+
+  if (id === 'h264_qsv' || id === 'hevc_qsv') {
+    const preset = mode === 'fast' ? 'veryfast' : mode === 'quality' ? 'medium' : 'fast';
+    return withPlayerCompatibleTags(encoderKey, [
+      '-c:v', id, '-preset', preset, '-global_quality', String(cq), ...hevcTag
+    ]);
+  }
+
+  if (id === 'h264_videotoolbox' || id === 'hevc_videotoolbox') {
+    const q = mode === 'fast' ? 55 : mode === 'quality' ? 72 : 65;
+    const opts = ['-c:v', id, '-q:v', String(q)];
+    if (encoderKey === 'h264') opts.push('-profile:v', 'high');
+    return withPlayerCompatibleTags(encoderKey, opts.concat(hevcTag));
+  }
+
+  return withPlayerCompatibleTags(encoderKey, ['-c:v', id, ...(gpu.extra || []), ...hevcTag]);
+}
+
+function estimateOutputBytes({ width, height, fps, duration, encoderKey, exportMode }) {
+  const cq = perceptualCq(encoderKey, exportMode, width, height);
+  const bpp = encoderKey === 'h265'
+    ? 0.042 + (28 - cq) * 0.0035
+    : 0.065 + (26 - cq) * 0.005;
+  const video = pixelCount(width, height) * Math.max(1, fps || 30) * Math.max(0.1, duration || 1) * bpp / 8;
+  const audioBps = (exportMode === 'quality' ? 16000 : 12000) * Math.max(0.1, duration || 1);
+  return Math.max(MIN_OUTPUT_BYTES, Math.round(video + audioBps));
+}
+
+function describeEncodeWork({ overlay, closeup, source, shorts, target }) {
+  const scale = Boolean(
+    source && target && (source.width !== target.width || source.height !== target.height)
+  ) || Boolean(shorts && target && (shorts.width !== target.width || shorts.height !== target.height));
+  const fpsConvert = Boolean(source && target && needsFpsConvert(target.fps, source.fps))
+    || Boolean(shorts && target && needsFpsConvert(target.fps, shorts.fps));
+  return {
+    mustEncodeVideo: true,
+    streamCopy: false,
+    scale,
+    fpsConvert,
+    overlay: Boolean(overlay),
+    split: Boolean(closeup),
+    keepSourceFps: Boolean(source && target && !needsFpsConvert(target.fps, source.fps)),
+    reason: 'вставка Shorts в середину всегда собирает новый видеопоток одним ffmpeg'
+  };
 }
 
 /**
- * Собирает итоговый план: какой кодек, сколько потоков CPU.
- * ProRes на потребительских GPU нет — остаётся CPU.
- * В режимах hybrid/gpu ffmpeg никогда не берёт все ядра, даже если карта
- * не ответила: иначе интерфейс Windows зависает на 100% CPU.
+ * Hardware encoder если доступен, CQ/CRF по разрешению, CPU только на фильтры.
  */
-function resolveEncodePlan(encoderKey, accelMode, hardware) {
-  const cpu = ENCODERS[encoderKey] || ENCODERS.h264;
-  const mode = ACCEL_MODES[accelMode] ? accelMode : DEFAULTS.accel;
-  const wantGpu = mode === 'hybrid' || mode === 'gpu';
-  const gpu = encoderKey === 'h265' ? hardware.h265 : encoderKey === 'h264' ? hardware.h264 : null;
-  const threads = threadBudget(mode, hardware.cores);
+function resolveEncodePlan(encoderKey, accelOrOptions, hardware) {
+  const options = normalizeExportOptions(accelOrOptions);
+  const hw = hardware || {};
+  const family = resolveEncoderKey(encoderKey, hw);
+  const cpu = ENCODERS[family] || ENCODERS.h264;
+  const wantGpu = !options.forceCpu && family !== 'prores';
+  const gpu = family === 'h265' ? hw.h265 : family === 'h264' ? hw.h264 : null;
+  const usingGpu = Boolean(wantGpu && gpu);
+  const threads = threadBudget(options.resourceUsage, hw.cores, usingGpu);
+  const width = options.target && options.target.width;
+  const height = options.target && options.target.height;
+  const cq = perceptualCq(family, options.exportMode, width, height);
+  const audioOptions = family === 'prores'
+    ? ENCODERS.prores.audioOptions
+    : ['-c:a', 'aac', '-b:a', audioBitrateForMode(options.exportMode)];
+  const extraOptions = (cpu.extraOptions && cpu.extraOptions.length) ? cpu.extraOptions : ['-movflags', '+faststart'];
+  const pace = options.resourceUsage === 'low' && family !== 'prores';
 
-  if (wantGpu && gpu) {
+  if (family === 'prores') {
     return {
-      label: `${gpu.vendor}: склейка на CPU (${threads.filterThreads} из ${threads.cores} потоков), кодирование на GPU`,
-      pixelFormat: 'yuv420p',
-      videoOptions: withPlayerCompatibleTags(encoderKey, ['-c:v', gpu.id, ...(gpu.extra || [])]),
-      audioOptions: cpu.audioOptions,
-      extraOptions: cpu.extraOptions && cpu.extraOptions.length ? cpu.extraOptions : ['-movflags', '+faststart'],
-      // Граф фильтров целиком программный (concat/crop/overlay) — GPU-кадры
-      // к нему не привязать. Видеокарта здесь только кодирует готовый кадр.
+      encoderKey: family,
+      exportMode: options.exportMode,
+      resourceUsage: options.resourceUsage,
+      label: `${cpu.label} — CPU`,
+      encoderName: 'prores_ks',
+      pixelFormat: cpu.pixelFormat,
+      videoOptions: [...cpu.videoOptions, '-threads', String(threads.encodeThreads)],
+      audioOptions,
+      extraOptions: cpu.extraOptions || [],
       hwaccel: null,
-      usingGpu: true,
-      vendor: gpu.vendor,
-      threads
+      usingGpu: false,
+      vendor: null,
+      threads,
+      pace: false,
+      cq: null
     };
   }
 
-  const reason = !wantGpu
-    ? 'выбран режим «только процессор»'
-    : hardware.probeError
-      ? `видеокарта не приняла тест (${hardware.probeError}), процессор на ${threads.encodeThreads} из ${threads.cores} потоков`
-      : `видеокарта недоступна, процессор на ${threads.encodeThreads} из ${threads.cores} потоков`;
+  if (usingGpu) {
+    return {
+      encoderKey: family,
+      exportMode: options.exportMode,
+      resourceUsage: options.resourceUsage,
+      label: `${gpu.vendor} ${family === 'h265' ? 'HEVC' : 'H.264'} · ${EXPORT_MODES[options.exportMode].label}`,
+      encoderName: gpu.id,
+      pixelFormat: 'yuv420p',
+      videoOptions: hardwareVideoOptions(gpu, family, options.exportMode, cq),
+      audioOptions,
+      extraOptions,
+      hwaccel: null,
+      usingGpu: true,
+      vendor: gpu.vendor,
+      threads,
+      pace,
+      cq
+    };
+  }
 
+  const reason = options.forceCpu
+    ? 'выбран процессор'
+    : hw.probeError
+      ? `видеокарта не приняла тест (${hw.probeError})`
+      : 'видеокарта недоступна';
   return {
-    label: `${cpu.label} — ${reason}`,
-    pixelFormat: cpu.pixelFormat,
-    videoOptions: withPlayerCompatibleTags(encoderKey, [...cpu.videoOptions, '-threads', String(threads.encodeThreads)]),
-    audioOptions: cpu.audioOptions,
-    extraOptions: cpu.extraOptions,
+    encoderKey: family,
+    exportMode: options.exportMode,
+    resourceUsage: options.resourceUsage,
+    label: `${ENCODERS[family].label} ${options.exportMode} · ${reason}, ${threads.encodeThreads} из ${threads.cores} потоков`,
+    encoderName: family === 'h265' ? 'libx265' : 'libx264',
+    pixelFormat: 'yuv420p',
+    videoOptions: withPlayerCompatibleTags(family, softwareVideoOptions(family, options.exportMode, threads.encodeThreads, cq)),
+    audioOptions,
+    extraOptions,
     hwaccel: null,
     usingGpu: false,
     vendor: null,
-    threads
+    threads,
+    pace,
+    cq
   };
 }
 
@@ -673,7 +815,7 @@ function lowerFfmpegPriority(command) {
 
 function chooseOutputFps(sourceFps) {
   if (!Number.isFinite(sourceFps) || sourceFps <= 0) return MAX_OUTPUT_FPS;
-  return Math.min(sourceFps, MAX_OUTPUT_FPS);
+  return clamp(sourceFps, 1, MAX_KEEP_FPS);
 }
 
 function needsFpsConvert(targetFps, inputFps) {
@@ -1048,7 +1190,7 @@ function buildGraph({
   duration,
   labelPrefix = '',
   inputBase = 0,
-  applyPace = true
+  applyPace = false
 }) {
   const inputs = [];
   const filters = [];
@@ -1173,8 +1315,6 @@ function buildGraph({
   filters.push(`[${videoOut}]format=${target.pixelFormat}[${L('vfinal')}]`);
 
   const audioOut = L('ca');
-  // Потолок 4× держит только -readrate на исходниках. realtime/arealtime в графе
-  // дублировали паузу и нагружали CPU, не меняя качество.
   const pace = Boolean(applyPace && target.pixelFormat === 'yuv420p');
   return { inputs, filters, videoOut: L('vfinal'), audioOut, layout, pace };
 }
@@ -1228,14 +1368,24 @@ function applyInputs(command, inputs, plan, pace) {
   inputs.forEach((input) => {
     const added = command.input(input.file);
     if (plan.hwaccel) added.inputOptions(['-hwaccel', plan.hwaccel]);
+    if (plan.resourceUsage === 'low') added.inputOptions(['-threads', '1']);
     if (pace && input.pace !== false) added.inputOptions(paceGlobalArgs());
     if (input.options && input.options.length) added.inputOptions(input.options);
   });
 }
 
+function formatEta(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  const total = Math.max(0, Math.round(seconds));
+  const mm = String(Math.floor(total / 60)).padStart(2, '0');
+  const ss = String(total % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
 function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDebug }) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let lastEmit = 0;
     const cleanup = () => safeUnlink(command._filterScriptPath);
     const finish = (handler) => (value) => {
       if (settled) return;
@@ -1245,6 +1395,7 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
     };
 
     command.on('start', (commandLine) => {
+      command._startedAt = Date.now();
       lowerFfmpegPriority(command);
       if (typeof onCommand === 'function') onCommand(command);
       if (typeof onDebug === 'function') onDebug(commandLine);
@@ -1254,8 +1405,22 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
     });
     command.on('progress', (progress) => {
       if (typeof onProgress !== 'function' || totalDuration <= 0) return;
+      const now = Date.now();
+      if (now - lastEmit < PROGRESS_INTERVAL_MS) return;
+      lastEmit = now;
       const done = timemarkToSeconds(progress.timemark);
-      onProgress(clamp((done / totalDuration) * 100, 0, 99.9), done);
+      const percent = clamp((done / totalDuration) * 100, 0, 99.9);
+      const fps = Number(progress.currentFps) || 0;
+      const elapsedSec = (now - (command._startedAt || now)) / 1000;
+      const eta = percent > 1.5 && elapsedSec > 0.4
+        ? ((100 - percent) / percent) * elapsedSec
+        : 0;
+      onProgress(percent, {
+        fps,
+        kbps: Number(progress.currentKbps) || 0,
+        eta,
+        timemark: progress.timemark
+      });
     });
     command.on('error', finish((err) => {
       if (isCommandTooLong(err) || isUnknownFfmpegOption(err)) {
@@ -1313,8 +1478,17 @@ function renderVideo(params) {
   } = params;
 
   const hardware = params.hardware || detectHardware();
-  const plan = params.plan || resolveEncodePlan(encoder, params.accel, hardware);
-  const target = resolveTarget(params.frame, params.fit, source, plan);
+  const seedPlan = params.plan || { pixelFormat: 'yuv420p' };
+  const target = resolveTarget(params.frame, params.fit, source, seedPlan);
+  const plan = params.plan && params.plan.videoOptions
+    ? params.plan
+    : resolveEncodePlan(encoder, {
+      accel: params.accel,
+      exportMode: params.exportMode,
+      resourceUsage: params.resourceUsage,
+      forceCpu: params.forceCpu,
+      target
+    }, hardware);
   const timeline = isolateJobTimeline({
     closeupStart: params.closeupStart,
     splitAt: Number.isFinite(Number(params.splitAt)) && Number(params.splitAt) > 0
@@ -1338,7 +1512,8 @@ function renderVideo(params) {
     target,
     splitAt,
     overlayOpacity,
-    duration: totalDuration
+    duration: totalDuration,
+    applyPace: Boolean(plan.pace)
   });
 
   const command = ffmpeg();
@@ -1362,17 +1537,19 @@ function renderVideo(params) {
       ...(plan.extraOptions || []),
       '-y'
     ])
-    .format(outputContainer(encoder))
+    .format(outputContainer(plan.encoderKey || encoder))
     .output(outputFile);
 
   return runCommand(command, {
     plan,
     totalDuration,
-    onProgress: typeof onProgress === 'function' ? (pct) => onProgress(pct) : null,
+    onProgress: typeof onProgress === 'function'
+      ? (pct, meta) => onProgress(pct, meta)
+      : null,
     onCommand,
     onDebug
   }).then(() => {
-    if (typeof onProgress === 'function') onProgress(100);
+    if (typeof onProgress === 'function') onProgress(100, { fps: 0, eta: 0 });
     return {
       outputFile,
       splitAt,
@@ -1382,6 +1559,23 @@ function renderVideo(params) {
   });
 }
 
+
+async function verifyOutputFile(file, expected = {}) {
+  if (!file || !fs.existsSync(file)) throw new Error('итоговый файл не появился');
+  const size = fs.statSync(file).size;
+  if (size < MIN_OUTPUT_BYTES) throw new Error('итоговый файл слишком маленький');
+  const info = await probeMedia(file);
+  if (expected.requireAudio && !info.hasAudio) throw new Error('в результате нет звука');
+  if (expected.width && expected.height) {
+    if (Math.abs(info.width - expected.width) > 2 || Math.abs(info.height - expected.height) > 2) {
+      throw new Error(`ожидали ${expected.width}x${expected.height}, получили ${info.width}x${info.height}`);
+    }
+  }
+  if (Number.isFinite(expected.duration) && Math.abs(info.duration - expected.duration) > 0.55) {
+    throw new Error(`длительность ${info.duration.toFixed(2)}с вместо ${expected.duration.toFixed(2)}с`);
+  }
+  return { info, size };
+}
 
 // ---------------------------------------------------------------------------
 // Пакетная обработка
@@ -1461,13 +1655,16 @@ class BatchProcessor {
 
       const s = this.settings;
       const percent = clamp(Number(s.percent), 50, 99);
-      const encoder = ENCODERS[s.encoder] ? s.encoder : DEFAULTS.encoder;
-      const accel = ACCEL_MODES[s.accel] ? s.accel : DEFAULTS.accel;
+      const hardware = detectHardware();
+      const exportOptions = {
+        exportMode: normalizeExportMode(s.exportMode),
+        resourceUsage: normalizeResourceUsage(s.resourceUsage || s.accel),
+        forceCpu: s.accel === 'cpu' || s.forceCpu === true
+      };
+      const encoder = resolveEncoderKey(s.encoder, hardware);
       const prefix = s.outputPrefix || DEFAULTS.outputPrefix;
       const overlayOpacity = Number.isFinite(Number(s.overlayOpacity)) ? Number(s.overlayOpacity) : 100;
-      const hardware = detectHardware();
-      const plan = resolveEncodePlan(encoder, accel, hardware);
-      const cpuPlan = resolveEncodePlan(encoder, 'cpu', hardware);
+      const plan = resolveEncodePlan(encoder, exportOptions, hardware);
 
       fs.mkdirSync(s.outputDir, { recursive: true });
 
@@ -1484,19 +1681,37 @@ class BatchProcessor {
 
       this.log('info', `Найдено видео: ${sources.length}`);
       this.log('info', `FFmpeg: ${ffmpegPath}`);
-      this.log('info', `Кодек: ${ENCODERS[encoder].label}, обрезка: ${percent}%`);
-      this.log('info', `Нагрузка: ${plan.label}`);
-      if (plan.pixelFormat === 'yuv420p') {
+      this.log(
+        'info',
+        `Экспорт: ${plan.label}; обрезка ${percent}%; один процесс (MAX_EXPORT_JOBS=${MAX_EXPORT_JOBS})`
+      );
+      if (plan.encoderKey === 'prores') {
+        this.log('info', `ProRes на CPU, ${plan.threads.encodeThreads} из ${plan.threads.cores} потоков`);
+      } else if (plan.usingGpu) {
         this.log(
           'info',
-          `Скорость: до ${ENCODE_PACE_SPEED}× (~50% Video Encode), без лишней нагрузки на CPU. ` +
-            `Каждый ролик пишется сразу в ${prefix}N${outputExtension(encoder)}, пауза ${INTER_FILE_DELAY_MS} мс между файлами`
+          `Кодирование на GPU (${plan.encoderName}), CPU только склейка (${plan.threads.filterThreads} поток(а) фильтров)`
+        );
+      } else {
+        this.log(
+          'info',
+          `Software ${plan.encoderName}, ${plan.threads.encodeThreads} из ${plan.threads.cores} потоков, пресет не slower/veryslow`
         );
       }
-      if (hardware.compiledGpu && hardware.compiledGpu.length) {
-        this.log('info', `GPU-кодеки в FFmpeg: ${hardware.compiledGpu.join(', ')}`);
+      if (plan.encoderKey !== 'prores') {
+        if (plan.pace) {
+          this.log('info', `Режим LOW: чтение входа ограничено ${ENCODE_PACE_SPEED}×, чтобы нагрузка не скакала`);
+        } else {
+          this.log(
+            'info',
+            `Без искусственного потолка fps: NVENC/кодек сами держат очередь. Файл сразу в ${prefix}N${outputExtension(encoder)}`
+          );
+        }
       }
-      if (!plan.usingGpu && accel !== 'cpu' && hardware.probeError) {
+      if (hardware.compiledGpu && hardware.compiledGpu.length) {
+        this.log('info', `Hardware Encoder: ${plan.vendor || 'нет'} · в FFmpeg: ${hardware.compiledGpu.join(', ')}`);
+      }
+      if (!plan.usingGpu && !exportOptions.forceCpu && hardware.probeError) {
         this.log('warn', `Тест видеокарты: ${hardware.probeError}`);
       }
       this.log(
@@ -1571,6 +1786,29 @@ class BatchProcessor {
           );
 
           const target = resolveTarget(frame, fit, source, plan);
+          const jobPlan = resolveEncodePlan(encoder, { ...exportOptions, target }, hardware);
+          if (i === 0) {
+            const work = describeEncodeWork({ overlay, closeup, source, shorts, target });
+            this.log(
+              'info',
+              `Smart render: ${work.reason}. Масштаб: ${work.scale ? 'да' : 'нет'}, ` +
+                `FPS: ${work.keepSourceFps ? `как у исходника ${target.fps}` : `приводим к ${target.fps}`}, ` +
+                `оверлей: ${work.overlay ? 'да' : 'нет'}, split: ${work.split ? 'да' : 'нет'}`
+            );
+          }
+          const estimated = estimateOutputBytes({
+            width: target.width,
+            height: target.height,
+            fps: target.fps,
+            duration: source.duration + shorts.duration,
+            encoderKey: encoder,
+            exportMode: exportOptions.exportMode
+          });
+          this.log(
+            'info',
+            `[${humanIndex}] ${target.width}x${target.height} ${target.fps} fps · ${jobPlan.encoderName}` +
+              `${jobPlan.cq != null ? ` CQ/CRF ${jobPlan.cq}` : ''} · оценка ~${(estimated / 1024 / 1024).toFixed(1)} МБ`
+          );
           const splitAt = resolveSplitAt(source, percent);
           const duration = source.duration + shorts.duration;
           const timeline = isolateJobTimeline({
@@ -1601,7 +1839,9 @@ class BatchProcessor {
             encoder,
             hardware,
             frame,
-            fit
+            fit,
+            plan: jobPlan,
+            estimatedBytes: estimated
           });
           // Playhead двигаем по плану этого ролика, не по фактическому хвосту.
           // Иначе 20% текущего файла оседают как «остаток» следующего Shorts.
@@ -1635,7 +1875,8 @@ class BatchProcessor {
         }
       };
 
-      const emitJobProgress = (job, filePercent, status) => {
+      const emitJobProgress = (job, filePercent, status, extra = {}) => {
+        const encodePlan = extra.plan || job.plan || plan;
         this.emitProgress({
           fileIndex: job.index,
           total: sources.length,
@@ -1643,25 +1884,38 @@ class BatchProcessor {
           outputName: path.basename(job.outputFile),
           filePercent,
           overallPercent: ((job.index + filePercent / 100) / sources.length) * 100,
-          status: status || `Обработка ${job.humanIndex}: ${job.fileName} — ${filePercent.toFixed(1)}%`,
+          status: status || `Rendering ${job.humanIndex}: ${job.fileName} — ${Math.round(filePercent)}%`,
           done: summary.done,
-          failed: summary.failed
+          failed: summary.failed,
+          fps: extra.fps || 0,
+          eta: extra.eta != null ? formatEta(extra.eta) : '—',
+          encoderName: encodePlan.encoderName || encodePlan.label,
+          vendor: encodePlan.vendor || (encodePlan.usingGpu ? 'GPU' : 'CPU'),
+          resolution: job.target ? `${job.target.width}x${job.target.height}` : '',
+          estimatedSize: job.estimatedBytes
+            ? `${Math.max(1, Math.round(job.estimatedBytes / 1024 / 1024))} MB`
+            : '',
+          usingGpu: Boolean(encodePlan.usingGpu)
         });
       };
 
       const finished = new Set();
-      const markJobDone = (job) => {
+      const markJobDone = async (job) => {
         if (!job || finished.has(job.outputFile)) return false;
-        if (!fs.existsSync(job.outputFile)) return false;
-        const size = fs.statSync(job.outputFile).size;
-        if (size < MIN_OUTPUT_BYTES) return false;
+        const verified = await verifyOutputFile(job.outputFile, {
+          requireAudio: true,
+          width: job.target && job.target.width,
+          height: job.target && job.target.height,
+          duration: job.duration
+        });
         finished.add(job.outputFile);
         summary.done += 1;
-        summary.results.push({ source: job.source.file, output: job.outputFile, size });
+        summary.results.push({ source: job.source.file, output: job.outputFile, size: verified.size });
         this.log(
           'success',
           `[${job.humanIndex}] Готово: ${path.basename(job.outputFile)} ` +
-            `(${(size / 1024 / 1024).toFixed(1)} МБ)`
+            `(${(verified.size / 1024 / 1024).toFixed(1)} МБ, ${verified.info.width}x${verified.info.height}, ` +
+            `${verified.info.fps} fps)`
         );
         emitJobProgress(job, 100, `Завершено ${job.index + 1} из ${sources.length}`);
         return true;
@@ -1691,7 +1945,11 @@ class BatchProcessor {
           onDebug: (line) => {
             if (this.settings.verbose) this.log('debug', line);
           },
-          onProgress: (filePercent) => emitJobProgress(job, filePercent)
+          onProgress: (filePercent, meta = {}) => emitJobProgress(job, filePercent, null, {
+            plan: encodePlan,
+            fps: meta.fps,
+            eta: meta.eta
+          })
         });
       };
 
@@ -1703,20 +1961,22 @@ class BatchProcessor {
         if (encodedAny) await sleep(INTER_FILE_DELAY_MS);
         if (this.cancelled) break;
         encodedAny = true;
+        let activePlan = job.plan || encodePlan;
 
         try {
           try {
-            await encodeOne(job, encodePlan);
+            await encodeOne(job, activePlan);
           } catch (err) {
             if (this.cancelled) throw err;
-            if (err && err.gpuFallback && encodePlan.usingGpu) {
+            if (err && err.gpuFallback && activePlan.usingGpu) {
               this.log(
                 'warn',
                 `Видеокарта не приняла кадр (${shortenFfmpegError(err.message)}), дальше кодируем на процессоре`
               );
               safeUnlink(job.outputFile);
-              encodePlan = cpuPlan;
-              await encodeOne(job, encodePlan);
+              encodePlan = resolveEncodePlan(encoder, { ...exportOptions, forceCpu: true, target: job.target }, hardware);
+              activePlan = encodePlan;
+              await encodeOne(job, activePlan);
             } else {
               throw err;
             }
@@ -1725,7 +1985,7 @@ class BatchProcessor {
             safeUnlink(job.outputFile);
             break;
           }
-          if (!markJobDone(job)) {
+          if (!(await markJobDone(job))) {
             throw new Error(`Файл не записался: ${path.basename(job.outputFile)}`);
           }
         } catch (err) {
@@ -1759,6 +2019,8 @@ class BatchProcessor {
 module.exports = {
   BatchProcessor,
   ENCODERS,
+  EXPORT_MODES,
+  RESOURCE_MODES,
   ACCEL_MODES,
   FRAME_PRESETS,
   FIT_MODES,
@@ -1772,6 +2034,11 @@ module.exports = {
   ffprobePath,
   detectHardware,
   resolveEncodePlan,
+  resolveEncoderKey,
+  perceptualCq,
+  estimateOutputBytes,
+  describeEncodeWork,
+  chooseOutputFps,
   listVideoFiles,
   probeMedia,
   renderVideo,
@@ -1787,9 +2054,12 @@ module.exports = {
   isVideoFile,
   shortenFfmpegError,
   ENCODE_PACE_SPEED,
+  MAX_EXPORT_JOBS,
   INTER_FILE_DELAY_MS,
   FILTER_SCRIPT_THRESHOLD,
   paceGlobalArgs,
   attachFilterGraph,
-  isUnknownFfmpegOption
+  isUnknownFfmpegOption,
+  fitStep,
+  videoSegmentFilter
 };

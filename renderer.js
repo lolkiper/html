@@ -49,8 +49,10 @@ const el = {
   percent: document.getElementById('percent'),
   percentRange: document.getElementById('percent-range'),
   encoder: document.getElementById('encoder'),
-  accel: document.getElementById('accel'),
+  exportMode: document.getElementById('export-mode'),
+  resourceUsage: document.getElementById('resource-usage'),
   accelNote: document.getElementById('accel-note'),
+  encodeMeta: document.getElementById('encode-meta'),
   frame: document.getElementById('frame'),
   fit: document.getElementById('fit'),
   verbose: document.getElementById('verbose'),
@@ -238,7 +240,7 @@ function setRunning(running) {
 
   const lockable = [
     el.sourceDir, el.shortsFile, el.overlayFile, el.outputDir,
-    el.percent, el.percentRange, el.encoder, el.accel, el.frame, el.fit, el.useOverlay,
+    el.percent, el.percentRange, el.encoder, el.exportMode, el.resourceUsage, el.frame, el.fit, el.useOverlay,
     el.overlayOpacity, el.verbose,
     el.useSplit, el.closeupFile, el.leftShare, el.feather,
     el.leftZoom, el.leftOffset, el.rightZoom, el.rightOffset
@@ -322,7 +324,8 @@ function collectSettings() {
     outputDir: el.outputDir.value.trim(),
     percent: clamp(Number(el.percent.value) || 90, 50, 99),
     encoder: el.encoder.value,
-    accel: el.accel.value,
+    exportMode: el.exportMode ? el.exportMode.value : 'auto',
+    resourceUsage: el.resourceUsage ? el.resourceUsage.value : 'balanced',
     frame: el.frame.value,
     fit: el.fit.value,
     verbose: el.verbose.checked,
@@ -387,7 +390,13 @@ function restoreSettings() {
     el.overlayOpacityValue.textContent = `${el.overlayOpacity.value}%`;
   }
   if (saved.encoder) el.encoder.value = saved.encoder;
-  if (saved.accel) el.accel.value = saved.accel;
+  if (el.exportMode && saved.exportMode) el.exportMode.value = saved.exportMode;
+  if (el.resourceUsage) {
+    if (saved.resourceUsage) el.resourceUsage.value = saved.resourceUsage;
+    else if (saved.accel === 'gpu') el.resourceUsage.value = 'high';
+    else if (saved.accel === 'cpu') el.resourceUsage.value = 'low';
+    else el.resourceUsage.value = 'balanced';
+  }
   el.frame.value = saved.frame && saved.frame !== 'source' ? saved.frame : 'square1080';
   if (saved.fit) el.fit.value = saved.fit;
   if (saved.downloadDir) el.dlDir.value = saved.downloadDir;
@@ -570,6 +579,8 @@ el.percentRange.addEventListener('input', () => {
 
 el.percentRange.addEventListener('change', saveSettings);
 el.encoder.addEventListener('change', saveSettings);
+if (el.exportMode) el.exportMode.addEventListener('change', saveSettings);
+if (el.resourceUsage) el.resourceUsage.addEventListener('change', saveSettings);
 el.frame.addEventListener('change', saveSettings);
 el.fit.addEventListener('change', saveSettings);
 el.verbose.addEventListener('change', saveSettings);
@@ -642,6 +653,16 @@ window.api.onProgress((progress) => {
   if (Number.isFinite(progress.total)) el.counterTotal.textContent = String(progress.total);
   if (Number.isFinite(progress.done)) el.counterDone.textContent = String(progress.done);
   if (Number.isFinite(progress.failed)) el.counterFailed.textContent = String(progress.failed);
+  if (el.encodeMeta) {
+    const bits = [
+      progress.encoderName ? `Кодек: ${progress.encoderName}` : null,
+      progress.resolution ? `Кадр: ${progress.resolution}` : null,
+      progress.fps ? `FPS: ${Math.round(progress.fps)}` : null,
+      progress.eta && progress.eta !== '—' ? `ETA: ${progress.eta}` : null,
+      progress.estimatedSize ? `~${progress.estimatedSize}` : null
+    ].filter(Boolean);
+    if (bits.length) el.encodeMeta.textContent = bits.join(' · ');
+  }
 });
 
 window.api.onState(({ running }) => setRunning(running));
@@ -701,29 +722,33 @@ window.api.onDone((payload) => {
   };
 
   fillSelect(el.encoder, info.encoders);
-  fillSelect(el.accel, info.accels || []);
+  if (el.exportMode) fillSelect(el.exportMode, info.exportModes || []);
+  if (el.resourceUsage) fillSelect(el.resourceUsage, info.resourceModes || []);
   fillSelect(el.frame, info.frames);
   fillSelect(el.fit, info.fits);
 
   el.encoder.value = info.defaults.encoder;
-  el.accel.value = info.defaults.accel || 'hybrid';
+  if (el.exportMode) el.exportMode.value = info.defaults.exportMode || 'auto';
+  if (el.resourceUsage) el.resourceUsage.value = info.defaults.resourceUsage || 'balanced';
   el.frame.value = info.defaults.frame;
   el.fit.value = info.defaults.fit;
   el.percent.value = info.defaults.percent;
   el.percentRange.value = info.defaults.percent;
 
   const hardware = info.hardware || {};
-  if (hardware.gpu) {
-    el.accelNote.textContent =
-      `Найдена ${hardware.gpu}. Склейка на 1–2 ядрах CPU, кодирование около 50% GPU без лишней нагрузки. Каждый файл сразу сохраняется в папку.`;
-  } else if (hardware.compiledGpu && hardware.compiledGpu.length) {
-    el.accelNote.textContent =
-      `FFmpeg видит ${hardware.compiledGpu.join(', ')}, но тестовый кадр не прошёл` +
-      (hardware.probeError ? ` (${hardware.probeError})` : '') +
-      `. Кодирование veryfast на 1–2 ядрах, чтобы компьютер не зависал.`;
-  } else {
-    el.accelNote.textContent =
-      'Кодирование veryfast на 1–2 ядрах процессора, ffmpeg с низким приоритетом — компьютер остаётся отзывчивым.';
+  if (el.accelNote) {
+    if (hardware.gpu) {
+      el.accelNote.textContent =
+        `Hardware Encoder: ${hardware.gpu}. Склейка на CPU, кодирование на GPU, один ffmpeg на файл.`;
+    } else if (hardware.compiledGpu && hardware.compiledGpu.length) {
+      el.accelNote.textContent =
+        `FFmpeg видит ${hardware.compiledGpu.join(', ')}, но тест кадра не прошёл` +
+        (hardware.probeError ? ` (${hardware.probeError})` : '') +
+        `. Будет software veryfast, не все ядра.`;
+    } else {
+      el.accelNote.textContent =
+        'Видеокарта недоступна — software veryfast на нескольких потоках, без 100% всех ядер.';
+    }
   }
 
   const splitDefaults = info.defaults.split || {};
