@@ -556,6 +556,8 @@ window.api.onProgress((progress) => {
   setProgress(progress.filePercent, progress.overallPercent);
   if (progress.status) el.status.textContent = progress.status;
   if (Number.isFinite(progress.total)) el.counterTotal.textContent = String(progress.total);
+  if (Number.isFinite(progress.done)) el.counterDone.textContent = String(progress.done);
+  if (Number.isFinite(progress.failed)) el.counterFailed.textContent = String(progress.failed);
 });
 
 window.api.onState(({ running }) => setRunning(running));
@@ -629,7 +631,7 @@ window.api.onDone((payload) => {
   const hardware = info.hardware || {};
   if (hardware.gpu) {
     el.accelNote.textContent =
-      `Найдена ${hardware.gpu}. Склейка на 1–2 ядрах CPU, кодирование около 50% GPU, одна сессия на очередь — без скачка до 100%.`;
+      `Найдена ${hardware.gpu}. Склейка на 1–2 ядрах CPU, кодирование около 50% GPU. Каждый файл сразу сохраняется в папку.`;
   } else if (hardware.compiledGpu && hardware.compiledGpu.length) {
     el.accelNote.textContent =
       `FFmpeg видит ${hardware.compiledGpu.join(', ')}, но тестовый кадр не прошёл` +

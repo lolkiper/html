@@ -24,10 +24,9 @@ const {
   planCloseupInputs,
   resolveEncodePlan,
   ENCODE_PACE_SPEED,
-  MAX_JOBS_PER_SESSION,
+  INTER_FILE_DELAY_MS,
   FILTER_SCRIPT_THRESHOLD,
   paceGlobalArgs,
-  chunkJobs,
   attachFilterGraph,
   isUnknownFfmpegOption
 } = require('../processor');
@@ -184,13 +183,9 @@ async function main() {
     paceArgs
   );
   check(
-    chunkJobs(Array.from({ length: 93 }, (_, i) => i), 6).length === 16,
-    '93 файла режутся на сессии по 6 — команда Windows не переполняется'
-  );
-  check(
-    MAX_JOBS_PER_SESSION <= 16,
-    'в одной сессии ffmpeg не больше 16 файлов',
-    `max=${MAX_JOBS_PER_SESSION}`
+    INTER_FILE_DELAY_MS >= 200 && INTER_FILE_DELAY_MS <= 500,
+    'между файлами короткая пауза, чтобы NVENC закрыл предыдущую сессию',
+    `delay=${INTER_FILE_DELAY_MS}`
   );
   const shortGraphCmd = ffmpeg();
   attachFilterGraph(shortGraphCmd, ['[0:v]null[v]']);
@@ -235,6 +230,16 @@ async function main() {
 
   const found = listVideoFiles(SOURCE_DIR);
   check(found.length === 3, 'найдены все три файла в папке источников', `найдено ${found.length}`);
+  const mixedDir = path.join(ROOT, 'mixed-prefix');
+  fs.mkdirSync(mixedDir, { recursive: true });
+  fs.copyFileSync(src1, path.join(mixedDir, 'clip.mp4'));
+  fs.copyFileSync(src1, path.join(mixedDir, 'es+1.mov'));
+  const mixedFound = listVideoFiles(mixedDir, { skipOutputNames: true, outputPrefix: 'es+' });
+  check(
+    mixedFound.length === 1 && path.basename(mixedFound[0]) === 'clip.mp4',
+    'префикс с спецсимволами не ломает фильтр готовых файлов',
+    mixedFound.map((file) => path.basename(file)).join(',')
+  );
 
   console.log('\n2) Пакетная обработка (90%, оверлей включён)…');
   const logs = [];
@@ -273,8 +278,13 @@ async function main() {
   );
   check(progressStates.length > 5, 'прогресс приходил в интерфейс', `событий: ${progressStates.length}`);
   check(
-    logs.some((line) => line.includes('до ') && line.includes('сессиями по')),
-    'в логе есть ограничение скорости и сессии кодирования'
+    progressStates.some((state) => Number(state.done) >= 1) &&
+      progressStates.some((state) => Number(state.failed) >= 1),
+    'счётчики Готово/Ошибок обновляются во время очереди, а не только в конце'
+  );
+  check(
+    logs.some((line) => line.includes('до ') && line.includes('пишется сразу')),
+    'в логе есть ограничение скорости и сохранение каждого файла сразу'
   );
 
   const out1 = path.join(OUTPUT_DIR, 'es1.mov');
@@ -619,15 +629,11 @@ async function main() {
   const seqSummary = await seqBatch.run();
   check(seqSummary.done === 2, 'последовательный крупный план: два файла собраны', `done=${seqSummary.done}`);
   check(
-    seqLogs.some((line) => line.includes('Кодирование сессиями')),
-    'два файла одного размера кодируются одной сессией энкодера'
-  );
-  check(
     seqLogs.filter((line) => line.startsWith('success:') && line.includes('Готово:')).length === 2,
-    'каждый файл сессии сразу попадает в лог как сохранённый'
+    'каждый готовый файл сразу попадает в лог как сохранённый'
   );
   const leftoverTemps = fs.readdirSync(seqOut).filter((name) => name.startsWith('.shorts-') || name.startsWith('shorts-seg-'));
-  check(leftoverTemps.length === 0, 'временные файлы сессии не остаются в папке результата', leftoverTemps.join(', '));
+  check(leftoverTemps.length === 0, 'временные файлы не остаются в папке результата', leftoverTemps.join(', '));
 
   const seq1 = path.join(seqOut, 'es1.mov');
   const seq2 = path.join(seqOut, 'es2.mov');

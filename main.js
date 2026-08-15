@@ -224,7 +224,7 @@ process.on('uncaughtException', (err) => {
   send('processing:log', {
     level: 'error',
     message: /ENAMETOOLONG/i.test(message)
-      ? 'Команда FFmpeg слишком длинная для Windows. Файлы будут кодироваться более короткими сессиями.'
+      ? 'Команда FFmpeg слишком длинная для Windows. Каждый файл кодируется отдельно.'
       : `Сбой: ${message}`,
     time: Date.now()
   });
