@@ -33,14 +33,20 @@ const SCALE_FLAGS = 'fast_bilinear';
 const MAX_OUTPUT_FPS = 60;
 const MAX_KEEP_FPS = 120;
 /**
- * Только режим LOW слегка ограничивает чтение входа, чтобы фильтры не
- * разгоняли одно ядро до потолка. Balanced/High идут без искусственного потолка:
- * NVENC сам держит очередь, CPU занят только склейкой.
+ * Мягкий потолок чтения входа. На GPU нужен всегда: без него новый ffmpeg
+ * в первые кадры забивает NVENC очередью, и Video Encode скачет до 100%
+ * на стыке файлов. Скорость выше типичного NVENC (4–8×), поэтому сам
+ * рендер почти не замедляется — режется только стартовый выброс.
  */
-const ENCODE_PACE_SPEED = 4;
-/** Один файл = один ffmpeg. Пауза, чтобы NVENC закрыл предыдущую сессию. */
+const ENCODE_PACE_SPEED = 3;
+const GPU_PACE_BALANCED = 10;
+const GPU_PACE_HIGH = 16;
+/** Один файл = один ffmpeg. Следующий стартует только после exit процесса. */
 const MAX_EXPORT_JOBS = 1;
-const INTER_FILE_DELAY_MS = 120;
+const CPU_HANDOFF_MS = 80;
+const GPU_HANDOFF_MS = 380;
+const INTER_FILE_DELAY_MS = GPU_HANDOFF_MS;
+const FFMPEG_EXIT_WAIT_MS = 8000;
 const PROGRESS_INTERVAL_MS = 500;
 const MIN_OUTPUT_BYTES = 64;
 
@@ -62,11 +68,35 @@ function withPlayerCompatibleTags(encoderKey, videoOptions) {
   return opts;
 }
 
-function paceGlobalArgs() {
+function encodePaceSpeed(plan) {
+  const usage = (plan && plan.resourceUsage) || 'low';
+  if (plan && plan.usingGpu) {
+    if (usage === 'low' || usage === 'cpu') return ENCODE_PACE_SPEED;
+    if (usage === 'high' || usage === 'gpu') return GPU_PACE_HIGH;
+    return GPU_PACE_BALANCED;
+  }
+  return ENCODE_PACE_SPEED;
+}
+
+function paceGlobalArgs(plan) {
   return [
-    '-readrate', String(ENCODE_PACE_SPEED),
+    '-readrate', String(encodePaceSpeed(plan)),
     '-readrate_initial_burst', '0'
   ];
+}
+
+function handoffDelayMs(plan) {
+  return plan && plan.usingGpu ? GPU_HANDOFF_MS : CPU_HANDOFF_MS;
+}
+
+async function waitForFfmpegExit(command, timeoutMs = FFMPEG_EXIT_WAIT_MS) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const proc = command && command.ffmpegProc;
+    if (!proc) return;
+    if (proc.killed || proc.exitCode != null || proc.signalCode != null) return;
+    await sleep(40);
+  }
 }
 
 function prefixed(prefix, name) {
@@ -485,9 +515,10 @@ function hardwareVideoOptions(gpu, encoderKey, exportMode, cq) {
     if (gpuIndex != null) opts.push('-gpu', String(gpuIndex));
     opts.push('-c:v', id, '-preset', preset, '-tune', mode === 'fast' ? 'll' : 'hq');
     opts.push('-rc', 'vbr', '-cq', String(cq), '-b:v', '0');
-    if (mode === 'fast') opts.push('-rc-lookahead', '0', '-bf', '0', '-async_depth', '2');
+    if (mode === 'fast') opts.push('-rc-lookahead', '0', '-bf', '0');
     else if (mode === 'quality') opts.push('-spatial-aq', '1', '-temporal-aq', '1', '-rc-lookahead', '16', '-bf', '2');
     else opts.push('-spatial-aq', '1', '-rc-lookahead', '8', '-bf', '2');
+    opts.push('-async_depth', '2');
     return withPlayerCompatibleTags(encoderKey, opts.concat(hevcTag));
   }
 
@@ -563,7 +594,7 @@ function resolveEncodePlan(encoderKey, accelOrOptions, hardware) {
     ? ENCODERS.prores.audioOptions
     : ['-c:a', 'aac', '-b:a', audioBitrateForMode(options.exportMode)];
   const extraOptions = (cpu.extraOptions && cpu.extraOptions.length) ? cpu.extraOptions : ['-movflags', '+faststart'];
-  const pace = options.resourceUsage === 'low' && family !== 'prores';
+  const pace = family !== 'prores' && (options.resourceUsage === 'low' || usingGpu);
 
   if (family === 'prores') {
     return {
@@ -1369,7 +1400,7 @@ function applyInputs(command, inputs, plan, pace) {
     const added = command.input(input.file);
     if (plan.hwaccel) added.inputOptions(['-hwaccel', plan.hwaccel]);
     if (plan.resourceUsage === 'low') added.inputOptions(['-threads', '1']);
-    if (pace && input.pace !== false) added.inputOptions(paceGlobalArgs());
+    if (pace && input.pace !== false) added.inputOptions(paceGlobalArgs(plan));
     if (input.options && input.options.length) added.inputOptions(input.options);
   });
 }
@@ -1390,8 +1421,12 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
     const finish = (handler) => (value) => {
       if (settled) return;
       settled = true;
-      cleanup();
-      handler(value);
+      Promise.resolve(waitForFfmpegExit(command))
+        .catch(() => {})
+        .then(() => {
+          cleanup();
+          handler(value);
+        });
     };
 
     command.on('start', (commandLine) => {
@@ -1700,11 +1735,17 @@ class BatchProcessor {
       }
       if (plan.encoderKey !== 'prores') {
         if (plan.pace) {
-          this.log('info', `Режим LOW: чтение входа ограничено ${ENCODE_PACE_SPEED}×, чтобы нагрузка не скакала`);
+          const speed = encodePaceSpeed(plan);
+          this.log(
+            'info',
+            plan.usingGpu
+              ? `GPU: чтение ${speed}× без стартового выброса; следующий файл — после закрытия NVENC`
+              : `Режим LOW: чтение входа ограничено ${speed}×, чтобы нагрузка не скакала`
+          );
         } else {
           this.log(
             'info',
-            `Без искусственного потолка fps: NVENC/кодек сами держат очередь. Файл сразу в ${prefix}N${outputExtension(encoder)}`
+            `Без искусственного потолка fps. Файл сразу в ${prefix}N${outputExtension(encoder)}`
           );
         }
       }
@@ -1955,10 +1996,11 @@ class BatchProcessor {
 
       let encodePlan = plan;
       let encodedAny = false;
+      let previousPlan = null;
 
       for (const job of jobs) {
         if (this.cancelled) break;
-        if (encodedAny) await sleep(INTER_FILE_DELAY_MS);
+        if (encodedAny) await sleep(handoffDelayMs(previousPlan || encodePlan));
         if (this.cancelled) break;
         encodedAny = true;
         let activePlan = job.plan || encodePlan;
@@ -1974,6 +2016,7 @@ class BatchProcessor {
                 `Видеокарта не приняла кадр (${shortenFfmpegError(err.message)}), дальше кодируем на процессоре`
               );
               safeUnlink(job.outputFile);
+              await sleep(handoffDelayMs(activePlan));
               encodePlan = resolveEncodePlan(encoder, { ...exportOptions, forceCpu: true, target: job.target }, hardware);
               activePlan = encodePlan;
               await encodeOne(job, activePlan);
@@ -2001,6 +2044,7 @@ class BatchProcessor {
           safeUnlink(job.outputFile);
           emitJobProgress(job, 0, `Ошибка ${job.humanIndex}: ${job.fileName}`);
         } finally {
+          previousPlan = activePlan;
           this.currentCommand = null;
           this.currentOutput = null;
         }
@@ -2054,10 +2098,16 @@ module.exports = {
   isVideoFile,
   shortenFfmpegError,
   ENCODE_PACE_SPEED,
+  GPU_PACE_BALANCED,
+  GPU_PACE_HIGH,
   MAX_EXPORT_JOBS,
   INTER_FILE_DELAY_MS,
+  CPU_HANDOFF_MS,
+  GPU_HANDOFF_MS,
   FILTER_SCRIPT_THRESHOLD,
   paceGlobalArgs,
+  encodePaceSpeed,
+  handoffDelayMs,
   attachFilterGraph,
   isUnknownFfmpegOption,
   fitStep,

@@ -34,9 +34,15 @@ const {
   estimateOutputBytes,
   MAX_EXPORT_JOBS,
   ENCODE_PACE_SPEED,
+  GPU_PACE_BALANCED,
+  GPU_PACE_HIGH,
   INTER_FILE_DELAY_MS,
+  CPU_HANDOFF_MS,
+  GPU_HANDOFF_MS,
   FILTER_SCRIPT_THRESHOLD,
   paceGlobalArgs,
+  encodePaceSpeed,
+  handoffDelayMs,
   attachFilterGraph,
   isUnknownFfmpegOption,
   fitStep,
@@ -216,6 +222,12 @@ async function main() {
   check(resolveEncoderKey('auto', { cores: 8 }) === 'h264', 'auto без GPU не берёт software HEVC');
   check(nvencPlan.usingGpu && nvencPlan.encoderName === 'hevc_nvenc' && nvencPlan.videoOptions.includes('-cq'), 'NVENC HEVC в CQ, не фиксированный огромный bitrate');
   check(!nvencPlan.videoOptions.includes('libx264'), 'при доступном NVENC CPU-кодек не используется');
+  check(nvencPlan.pace === true, 'GPU balanced включает мягкий readrate, чтобы Video Encode не скакал на стыке файлов');
+  check(
+    nvencPlan.videoOptions.includes('-async_depth'),
+    'NVENC balanced ограничивает очередь async_depth, без стартового выброса на 100%',
+    nvencPlan.videoOptions.join(' ')
+  );
   check(chooseOutputFps(60) === 60 && chooseOutputFps(30) === 30, 'исходный FPS сохраняется');
   check(perceptualCq('h264', 'balanced', 1920, 1080) < perceptualCq('h264', 'fast', 1920, 1080), 'fast слабее quality-target, чем balanced');
   check(perceptualCq('h264', 'balanced', 1280, 720) > perceptualCq('h264', 'balanced', 1920, 1080), '720p получает чуть больший CQ — файл меньше');
@@ -231,10 +243,16 @@ async function main() {
   });
   check(work.mustEncodeVideo && !work.streamCopy && !work.scale && work.keepSourceFps, 'copy всего файла невозможен из-за вставки Shorts, но scale/fps не дублируются');
   const paceArgs = paceGlobalArgs().join(' ');
+  const gpuPaceArgs = paceGlobalArgs(nvencPlan).join(' ');
   check(
     ENCODE_PACE_SPEED >= 3 && ENCODE_PACE_SPEED <= 4,
-    'readrate остаётся только как опция LOW',
+    'LOW-readrate остаётся мягким, не 1×',
     `speed=${ENCODE_PACE_SPEED}`
+  );
+  check(
+    encodePaceSpeed(nvencPlan) === GPU_PACE_BALANCED && GPU_PACE_BALANCED >= 8 && GPU_PACE_HIGH >= 12,
+    'GPU balanced/high читают быстрее типичного NVENC, чтобы не тормозить рендер',
+    `balanced=${encodePaceSpeed(nvencPlan)} high=${GPU_PACE_HIGH}`
   );
   check(
     paceArgs.includes('-readrate') && paceArgs.includes('readrate_initial_burst 0'),
@@ -242,9 +260,18 @@ async function main() {
     paceArgs
   );
   check(
-    INTER_FILE_DELAY_MS >= 80 && INTER_FILE_DELAY_MS <= 400,
-    'между файлами короткая пауза, чтобы NVENC закрыл предыдущую сессию',
-    `delay=${INTER_FILE_DELAY_MS}`
+    gpuPaceArgs.includes('-readrate') && gpuPaceArgs.includes('readrate_initial_burst 0'),
+    'GPU-чтение без стартового выброса кадров в NVENC',
+    gpuPaceArgs
+  );
+  check(
+    CPU_HANDOFF_MS >= 60 && CPU_HANDOFF_MS <= 120 &&
+      GPU_HANDOFF_MS >= 300 && GPU_HANDOFF_MS <= 400 &&
+      INTER_FILE_DELAY_MS === GPU_HANDOFF_MS &&
+      handoffDelayMs(nvencPlan) === GPU_HANDOFF_MS &&
+      handoffDelayMs(balancedPlan) === CPU_HANDOFF_MS,
+    'после GPU-файла пауза длиннее, CPU остаётся коротким',
+    `cpu=${CPU_HANDOFF_MS} gpu=${GPU_HANDOFF_MS}`
   );
   check(
     outputExtension('h264') === '.mp4' && outputExtension('h265') === '.mp4' && outputExtension('prores') === '.mov',
