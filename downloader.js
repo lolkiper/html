@@ -19,6 +19,9 @@ const TITLES_FILE = 'nazvaniya.txt';
 const LOG_FILE = 'download_log.txt';
 const MIN_OUTPUT_BYTES = 4096;
 const QUEUE_VERSION = 1;
+const STALL_TIMEOUT_MS = 90_000;
+// tv + android_sdkless часто отдают поток без долгого nsig/JS; web — запасной клиент.
+const YOUTUBE_EXTRACTOR_ARGS = 'youtube:player_client=tv,android_sdkless,web';
 
 const STATUS = {
   WAITING: 'WAITING',
@@ -153,6 +156,7 @@ function classifyError(message) {
 function sanitizeFilename(title) {
   let name = String(title || 'video')
     .replace(WIN_FORBIDDEN, ' ')
+    .replace(/#/g, '')
     .replace(/\s+/g, ' ')
     .replace(/[. ]+$/g, '')
     .trim();
@@ -247,22 +251,114 @@ function formatBytes(bytes) {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function cleanProgressToken(value) {
+  const text = String(value || '').trim();
+  if (!text || /^(unknown|n\/?a|none|-)$/i.test(text)) return '';
+  return text;
+}
+
 function parseProgressLine(line) {
-  const text = String(line || '');
-  const match = text.match(
-    /\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+~?\s*([\d.]+[KMG]i?B)\s+at\s+([\d.]+[KMG]i?B\/s)\s+ETA\s+(\S+)/i
-  );
-  if (!match) {
-    const simple = text.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
-    if (!simple) return null;
-    return { percent: Number(simple[1]), speed: '', eta: '' };
+  const text = String(line || '').replace(/\r/g, '').trim();
+  if (!text) return null;
+
+  const custom = text.match(/^PROGRESS\s+(\d+(?:\.\d+)?)%?(?:\s+(\S+))?(?:\s+(\S+))?/i);
+  if (custom) {
+    return {
+      percent: Number(custom[1]),
+      speed: cleanProgressToken(custom[2]),
+      eta: cleanProgressToken(custom[3])
+    };
   }
+
+  const percentMatch = text.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
+  if (!percentMatch) return null;
+  const speedMatch = text.match(/\bat\s+(\S+(?:\/s)?)/i);
+  const etaMatch = text.match(/\bETA\s+(\S+)/i);
   return {
-    percent: Number(match[1]),
-    total: match[2],
-    speed: match[3],
-    eta: match[4]
+    percent: Number(percentMatch[1]),
+    speed: cleanProgressToken(speedMatch && speedMatch[1]),
+    eta: cleanProgressToken(etaMatch && etaMatch[1])
   };
+}
+
+function isDownloadTemp(name) {
+  const file = String(name || '');
+  return /\.(part|ytdl|temp)$/i.test(file) || /\.f\d+\./i.test(file);
+}
+
+function fileMatchesVideoId(name, videoId) {
+  if (!videoId || !name) return false;
+  if (isDownloadTemp(name)) return false;
+  if (name.includes(`[${videoId}]`)) return true;
+  const stem = name.replace(/\.[^.]+$/, '');
+  return stem === videoId || stem.endsWith(`_${videoId}`) || stem.startsWith(`${videoId}_`);
+}
+
+function shouldLogYtDlpLine(line) {
+  const text = String(line || '').trim();
+  if (!text || text.startsWith('{')) return false;
+  if (parseProgressLine(text)) return false;
+  return (
+    /\[(youtube|info|Merger|ExtractAudio|ffmpeg|Fixup|download)\]/i.test(text) ||
+    /^(WARNING|ERROR)/i.test(text)
+  );
+}
+
+function buildYtDlpDownloadArgs({ url, template, format, ffmpegPath, preferMp4 }) {
+  const args = [
+    '--no-playlist',
+    '--newline',
+    '--progress',
+    '--no-quiet',
+    '--no-simulate',
+    '--continue',
+    '--no-overwrites',
+    '--encoding',
+    'utf-8',
+    '--no-mtime',
+    '--windows-filenames',
+    '--socket-timeout',
+    '20',
+    '--retries',
+    '10',
+    '--fragment-retries',
+    '10',
+    '--throttled-rate',
+    '100K',
+    '--no-check-formats',
+    '--extractor-args',
+    YOUTUBE_EXTRACTOR_ARGS,
+    '-f',
+    format || 'bestvideo*+bestaudio/best',
+    '-S',
+    'res,fps,vbr,abr',
+    '-o',
+    template,
+    '--progress-template',
+    'download:PROGRESS %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s'
+  ];
+  if (ffmpegPath) args.push('--ffmpeg-location', ffmpegPath);
+  if (preferMp4) args.push('--merge-output-format', 'mp4');
+  args.push(url);
+  return args;
+}
+
+function renameToPrettyFilename(outputFile, item, safeTitle) {
+  if (!outputFile || !safeTitle) return outputFile;
+  const ext = path.extname(outputFile) || '.mp4';
+  const idPart = item.videoId ? ` [${item.videoId}]` : '';
+  const dest = path.join(path.dirname(outputFile), `${safeTitle}${idPart}${ext}`);
+  if (path.resolve(dest) === path.resolve(outputFile)) return outputFile;
+  try {
+    if (fileLooksComplete(dest)) {
+      safeUnlink(outputFile);
+      return dest;
+    }
+    fs.renameSync(outputFile, dest);
+    return dest;
+  } catch {
+    return outputFile;
+  }
 }
 
 function safeUnlink(file) {
@@ -388,9 +484,9 @@ function findExistingOutput(outputDir, item) {
     const full = path.isAbsolute(item.filename) ? item.filename : path.join(outputDir, item.filename);
     if (fileLooksComplete(full)) return full;
   }
-  if (!item.videoId) return null;
+  if (!item.videoId || !outputDir || !fs.existsSync(outputDir)) return null;
   const names = fs.readdirSync(outputDir);
-  const match = names.find((name) => name.includes(`[${item.videoId}]`) && !/\.part$/i.test(name));
+  const match = names.find((name) => fileMatchesVideoId(name, item.videoId));
   if (!match) return null;
   const full = path.join(outputDir, match);
   return fileLooksComplete(full) ? full : null;
@@ -458,10 +554,12 @@ class DownloadQueue {
             number: current.number,
             title: current.title || current.url,
             url: current.url,
-            percent: extra.filePercent || 0,
+            percent: Number.isFinite(Number(extra.filePercent)) ? Number(extra.filePercent) : 0,
             speed: extra.speed || '',
             eta: extra.eta || '',
             quality: current.quality || 'AUTO',
+            resolution: current.resolution || null,
+            fps: current.fps || null,
             status: current.status
           }
         : null,
@@ -629,38 +727,81 @@ class DownloadQueue {
     return new Promise((resolve, reject) => {
       const child = spawn(this.ytdlpPath, args, {
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          PYTHONUTF8: '1',
+          PYTHONIOENCODING: 'utf-8'
+        }
       });
       this.currentChild = child;
       let stdout = '';
       let stderr = '';
-      const handle = (chunk, stream) => {
-        const text = chunk.toString('utf8');
-        if (stream === 'out') stdout += text;
-        else stderr += text;
-        text.split(/\r?\n/).forEach((line) => {
+      let leftover = '';
+      let lastData = this.now();
+      let stalled = false;
+      let settled = false;
+
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(stallTimer);
+        if (this.currentChild === child) this.currentChild = null;
+        fn(value);
+      };
+
+      const flushText = (text) => {
+        leftover += text;
+        const parts = leftover.split(/\r\n|\n|\r/);
+        leftover = parts.pop() || '';
+        parts.forEach((line) => {
           if (line && typeof onLine === 'function') onLine(line);
         });
       };
+
+      const handle = (chunk, stream) => {
+        lastData = this.now();
+        const text = chunk.toString('utf8');
+        if (stream === 'out') stdout += text;
+        else stderr += text;
+        flushText(text);
+      };
+
+      const stallTimer = setInterval(() => {
+        if (settled) return;
+        if (this.now() - lastData < STALL_TIMEOUT_MS) return;
+        stalled = true;
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* процесс мог уже завершиться */
+        }
+      }, 2000);
+
       child.stdout.on('data', (chunk) => handle(chunk, 'out'));
       child.stderr.on('data', (chunk) => handle(chunk, 'err'));
-      child.on('error', (err) => {
-        if (this.currentChild === child) this.currentChild = null;
-        reject(err);
-      });
+      child.on('error', (err) => finish(reject, err));
       child.on('close', (code) => {
-        if (this.currentChild === child) this.currentChild = null;
+        if (leftover && typeof onLine === 'function') onLine(leftover);
+        leftover = '';
         if (this.stopped || this.paused) {
           const err = new Error('Загрузка остановлена пользователем');
           err.cancelled = true;
-          reject(err);
+          finish(reject, err);
+          return;
+        }
+        if (stalled) {
+          finish(reject, new Error('yt-dlp завис без ответа. Повторю ссылку автоматически.'));
           return;
         }
         if (code === 0) {
-          resolve({ stdout, stderr });
+          finish(resolve, { stdout, stderr });
           return;
         }
-        reject(new Error((stderr || stdout || `yt-dlp exited ${code}`).trim().split('\n').slice(-8).join('\n')));
+        finish(
+          reject,
+          new Error((stderr || stdout || `yt-dlp exited ${code}`).trim().split('\n').slice(-8).join('\n'))
+        );
       });
     });
   }
@@ -672,6 +813,10 @@ class DownloadQueue {
       '--no-warnings',
       '--encoding',
       'utf-8',
+      '--socket-timeout',
+      '20',
+      '--extractor-args',
+      YOUTUBE_EXTRACTOR_ARGS,
       url
     ]);
     const start = stdout.indexOf('{');
@@ -767,25 +912,23 @@ class DownloadQueue {
     this.persist();
 
     const safeTitle = sanitizeFilename(title);
-    const idPart = item.videoId ? ` [${item.videoId}]` : '';
-    const template = path.join(this.outputDir, `${safeTitle}${idPart}.%(ext)s`);
-    const args = [
-      '--no-playlist',
-      '--newline',
-      '--continue',
-      '--no-overwrites',
-      '--encoding', 'utf-8',
-      '--no-mtime',
-      '-f', selection.format || 'bestvideo*+bestaudio/best',
-      '-S', 'res,fps,vbr,abr',
-      '-o', template,
-      '--print', 'after_move:%(filepath)s'
-    ];
-    if (this.ffmpegPath) args.push('--ffmpeg-location', this.ffmpegPath);
-    if (selection.preferMp4) args.push('--merge-output-format', 'mp4');
-    args.push(item.url);
+    const id = item.videoId || `item${item.number}`;
+    const template = path.join(this.outputDir, `${item.number}_${id}.%(ext)s`);
+    const args = buildYtDlpDownloadArgs({
+      url: item.url,
+      template,
+      format: selection.format,
+      ffmpegPath: this.ffmpegPath,
+      preferMp4: selection.preferMp4
+    });
 
-    let printedPath = null;
+    this.log('info', `#${item.number} DOWNLOAD START`);
+    this.emitProgress({
+      filePercent: 0,
+      status: `Downloading #${item.number} — подготовка потока`
+    });
+
+    let lastLogged = '';
     await this.runYtDlp(args, (line) => {
       const progress = parseProgressLine(line);
       if (progress) {
@@ -795,18 +938,21 @@ class DownloadQueue {
           eta: progress.eta,
           status: `Downloading #${item.number} — ${progress.percent}%`
         });
+        return;
       }
-      if (line && !line.startsWith('{') && fs.existsSync(line.trim())) printedPath = line.trim();
-      if (line.startsWith('/')) printedPath = line.trim();
+      if (shouldLogYtDlpLine(line) && line !== lastLogged) {
+        lastLogged = line;
+        const short = line.length > 240 ? `${line.slice(0, 237)}...` : line;
+        this.log(/^(WARNING|ERROR)/i.test(line) ? 'warn' : 'info', `#${item.number} ${short}`);
+      }
     });
 
-    let outputFile = printedPath;
-    if (!outputFile || !fs.existsSync(outputFile)) {
-      outputFile = findExistingOutput(this.outputDir, { ...item, filename: null });
-    }
+    let outputFile = findExistingOutput(this.outputDir, { ...item, filename: null });
     if (!outputFile) {
-      const prefix = `${safeTitle}${idPart}`;
-      const found = fs.readdirSync(this.outputDir).find((name) => name.startsWith(prefix) && !/\.part$/i.test(name));
+      const prefix = `${item.number}_${id}`;
+      const found = fs.readdirSync(this.outputDir).find(
+        (name) => name.startsWith(prefix) && !isDownloadTemp(name)
+      );
       if (found) outputFile = path.join(this.outputDir, found);
     }
     if (!fileLooksComplete(outputFile)) {
@@ -814,6 +960,7 @@ class DownloadQueue {
     }
 
     outputFile = await this.remuxIfNeeded(outputFile, selection.preferMp4);
+    outputFile = renameToPrettyFilename(outputFile, item, safeTitle);
     const probed = await this.probeOutput(outputFile);
     if (!probed.hasVideo) throw new Error('В результате нет видеопотока');
     if (selection.audio && !probed.hasAudio) throw new Error('В результате нет аудиопотока');
@@ -987,6 +1134,10 @@ module.exports = {
   selectBestFormats,
   describeQuality,
   parseProgressLine,
+  buildYtDlpDownloadArgs,
+  shouldLogYtDlpLine,
+  YOUTUBE_EXTRACTOR_ARGS,
+  STALL_TIMEOUT_MS,
   mergeUrlsIntoQueue,
   loadQueueFile,
   resolveYtDlpPath,

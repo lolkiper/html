@@ -861,6 +861,10 @@ function applyDownloadProgress(progress) {
     el.dlFilePercent.textContent = `${Math.round(current.percent || 0)}%`;
     el.dlFileBar.style.width = `${Math.min(100, current.percent || 0)}%`;
     el.dlSpeedNote.textContent = `Скорость: ${current.speed || '—'} · ETA: ${current.eta || '—'}`;
+    if (current.resolution || current.quality) {
+      el.dlQualityNote.textContent =
+        `Качество сейчас: ${current.resolution || current.quality}${current.fps ? ` ${current.fps}FPS` : ''}`;
+    }
   }
   if (progress.status) el.dlStatus.textContent = progress.status;
   const lastOk = (progress.items || []).slice().reverse().find((item) => item.status === 'SUCCESS');

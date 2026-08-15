@@ -20,6 +20,8 @@ const {
   sanitizeFilename,
   selectBestFormats,
   parseProgressLine,
+  buildYtDlpDownloadArgs,
+  shouldLogYtDlpLine,
   mergeUrlsIntoQueue,
   STATUS
 } = require('../downloader');
@@ -60,7 +62,7 @@ function createMockRunner(options = {}) {
   let maxActive = 0;
   const started = [];
 
-  const runner = async (args) => {
+  const runner = async (args, onLine) => {
     const url = args[args.length - 1];
     const id = extractVideoId(url) || url;
     if (args.includes('-J')) {
@@ -90,6 +92,12 @@ function createMockRunner(options = {}) {
       const file = String(template).replace('%(ext)s', 'mp4');
       fs.mkdirSync(path.dirname(file), { recursive: true });
       writeDummyVideo(file);
+      if (typeof onLine === 'function') {
+        onLine('[youtube] Extracting URL: ' + url);
+        onLine('[download] Destination: ' + file);
+        onLine('[download]  42.3% of  12.34MiB at    8.40MiB/s ETA 00:18');
+        onLine('PROGRESS 87.5% 2.10MiB/s 00:04');
+      }
       return { stdout: `${file}\n`, stderr: '' };
     } finally {
       active -= 1;
@@ -128,8 +136,8 @@ async function main() {
   check(classifyError('This video is private') === 'PERMANENT', 'приватное видео — постоянная');
   check(classifyError('HTTP Error 404') === 'PERMANENT', '404 — постоянная');
 
-  check(sanitizeFilename('MAMÁ ME CULPA 😱 #roblox') === 'MAMÁ ME CULPA 😱 #roblox', 'unicode в имени файла сохраняется');
-  check(!/[<>:"/\\|?*]/.test(sanitizeFilename('a<b>:c/d|e?f*g')), 'запрещённые Windows-символы вычищены');
+  check(sanitizeFilename('MAMÁ ME CULPA 😱 #roblox') === 'MAMÁ ME CULPA 😱 roblox', 'unicode сохраняется, # убирается из имени файла');
+  check(!/[<>:"/\\|?*#]/.test(sanitizeFilename('a<b>:c/d|e?f*g#h')), 'запрещённые Windows-символы и # вычищены');
   check(sanitizeFilename('con') === '_con', 'зарезервированное имя Windows не используется');
 
   const best = selectBestFormats(fakeFormats());
@@ -146,6 +154,29 @@ async function main() {
 
   const progress = parseProgressLine('[download]  42.3% of  12.34MiB at    8.40MiB/s ETA 00:18');
   check(progress && progress.percent === 42.3 && progress.speed.includes('8.40'), 'строка прогресса yt-dlp разбирается');
+  const approx = parseProgressLine('[download]  12.3% of ~  45.00MiB at  1.23MiB/s ETA 00:32 (frag 3/20)');
+  check(approx && approx.percent === 12.3 && approx.speed.includes('1.23'), 'прогресс с ~ и фрагментами разбирается');
+  const unknown = parseProgressLine('[download]   1.0% of   12.34MiB at  Unknown ETA Unknown');
+  check(unknown && unknown.percent === 1 && unknown.speed === '' && unknown.eta === '', 'Unknown скорость не ломает процент');
+  const custom = parseProgressLine('PROGRESS 87.5% 2.10MiB/s 00:04');
+  check(custom && custom.percent === 87.5 && custom.speed.includes('2.10'), 'кастомный PROGRESS-шаблон разбирается');
+  check(!parseProgressLine('[download] Destination: C:\\out\\video.mp4'), 'строка Destination не считается прогрессом');
+  check(shouldLogYtDlpLine('[youtube] Extracting URL: https://youtu.be/x'), 'строки youtube попадают в лог');
+  check(!shouldLogYtDlpLine('[download]  42.3% of  12.34MiB at    8.40MiB/s ETA 00:18'), 'процент в лог не спамится');
+
+  const dlArgs = buildYtDlpDownloadArgs({
+    url: 'https://www.youtube.com/watch?v=AAAAAAAAAAA',
+    template: path.join(ROOT, '1_AAAAAAAAAAA.%(ext)s'),
+    format: '137+140',
+    ffmpegPath: 'ffmpeg',
+    preferMp4: true
+  });
+  check(dlArgs.includes('--progress'), 'скачивание явно включает --progress');
+  check(dlArgs.includes('--no-quiet'), 'скачивание не уходит в quiet');
+  check(dlArgs.includes('--no-simulate'), 'скачивание не симулируется');
+  check(!dlArgs.includes('--print'), 'не используем --print, который глушит прогресс');
+  check(dlArgs.includes('--extractor-args'), 'youtube extractor-args заданы');
+  check(dlArgs.includes('--windows-filenames'), 'имена файлов Windows-безопасные');
 
   check(MAX_CONCURRENT_DOWNLOADS === 1, 'одновременно качается только одно видео');
 
@@ -178,16 +209,27 @@ async function main() {
   });
 
   let clock = 1_000_000;
+  let lastPercent = 0;
+  const seenDownloadArgs = [];
   const queue = new DownloadQueue({
     outputDir: ROOT,
     ffmpegPath: 'ffmpeg',
     ffprobePath: null,
-    runner,
+    runner: async (args, onLine) => {
+      if (!args.includes('-J')) seenDownloadArgs.push(args);
+      return runner(args, onLine);
+    },
     now: () => clock,
     sleep: async (ms) => {
       clock += ms;
     },
-    hooks: {}
+    hooks: {
+      onProgress: (state) => {
+        if (!state || !state.current || state.current.status !== 'DOWNLOADING') return;
+        const pct = Number(state.current.percent);
+        if (Number.isFinite(pct)) lastPercent = Math.max(lastPercent, pct);
+      }
+    }
   });
   queue.setLinks(urls.join('\n'));
   const summary = await queue.run();
@@ -196,6 +238,9 @@ async function main() {
   check(summary.completed === 3, 'три видео скачаны успешно', `completed=${summary.completed}`);
   check(summary.permanent === 1, 'удалённое видео помечено как постоянная ошибка', `permanent=${summary.permanent}`);
   check(summary.retry === 0, 'временные ошибки докачались после retry', `retry=${summary.retry}`);
+  check(lastPercent >= 87, 'прогресс с mock yt-dlp доходит до UI не нулём', `lastPercent=${lastPercent}`);
+  check(seenDownloadArgs.length > 0 && seenDownloadArgs[0].includes('--progress'), 'реальный download-вызов идёт с --progress');
+  check(seenDownloadArgs.every((args) => !args.includes('--print')), 'ни один download-вызов не использует --print');
 
   const titles = fs.readFileSync(path.join(ROOT, 'nazvaniya.txt'), 'utf8').split(/\r?\n/).filter(Boolean);
   check(titles.length === 3, 'в nazvaniya.txt ровно три успешных названия', titles.join(' | '));
