@@ -25,6 +25,22 @@ const DOWNLOAD_RETRIES = 15;
 const FRAGMENT_RETRIES = 15;
 const HTTP_CHUNK_SIZE = '10M';
 const FALLBACK_FORMAT = 'bestvideo*+bestaudio/best';
+/** Как yt-dlp-aria2c в Media Downloader: много соединений, короткий connect, докачка. */
+const ARIA2_DOWNLOADER_ARGS = [
+  '-x 8',
+  '-s 8',
+  '-k 1M',
+  '--file-allocation=none',
+  '--min-split-size=1M',
+  '--max-tries=5',
+  '--retry-wait=1',
+  '--connect-timeout=8',
+  '--timeout=60',
+  '--disable-ipv6=true',
+  '--always-resume=true',
+  '--auto-file-renaming=false',
+  '--allow-overwrite=true'
+].join(' ');
 /**
  * tv / android_sdkless / web в 2026 ломают извлечение: LOGIN_REQUIRED, 403, SABR.
  * default yt-dlp сам перебирает живые клиенты; android_sdkless исключаем явно.
@@ -100,6 +116,35 @@ function siblingFile(bin, name) {
 
 function firstExisting(paths) {
   return (paths || []).find((file) => file && fs.existsSync(file)) || null;
+}
+
+function vendorBinDir(ytdlpPath) {
+  if (ytdlpPath && ytdlpPath !== 'yt-dlp' && ytdlpPath !== 'yt-dlp.exe' && fs.existsSync(ytdlpPath)) {
+    return path.dirname(ytdlpPath);
+  }
+  return path.join(__dirname, 'vendor', 'yt-dlp');
+}
+
+function resolveAria2cPath(ytdlpPath) {
+  const name = process.platform === 'win32' ? 'aria2c.exe' : 'aria2c';
+  const vendorDir = path.join(__dirname, 'vendor', 'yt-dlp');
+  return firstExisting([
+    siblingFile(ytdlpPath, name),
+    unpackedPath(path.join(vendorDir, name)),
+    path.join(vendorDir, name)
+  ]);
+}
+
+function buildAria2cDownloaderArgs(aria2cPath) {
+  if (!aria2cPath) return [];
+  return [
+    '--downloader',
+    'aria2c',
+    '--downloader',
+    'dash,m3u8:native',
+    '--downloader-args',
+    `aria2c:${ARIA2_DOWNLOADER_ARGS}`
+  ];
 }
 
 function resolveJsRuntimeArgs(ytdlpPath) {
@@ -354,6 +399,15 @@ function parseProgressLine(line) {
     };
   }
 
+  const aria = text.match(/\[#[0-9a-fA-F]+[^\]]*?\((\d+(?:\.\d+)?)%\)[^\]]*?CN:\d+\s+DL:(\S+)(?:\s+ETA:(\S+))?/i);
+  if (aria) {
+    return {
+      percent: Number(aria[1]),
+      speed: cleanProgressToken(aria[2]),
+      eta: cleanProgressToken(aria[3])
+    };
+  }
+
   const percentMatch = text.match(/\[download\]\s+(\d+(?:\.\d+)?)%/i);
   if (!percentMatch) return null;
   const speedMatch = text.match(/\bat\s+(\S+(?:\/s)?)/i);
@@ -367,7 +421,7 @@ function parseProgressLine(line) {
 
 function isDownloadTemp(name) {
   const file = String(name || '');
-  return /\.(part|ytdl|temp|info\.json)$/i.test(file) || /\.f\d+\./i.test(file);
+  return /\.(part|ytdl|temp|info\.json|aria2)$/i.test(file) || /\.f\d+\./i.test(file);
 }
 
 function fileMatchesVideoId(name, videoId) {
@@ -383,7 +437,7 @@ function shouldLogYtDlpLine(line) {
   if (!text || text.startsWith('{')) return false;
   if (parseProgressLine(text)) return false;
   return (
-    /\[(youtube|info|Merger|ExtractAudio|ffmpeg|Fixup|download)\]/i.test(text) ||
+    /\[(youtube|info|Merger|ExtractAudio|ffmpeg|Fixup|download|aria2c)\]/i.test(text) ||
     /^(WARNING|ERROR)/i.test(text)
   );
 }
@@ -395,10 +449,13 @@ function buildYtDlpDownloadArgs({
   ffmpegPath,
   preferMp4,
   ytdlpPath,
-  cookiesFromBrowser
+  cookiesFromBrowser,
+  aria2cPath
 }) {
+  const aria = aria2cPath || resolveAria2cPath(ytdlpPath);
   const args = [
     ...buildBaseYtDlpArgs({ ytdlpPath, cookiesFromBrowser }),
+    ...buildAria2cDownloaderArgs(aria),
     '--newline',
     '--progress',
     '--no-quiet',
@@ -824,6 +881,7 @@ class DownloadQueue {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
+          PATH: `${vendorBinDir(this.ytdlpPath)}${path.delimiter}${process.env.PATH || ''}`,
           PYTHONUTF8: '1',
           PYTHONIOENCODING: 'utf-8'
         }
@@ -1064,7 +1122,8 @@ class DownloadQueue {
       ffmpegPath: this.ffmpegPath,
       preferMp4: selection.preferMp4,
       ytdlpPath: this.ytdlpPath,
-      cookiesFromBrowser
+      cookiesFromBrowser,
+      aria2cPath: resolveAria2cPath(this.ytdlpPath)
     });
 
     this.log('info', `#${item.number} DOWNLOAD START`);
@@ -1228,8 +1287,15 @@ class DownloadQueue {
     this.paused = false;
     this.reconcileExisting();
     const jsRuntime = resolveJsRuntimeArgs(this.ytdlpPath)[1] || 'auto';
+    const aria2c = resolveAria2cPath(this.ytdlpPath);
     this.log('info', `Очередь: ${this.items.length} ссылок, папка ${this.outputDir}`);
     this.log('info', `yt-dlp: ${path.basename(this.ytdlpPath || 'yt-dlp')} · JS ${jsRuntime}`);
+    this.log(
+      'info',
+      aria2c
+        ? `качаем как Media Downloader: yt-dlp + aria2c (${path.basename(aria2c)})`
+        : 'aria2c не найден — качаем встроенным клиентом yt-dlp'
+    );
 
     try {
       while (this.unfinished() && !this.stopped) {
@@ -1300,7 +1366,9 @@ module.exports = {
   parseProgressLine,
   buildYtDlpDownloadArgs,
   buildBaseYtDlpArgs,
+  buildAria2cDownloaderArgs,
   resolveJsRuntimeArgs,
+  resolveAria2cPath,
   isBotCheckError,
   shortYtError,
   shouldLogYtDlpLine,
@@ -1311,6 +1379,7 @@ module.exports = {
   DOWNLOAD_RETRIES,
   FRAGMENT_RETRIES,
   HTTP_CHUNK_SIZE,
+  ARIA2_DOWNLOADER_ARGS,
   mergeUrlsIntoQueue,
   loadQueueFile,
   resolveYtDlpPath,

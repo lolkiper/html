@@ -22,7 +22,9 @@ const {
   parseProgressLine,
   buildYtDlpDownloadArgs,
   buildBaseYtDlpArgs,
+  buildAria2cDownloaderArgs,
   resolveJsRuntimeArgs,
+  resolveAria2cPath,
   isBotCheckError,
   shouldLogYtDlpLine,
   mergeUrlsIntoQueue,
@@ -32,6 +34,7 @@ const {
   DOWNLOAD_RETRIES,
   FRAGMENT_RETRIES,
   HTTP_CHUNK_SIZE,
+  ARIA2_DOWNLOADER_ARGS,
   STATUS
 } = require('../downloader');
 
@@ -197,6 +200,24 @@ async function main() {
   check(Number(dlArgs[dlArgs.indexOf('--fragment-retries') + 1]) >= 15, 'повторы фрагментов не меньше 15');
   check(DOWNLOAD_RETRIES >= 15 && FRAGMENT_RETRIES >= 15, 'константы повторов согласованы');
   check(!dlArgs.includes('--throttled-rate'), 'throttled-rate убран — он сам рвал медленные куски');
+  const ariaArgs = buildYtDlpDownloadArgs({
+    url: 'https://www.youtube.com/watch?v=AAAAAAAAAAA',
+    template: path.join(ROOT, '1_AAAAAAAAAAA.%(ext)s'),
+    format: FALLBACK_FORMAT,
+    ffmpegPath: 'ffmpeg',
+    preferMp4: true,
+    aria2cPath: path.join(ROOT, 'aria2c.exe')
+  });
+  check(ariaArgs.includes('--downloader') && ariaArgs.includes('aria2c'), 'при наличии aria2c качаем им, как Media Downloader');
+  check(ariaArgs.includes('dash,m3u8:native'), 'HLS/DASH остаются на нативном клиенте yt-dlp');
+  check(
+    ariaArgs.includes('--downloader-args') && String(ARIA2_DOWNLOADER_ARGS).includes('-x 8') && String(ARIA2_DOWNLOADER_ARGS).includes('--connect-timeout=8'),
+    'aria2c: 8 соединений и connect 8с, а не один коннект на 60с к мёртвой ноде',
+    ARIA2_DOWNLOADER_ARGS
+  );
+  check(buildAria2cDownloaderArgs(null).length === 0, 'без aria2c не подсовываем --downloader');
+  const ariaProgress = parseProgressLine('[#2f4e1b 4.2MiB/32MiB(13%) CN:8 DL:1.2MiB ETA:23s]');
+  check(ariaProgress && ariaProgress.percent === 13 && ariaProgress.speed.includes('1.2'), 'прогресс aria2c разбирается');
   check(
     YOUTUBE_EXTRACTOR_ARGS === 'youtube:player_client=default,-android_sdkless',
     'не форсируем сломанные tv/android_sdkless/web — из‑за них FORMAT CHECK падал на всех ссылках',
