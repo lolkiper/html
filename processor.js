@@ -8,7 +8,7 @@
  *   2) подставляет за ними ролик Shorts,
  *   3) добавляет оставшийся хвост исходника,
  *   4) (опционально) накладывает оверлей на весь хронометраж,
- *   5) пишет результат в .mov (esN.mov).
+ *   5) пишет результат в esN.mp4 (H.264/H.265) или esN.mov (ProRes).
  *
  * Модуль не зависит от Electron и может запускаться обычным Node (см. scripts/smoke-test.js).
  */
@@ -33,13 +33,31 @@ const SCALE_FLAGS = 'fast_bilinear';
 const MAX_OUTPUT_FPS = 30;
 /**
  * Потолок относительно realtime. 4× при 30 fps ≈ 120 кадров/с — около половины
- * NVENC на RTX 3060 1080p. Каждый файл пишется своим процессом сразу в esN.mov:
+ * NVENC на RTX 3060 1080p. Каждый файл пишется своим процессом сразу в esN.mp4:
  * так ролик появляется в папке, как только готов, и команда не раздувается.
  */
 const ENCODE_PACE_SPEED = 4;
 /** Пауза между файлами, чтобы NVENC успел закрыть предыдущую сессию. */
 const INTER_FILE_DELAY_MS = 120;
 const MIN_OUTPUT_BYTES = 64;
+
+function outputContainer(encoderKey) {
+  return encoderKey === 'prores' ? 'mov' : 'mp4';
+}
+
+function outputExtension(encoderKey) {
+  return `.${outputContainer(encoderKey)}`;
+}
+
+/** Windows и «Кино и ТВ» показывают картинку только при avc1/hvc1, не при сыром h264 в .mov. */
+function withPlayerCompatibleTags(encoderKey, videoOptions) {
+  const opts = Array.isArray(videoOptions) ? [...videoOptions] : [];
+  if (!opts.includes('-tag:v')) {
+    if (encoderKey === 'h264') opts.push('-tag:v', 'avc1');
+    if (encoderKey === 'h265') opts.push('-tag:v', 'hvc1');
+  }
+  return opts;
+}
 
 function paceGlobalArgs() {
   return [
@@ -74,13 +92,14 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Пресеты кодеков для контейнера .mov. */
+/** Пресеты кодеков. H.264/H.265 — MP4 для Windows, ProRes — MOV. */
 const ENCODERS = {
   h264: {
     label: 'H.264 — быстро (veryfast)',
     pixelFormat: 'yuv420p',
     videoOptions: [
       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-profile:v', 'high',
+      '-tag:v', 'avc1',
       '-x264-params', 'ref=1:bframes=0:rc-lookahead=10:sync-lookahead=0:scenecut=0'
     ],
     audioOptions: ['-c:a', 'aac', '-b:a', '128k'],
@@ -437,7 +456,7 @@ function resolveEncodePlan(encoderKey, accelMode, hardware) {
     return {
       label: `${gpu.vendor}: склейка на CPU (${threads.filterThreads} из ${threads.cores} потоков), кодирование на GPU`,
       pixelFormat: 'yuv420p',
-      videoOptions: ['-c:v', gpu.id, ...(gpu.extra || [])],
+      videoOptions: withPlayerCompatibleTags(encoderKey, ['-c:v', gpu.id, ...(gpu.extra || [])]),
       audioOptions: cpu.audioOptions,
       extraOptions: cpu.extraOptions && cpu.extraOptions.length ? cpu.extraOptions : ['-movflags', '+faststart'],
       // Граф фильтров целиком программный (concat/crop/overlay) — GPU-кадры
@@ -458,7 +477,7 @@ function resolveEncodePlan(encoderKey, accelMode, hardware) {
   return {
     label: `${cpu.label} — ${reason}`,
     pixelFormat: cpu.pixelFormat,
-    videoOptions: [...cpu.videoOptions, '-threads', String(threads.encodeThreads)],
+    videoOptions: withPlayerCompatibleTags(encoderKey, [...cpu.videoOptions, '-threads', String(threads.encodeThreads)]),
     audioOptions: cpu.audioOptions,
     extraOptions: cpu.extraOptions,
     hwaccel: null,
@@ -491,13 +510,13 @@ function naturalCompare(a, b) {
 
 /**
  * Список видеофайлов в папке (без рекурсии).
- * Файлы, которые совпадают с шаблоном результата (esN.mov), игнорируются —
+ * Файлы, которые совпадают с шаблоном результата (esN.mp4 / esN.mov), игнорируются —
  * иначе повторный запуск с той же папкой на входе и выходе зациклится.
  */
 function listVideoFiles(directory, options = {}) {
   const prefix = options.outputPrefix || DEFAULTS.outputPrefix;
   const skipOutputNames = Boolean(options.skipOutputNames);
-  const outputPattern = new RegExp(`^${escapeRegExp(prefix)}\\d+\\.mov$`, 'i');
+  const outputPattern = new RegExp(`^${escapeRegExp(prefix)}\\d+\\.(mov|mp4)$`, 'i');
 
   const entries = fs.readdirSync(directory, { withFileTypes: true });
   return entries
@@ -592,6 +611,7 @@ function probeMedia(file) {
         fps: parseFrameRate(videoStream.r_frame_rate, 30),
         hasAudio: Boolean(audioStream),
         videoCodec: videoStream.codec_name || 'unknown',
+        codecTag: videoStream.codec_tag_string || '',
         audioCodec: audioStream ? audioStream.codec_name || 'unknown' : null
       });
     });
@@ -744,8 +764,8 @@ function evenRound(value) {
 }
 
 /**
- * Мягкая граница split-screen. Градиент считается один раз на полном кадре,
- * затем кадр повторяется. Тот же raised-cosine, без geq на каждый кадр ролика.
+ * Мягкая граница split-screen. Raised-cosine считается один раз (`eval=init`)
+ * на полном кадре маски — без loop, который на части сборок FFmpeg даёт пустое видео.
  */
 function buildFeatherMaskFilter({ width, height, fps, duration, feather, outputLabel }) {
   const denom = Math.max(1, feather - 1).toFixed(1);
@@ -753,9 +773,8 @@ function buildFeatherMaskFilter({ width, height, fps, duration, feather, outputL
   const maskDuration = Math.max(1, duration + 1).toFixed(3);
   const rate = Number.isFinite(fps) && fps > 0 ? fps : MAX_OUTPUT_FPS;
   return (
-    `color=c=black:s=${width}x${height}:r=1:d=1,` +
-      `format=gray,geq=lum='255*(${ease})',` +
-      `loop=-1:size=1,fps=${rate},trim=duration=${maskDuration}[${outputLabel}]`
+    `color=c=black:s=${width}x${height}:r=${rate}:d=${maskDuration},` +
+      `format=gray,geq=lum='255*(${ease})':eval=init[${outputLabel}]`
   );
 }
 
@@ -1338,11 +1357,12 @@ function renderVideo(params) {
       '-ar', String(AUDIO_SAMPLE_RATE),
       '-ac', '2',
       '-r', String(target.fps),
+      '-pix_fmt', plan.pixelFormat,
       '-vsync', 'cfr',
       ...(plan.extraOptions || []),
       '-y'
     ])
-    .format('mov')
+    .format(outputContainer(encoder))
     .output(outputFile);
 
   return runCommand(command, {
@@ -1470,7 +1490,7 @@ class BatchProcessor {
         this.log(
           'info',
           `Скорость: до ${ENCODE_PACE_SPEED}× (~50% Video Encode), без лишней нагрузки на CPU. ` +
-            `Каждый ролик пишется сразу в ${prefix}N.mov, пауза ${INTER_FILE_DELAY_MS} мс между файлами`
+            `Каждый ролик пишется сразу в ${prefix}N${outputExtension(encoder)}, пауза ${INTER_FILE_DELAY_MS} мс между файлами`
         );
       }
       if (hardware.compiledGpu && hardware.compiledGpu.length) {
@@ -1530,7 +1550,7 @@ class BatchProcessor {
 
         const sourceFile = sources[i];
         const fileName = path.basename(sourceFile);
-        const outputFile = path.join(s.outputDir, `${prefix}${i + 1}.mov`);
+        const outputFile = path.join(s.outputDir, `${prefix}${i + 1}${outputExtension(encoder)}`);
         const humanIndex = `${i + 1}/${sources.length}`;
 
         try {
@@ -1756,6 +1776,8 @@ module.exports = {
   probeMedia,
   renderVideo,
   formatDuration,
+  outputContainer,
+  outputExtension,
   wrapCloseupOffset,
   planCloseupInputs,
   isolateJobTimeline,

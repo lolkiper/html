@@ -1,7 +1,7 @@
 {
   "name": "shorts-inserter",
   "productName": "Shorts Inserter",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Batch tool that inserts Shorts, mass-downloads YouTube, and smart-renames videos from nazvaniya.txt.",
   "main": "main.js",
   "author": "Shorts Inserter",

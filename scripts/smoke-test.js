@@ -25,6 +25,7 @@ const {
   isolateJobTimeline,
   segmentInputOptions,
   buildFeatherMaskFilter,
+  outputExtension,
   resolveEncodePlan,
   ENCODE_PACE_SPEED,
   INTER_FILE_DELAY_MS,
@@ -39,7 +40,9 @@ const SOURCE_DIR = path.join(ROOT, 'source');
 const OUTPUT_DIR = path.join(ROOT, 'output');
 const ASSETS_DIR = path.join(ROOT, 'assets');
 
-let failures = 0;
+function outH264(dir, n) {
+  return path.join(dir, `es${n}${outputExtension('h264')}`);
+}
 
 function check(condition, description, details = '') {
   if (condition) {
@@ -208,17 +211,16 @@ async function main() {
     'между файлами короткая пауза, чтобы NVENC закрыл предыдущую сессию',
     `delay=${INTER_FILE_DELAY_MS}`
   );
+  check(
+    outputExtension('h264') === '.mp4' && outputExtension('h265') === '.mp4' && outputExtension('prores') === '.mov',
+    'H.264/H.265 пишутся в mp4 для Windows, ProRes остаётся mov'
+  );
   const maskGraph = buildFeatherMaskFilter({
     width: 588, height: 1080, fps: 30, duration: 6, feather: 48, outputLabel: 'splitMask'
   });
   check(
-    maskGraph.includes('geq=') && maskGraph.includes('loop=-1:size=1') && maskGraph.includes('r=1:d=1'),
-    'маска мягкой границы считается один раз и повторяется, а не geq на каждый кадр',
-    maskGraph
-  );
-  check(
-    !maskGraph.includes('r=30:d='),
-    'маска не генерирует полнокадровый geq на всю длительность ролика',
+    maskGraph.includes('geq=') && maskGraph.includes('eval=init'),
+    'маска мягкой границы считается один раз (eval=init), без пустого loop-видео',
     maskGraph
   );
   const shortGraphCmd = ffmpeg();
@@ -321,36 +323,42 @@ async function main() {
     'в логе есть ограничение скорости и сохранение каждого файла сразу'
   );
 
-  const out1 = path.join(OUTPUT_DIR, 'es1.mov');
-  const out2 = path.join(OUTPUT_DIR, 'es2.mov');
-  check(fs.existsSync(out1), 'создан es1.mov');
-  check(fs.existsSync(out2), 'создан es2.mov');
-  check(!fs.existsSync(path.join(OUTPUT_DIR, 'es3.mov')), 'битый файл не оставил мусорный es3.mov');
+  const out1 = outH264(OUTPUT_DIR, 1);
+  const out2 = outH264(OUTPUT_DIR, 2);
+  check(fs.existsSync(out1), 'создан es1.mp4');
+  check(fs.existsSync(out2), 'создан es2.mp4');
+  check(!fs.existsSync(path.join(OUTPUT_DIR, 'es3.mp4')), 'битый файл не оставил мусорный es3.mp4');
 
   const info1 = await probeMedia(out1);
   const info2 = await probeMedia(out2);
 
   check(
     Math.abs(info1.duration - 8) < 0.6,
-    'es1.mov = исходник 6с + shorts 2с',
+    'es1.mp4 = исходник 6с + shorts 2с',
     `${info1.duration.toFixed(2)}s`
   );
   check(
     Math.abs(info2.duration - 6) < 0.6,
-    'es2.mov = исходник 4с + shorts 2с',
+    'es2.mp4 = исходник 4с + shorts 2с',
     `${info2.duration.toFixed(2)}s`
   );
   check(
     info1.width === 1280 && info1.height === 720,
-    'es1.mov сохранил разрешение исходника 1280x720',
+    'es1.mp4 сохранил разрешение исходника 1280x720',
     `${info1.width}x${info1.height}`
   );
   check(
     info2.width === 640 && info2.height === 480,
-    'es2.mov сохранил разрешение исходника 640x480',
+    'es2.mp4 сохранил разрешение исходника 640x480',
     `${info2.width}x${info2.height}`
   );
   check(info1.hasAudio && info2.hasAudio, 'у обоих результатов есть звуковая дорожка (немой исходник дополнен тишиной)');
+  check(info1.videoCodec === 'h264', 'es1.mp4 содержит видео H.264, а не только звук', info1.videoCodec);
+  check(
+    /avc1/i.test(info1.codecTag),
+    'H.264 помечен тегом avc1 — Windows покажет картинку',
+    info1.codecTag || '(пусто)'
+  );
 
   console.log('\n4) Проверяем порядок сегментов и зацикливание оверлея по цвету кадров…');
   const colorDir = path.join(ROOT, 'colors');
@@ -380,7 +388,7 @@ async function main() {
   await colorBatch.run();
 
   // 4 c исходника + 2 c shorts, точка вставки на третьей секунде.
-  const montage = path.join(colorOut, 'es1.mov');
+  const montage = outH264(colorOut, 1);
   check(colorsMatch(samplePixel(montage, 1.0), [255, 0, 0]), 'до вставки играет исходник (красный)',
     String(samplePixel(montage, 1.0)));
   check(colorsMatch(samplePixel(montage, 4.0), [0, 255, 0]), 'в середине играет Shorts (зелёный)',
@@ -406,7 +414,7 @@ async function main() {
   await overlayBatch.run();
 
   // Белый оверлей на 50% осветляет каждый сегмент; длится он 1 с, значит дальше идёт луп.
-  const blended = path.join(overlayOut, 'es1.mov');
+  const blended = outH264(overlayOut, 1);
   check(colorsMatch(samplePixel(blended, 0.5), [255, 128, 128]), 'оверлей смешан с началом ролика',
     String(samplePixel(blended, 0.5)));
   check(colorsMatch(samplePixel(blended, 4.0), [128, 255, 128]), 'оверлей зациклился и лежит поверх Shorts',
@@ -453,7 +461,7 @@ async function main() {
       { onLog: (level, message) => console.log(`    [${level}] ${message}`) }
     );
     const result = await batch.run();
-    return { result, file: path.join(outputDir, 'es1.mov') };
+    return { result, file: outH264(outputDir, 1) };
   };
 
   const hard = await runSplit(splitOut, 0);
@@ -531,7 +539,7 @@ async function main() {
   const squareSummary = await squareBatch.run();
   check(squareSummary.done === 1, 'квадратный кадр: файл собран', `done=${squareSummary.done}`);
 
-  const square = path.join(squareOut, 'es1.mov');
+  const square = outH264(squareOut, 1);
   const squareInfo = await probeMedia(square);
   check(
     squareInfo.width === 1080 && squareInfo.height === 1080,
@@ -571,7 +579,7 @@ async function main() {
   );
   const verticalSummary = await verticalBatch.run();
   check(verticalSummary.done === 1, '9:16: файл собран', `done=${verticalSummary.done}`);
-  const portrait = path.join(verticalOut, 'es1.mov');
+  const portrait = outH264(verticalOut, 1);
   const portraitInfo = await probeMedia(portrait);
   check(
     portraitInfo.width === 1080 && portraitInfo.height === 1080,
@@ -608,7 +616,7 @@ async function main() {
   check(comboSummary.done === 1, 'сплит вместе с оверлеем: файл собран', `done=${comboSummary.done}`);
 
   // Холст здесь квадратный по умолчанию, поэтому половины делятся по x = 540.
-  const combo = path.join(comboOut, 'es1.mov');
+  const combo = outH264(comboOut, 1);
   check(colorsMatch(samplePoint(combo, 1, 270, 540), [128, 128, 0], 40),
     'сплит + оверлей: слева исходник, смешанный с оверлеем',
     String(samplePoint(combo, 1, 270, 540)));
@@ -685,8 +693,8 @@ async function main() {
   const leftoverTemps = fs.readdirSync(seqOut).filter((name) => name.startsWith('.shorts-') || name.startsWith('shorts-seg-'));
   check(leftoverTemps.length === 0, 'временные файлы не остаются в папке результата', leftoverTemps.join(', '));
 
-  const seq1 = path.join(seqOut, 'es1.mov');
-  const seq2 = path.join(seqOut, 'es2.mov');
+  const seq1 = outH264(seqOut, 1);
+  const seq2 = outH264(seqOut, 2);
   // Исходник 4с + Shorts 2с = 6с. Первое видео берёт крупный план 0–6 (magenta),
   // второе продолжает с 6-й секунды (yellow).
   check(colorsMatch(samplePoint(seq1, 1, 810, 540), [255, 0, 255]),
@@ -727,8 +735,8 @@ async function main() {
   const wrapSummary = await wrapBatch.run();
   check(wrapSummary.done === 2, 'обёртка крупного плана: два файла собраны', `done=${wrapSummary.done}`);
 
-  const wrap2 = path.join(seqWrapOut, 'es2.mov');
-  check(fs.existsSync(wrap2), 'обёртка: es2.mov записан');
+  const wrap2 = outH264(seqWrapOut, 2);
+  check(fs.existsSync(wrap2), 'обёртка: es2.mp4 записан');
   if (fs.existsSync(wrap2)) {
     // Крупный план 7с: 0–4 magenta, 4–7 yellow. es1 (6с) забирает 0–6.
     // es2 начинается с 6-й: 1с yellow, затем снова magenta с начала файла.
@@ -814,10 +822,10 @@ async function main() {
   check(leftoverChainTemps.length === 0, 'цепочка: временные данные предыдущего Shorts не остаются', leftoverChainTemps.join(', '));
 
   for (let i = 0; i < chainClips.length; i += 1) {
-    const file = path.join(chainOut, `es${i + 1}.mov`);
+    const file = outH264(chainOut, i + 1);
     const clip = chainClips[i];
     const prev = i > 0 ? chainClips[i - 1] : null;
-    check(fs.existsSync(file), `цепочка: есть es${i + 1}.mov`);
+    check(fs.existsSync(file), `цепочка: есть es${i + 1}.mp4`);
     if (!fs.existsSync(file)) continue;
 
     const startLeft = samplePoint(file, 0.35, 270, 540);
@@ -861,8 +869,8 @@ async function main() {
     ['D', 'E', 3, 4]
   ];
   namedTransitions.forEach(([from, to, a, b]) => {
-    const first = path.join(chainOut, `es${a + 1}.mov`);
-    const second = path.join(chainOut, `es${b + 1}.mov`);
+    const first = outH264(chainOut, a + 1);
+    const second = outH264(chainOut, b + 1);
     if (!fs.existsSync(first) || !fs.existsSync(second)) return;
     const endOfFirst = samplePoint(first, 6.6, 270, 540);
     const startOfSecond = samplePoint(second, 0.35, 270, 540);
