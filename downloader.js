@@ -19,7 +19,11 @@ const TITLES_FILE = 'nazvaniya.txt';
 const LOG_FILE = 'download_log.txt';
 const MIN_OUTPUT_BYTES = 4096;
 const QUEUE_VERSION = 1;
-const STALL_TIMEOUT_MS = 90_000;
+const STALL_TIMEOUT_MS = 180_000;
+const SOCKET_TIMEOUT_SEC = 60;
+const DOWNLOAD_RETRIES = 15;
+const FRAGMENT_RETRIES = 15;
+const HTTP_CHUNK_SIZE = '10M';
 const FALLBACK_FORMAT = 'bestvideo*+bestaudio/best';
 /**
  * tv / android_sdkless / web в 2026 ломают извлечение: LOGIN_REQUIRED, 403, SABR.
@@ -148,7 +152,8 @@ function buildBaseYtDlpArgs({ ytdlpPath, cookiesFromBrowser } = {}) {
     '--encoding',
     'utf-8',
     '--socket-timeout',
-    '20',
+    String(SOCKET_TIMEOUT_SEC),
+    '--force-ipv4',
     '--extractor-retries',
     '3',
     '--extractor-args',
@@ -403,11 +408,17 @@ function buildYtDlpDownloadArgs({
     '--no-mtime',
     '--windows-filenames',
     '--retries',
-    '10',
+    String(DOWNLOAD_RETRIES),
     '--fragment-retries',
-    '10',
-    '--throttled-rate',
-    '100K',
+    String(FRAGMENT_RETRIES),
+    '--retry-sleep',
+    'http:linear=1:8:2',
+    '--retry-sleep',
+    'fragment:linear=1:8:2',
+    '--file-access-retries',
+    '8',
+    '--http-chunk-size',
+    HTTP_CHUNK_SIZE,
     '--no-check-formats',
     '--write-info-json',
     '-f',
@@ -1296,6 +1307,10 @@ module.exports = {
   YOUTUBE_EXTRACTOR_ARGS,
   FALLBACK_FORMAT,
   STALL_TIMEOUT_MS,
+  SOCKET_TIMEOUT_SEC,
+  DOWNLOAD_RETRIES,
+  FRAGMENT_RETRIES,
+  HTTP_CHUNK_SIZE,
   mergeUrlsIntoQueue,
   loadQueueFile,
   resolveYtDlpPath,

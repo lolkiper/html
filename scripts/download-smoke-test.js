@@ -28,6 +28,10 @@ const {
   mergeUrlsIntoQueue,
   YOUTUBE_EXTRACTOR_ARGS,
   FALLBACK_FORMAT,
+  SOCKET_TIMEOUT_SEC,
+  DOWNLOAD_RETRIES,
+  FRAGMENT_RETRIES,
+  HTTP_CHUNK_SIZE,
   STATUS
 } = require('../downloader');
 
@@ -186,6 +190,13 @@ async function main() {
   check(dlArgs.includes('--windows-filenames'), 'имена файлов Windows-безопасные');
   check(dlArgs.includes('--write-info-json'), 'название берём из info.json после скачивания');
   check(dlArgs.includes(FALLBACK_FORMAT), 'скачивание не пинит конкретные format_id с FORMAT CHECK');
+  check(SOCKET_TIMEOUT_SEC >= 45 && String(SOCKET_TIMEOUT_SEC) === String(dlArgs[dlArgs.indexOf('--socket-timeout') + 1]), 'socket-timeout не 20с — иначе googlevideo рвёт 1080p60');
+  check(dlArgs.includes('--force-ipv4'), 'IPv4 для googlevideo — IPv6 на Windows часто даёт Read timed out');
+  check(dlArgs.includes('--http-chunk-size') && dlArgs.includes(HTTP_CHUNK_SIZE), 'докачка кусками, чтобы таймаут не сбрасывал весь файл');
+  check(Number(dlArgs[dlArgs.indexOf('--retries') + 1]) >= 15, 'повторы скачивания не меньше 15');
+  check(Number(dlArgs[dlArgs.indexOf('--fragment-retries') + 1]) >= 15, 'повторы фрагментов не меньше 15');
+  check(DOWNLOAD_RETRIES >= 15 && FRAGMENT_RETRIES >= 15, 'константы повторов согласованы');
+  check(!dlArgs.includes('--throttled-rate'), 'throttled-rate убран — он сам рвал медленные куски');
   check(
     YOUTUBE_EXTRACTOR_ARGS === 'youtube:player_client=default,-android_sdkless',
     'не форсируем сломанные tv/android_sdkless/web — из‑за них FORMAT CHECK падал на всех ссылках',
