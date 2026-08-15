@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shorts Inserter — файл дизайна</title>
+  <style>
+/* ---------------------------------------------------------------- Токены */
+:root {
+  --bg: #0d1117;
+  --bg-soft: #121824;
+  --panel: #161d2b;
+  --panel-2: #1c2534;
+  --border: #263047;
+  --border-soft: #1f2739;
+  --text: #e8eefc;
+  --text-dim: #93a1bb;
+  --text-faint: #64718c;
+  --accent: #7c5cff;
+  --accent-2: #4f8cff;
+  --success: #34d399;
+  --danger: #f87171;
+  --warning: #fbbf24;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  --font: 'Segoe UI', 'Inter', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    radial-gradient(1100px 600px at 12% -10%, rgba(124, 92, 255, 0.16), transparent 60%),
+    radial-gradient(900px 500px at 105% 0%, rgba(79, 140, 255, 0.12), transparent 55%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+  user-select: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2b3549;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4761;
+  background-clip: content-box;
+}
+
+/* --------------------------------------------------------------- Каркас */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 18px 20px 20px;
+  gap: 16px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex: 0 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand__mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 8px 22px rgba(124, 92, 255, 0.35);
+}
+
+.brand__text h1 {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: 0.2px;
+}
+
+.brand__text p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.topbar__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chip {
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip--muted {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.tab {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-family: var(--font);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover {
+  border-color: #33405c;
+  color: var(--text);
+}
+
+.tab.is-active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border-color: transparent;
+  color: #fff;
+}
+
+.view[hidden] {
+  display: none !important;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(520px, 1.15fr) minmax(380px, 0.85fr);
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.column--settings {
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.column--status {
+  min-height: 0;
+}
+
+#view-download .column--status,
+#view-rename .column--status {
+  overflow-y: auto;
+}
+
+#view-download .card--log,
+#view-rename .card--log {
+  flex: 0 0 auto;
+  min-height: 160px;
+}
+
+/* ---------------------------------------------------------------- Карточки */
+.card {
+  background: linear-gradient(180deg, var(--panel), var(--bg-soft));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 16px 18px 18px;
+  box-shadow: var(--shadow);
+}
+
+.card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.card__head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.card__hint {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.card__tools {
+  display: flex;
+  gap: 6px;
+}
+
+.card--progress {
+  flex: 0 0 auto;
+}
+
+.card--log {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ------------------------------------------------------------------ Поля */
+.field {
+  margin-bottom: 14px;
+}
+
+.field:last-child {
+  margin-bottom: 0;
+}
+
+.field > label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.field__note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  min-height: 15px;
+}
+
+.field__note--error {
+  color: var(--danger);
+}
+
+.field__note--ok {
+  color: var(--success);
+}
+
+.picker {
+  display: flex;
+  gap: 8px;
+}
+
+textarea,
+input[type='text'],
+input[type='number'],
+select {
+  width: 100%;
+  padding: 10px 12px;
+  background: #0f1420;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--font);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  user-select: text;
+}
+
+input[type='text'],
+textarea {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+textarea {
+  min-height: 220px;
+  resize: vertical;
+  line-height: 1.55;
+  user-select: text;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.18);
+}
+
+input:disabled,
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+select {
+  appearance: none;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.percent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.percent-row input[type='number'] {
+  width: 84px;
+  flex: 0 0 auto;
+  text-align: center;
+  font-weight: 600;
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 4px;
+  background: #2a344a;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: 2px solid #0f1420;
+  box-shadow: 0 2px 8px rgba(124, 92, 255, 0.5);
+}
+
+input[type='range']:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* -------------------------------------------------------------- Чекбоксы */
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin-top: 14px;
+}
+
+.checkbox input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch__track {
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: #232c40;
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  transition: background 0.18s ease;
+}
+
+.switch__thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #7d8aa5;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.switch input:checked + .switch__track {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border-color: transparent;
+}
+
+.switch input:checked + .switch__track .switch__thumb {
+  transform: translateX(18px);
+  background: #fff;
+}
+
+.switch input:focus-visible + .switch__track {
+  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.25);
+}
+
+.overlay-body[data-disabled='true'],
+.split-body[data-disabled='true'] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------- Сплит-скрин */
+.split-columns {
+  margin-top: 2px;
+}
+
+.split-column {
+  background: #131a28;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 12px 13px 13px;
+}
+
+.split-column h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.split-column .field:last-child {
+  margin-bottom: 0;
+}
+
+.split-preview {
+  display: flex;
+  align-items: stretch;
+  height: 68px;
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.split-preview__left,
+.split-preview__right {
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #dfe7fa;
+  text-align: center;
+  padding: 0 6px;
+  overflow: hidden;
+  transition: flex-basis 0.2s ease;
+}
+
+.split-preview__left {
+  flex: 0 0 50%;
+  background: linear-gradient(180deg, #2b3a5c, #223049);
+}
+
+.split-preview__right {
+  flex: 1 1 auto;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+
+/* Полоса стыка расширяется вместе с настройкой мягкости границы. */
+.split-preview__seam {
+  flex: 0 0 16px;
+  background: linear-gradient(90deg, #223049 0%, #3d4d78 40%, #6a63ff 100%);
+  transition: flex-basis 0.2s ease;
+}
+
+/* --------------------------------------------------------------- Схема */
+.scheme {
+  margin-top: 16px;
+}
+
+.scheme__bar {
+  display: flex;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.scheme__part {
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  color: #f2f5ff;
+  transition: flex-basis 0.2s ease;
+}
+
+.scheme__part--head {
+  flex: 0 0 63%;
+  background: linear-gradient(180deg, #2b3a5c, #223049);
+}
+
+.scheme__part--shorts {
+  flex: 0 0 30%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+
+.scheme__part--tail {
+  flex: 1 1 auto;
+  background: linear-gradient(180deg, #2b3a5c, #223049);
+}
+
+.scheme__overlay {
+  margin-top: 6px;
+  height: 24px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px dashed var(--border);
+  background: rgba(124, 92, 255, 0.08);
+  transition: opacity 0.2s ease;
+}
+
+.scheme__overlay[data-off='true'] {
+  opacity: 0.3;
+}
+
+/* --------------------------------------------------------------- Кнопки */
+.btn {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: var(--font);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: #232d40;
+  border-color: #33405c;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow: 0 10px 24px rgba(124, 92, 255, 0.28);
+}
+
+.btn--primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+
+.btn--danger {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #ffb4b4;
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(248, 113, 113, 0.6);
+}
+
+.btn--ghost {
+  background: transparent;
+}
+
+.btn--mini {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  border-radius: 8px;
+}
+
+/* Кнопки запуска не должны уезжать за пределы прокручиваемой колонки. */
+.actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 0 6px;
+  margin-top: auto;
+  background: linear-gradient(180deg, rgba(13, 17, 23, 0) 0%, rgba(13, 17, 23, 0.94) 45%, var(--bg) 100%);
+}
+
+.actions .btn--primary {
+  flex: 1 1 220px;
+}
+
+.actions--inline {
+  position: static;
+  background: none;
+  padding: 0;
+  margin: 4px 0 0;
+}
+
+/* -------------------------------------------------------------- Прогресс */
+.badge {
+  font-size: 11.5px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: #222b3d;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.badge--running {
+  background: rgba(124, 92, 255, 0.16);
+  border-color: rgba(124, 92, 255, 0.5);
+  color: #c3b5ff;
+}
+
+.badge--done {
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.45);
+  color: #86efc4;
+}
+
+.badge--error {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fca5a5;
+}
+
+.status {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--text);
+  min-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress {
+  margin-bottom: 12px;
+}
+
+.progress__label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.progress__track {
+  height: 8px;
+  border-radius: 999px;
+  background: #1b2333;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+}
+
+.progress__fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.25s ease;
+}
+
+.progress__fill--overall {
+  background: linear-gradient(90deg, #4f8cff, var(--success));
+}
+
+.counters {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.counters--6 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.card--table,
+.card--errors {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.table-wrap {
+  overflow: auto;
+  max-height: 240px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+
+.queue-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.queue-table th,
+.queue-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+
+.queue-table th {
+  position: sticky;
+  top: 0;
+  background: #131a28;
+  color: var(--text-faint);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-size: 10.5px;
+}
+
+.queue-table td {
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.queue-table__empty td {
+  text-align: center;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.queue-table tr.is-success td {
+  color: var(--success);
+}
+
+.queue-table tr.is-retry td {
+  color: var(--warning);
+}
+
+.queue-table tr.is-error td {
+  color: var(--danger);
+}
+
+.queue-table tr.is-run td {
+  color: #c3b5ff;
+}
+
+.error-list {
+  max-height: 140px;
+  overflow: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.error-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.error-item:last-child {
+  border-bottom: 0;
+}
+
+.counter {
+  background: #131a28;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  text-align: center;
+}
+
+.counter span {
+  display: block;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.counter small {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ------------------------------------------------------------------- Лог */
+.log {
+  flex: 1 1 auto;
+  min-height: 160px;
+  overflow-y: auto;
+  background: #0b0f18;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  user-select: text;
+}
+
+.log__row {
+  display: flex;
+  gap: 8px;
+  padding: 1px 0;
+  word-break: break-word;
+}
+
+.log__time {
+  color: #4a5670;
+  flex: 0 0 auto;
+}
+
+.log__text {
+  white-space: pre-wrap;
+}
+
+.log__row--info .log__text {
+  color: #c6d2e8;
+}
+.log__row--success .log__text {
+  color: var(--success);
+}
+.log__row--error .log__text {
+  color: var(--danger);
+}
+.log__row--warn .log__text {
+  color: var(--warning);
+}
+.log__row--debug .log__text {
+  color: #5d6a85;
+}
+
+.log__empty {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* ------------------------------------------------------------- Адаптив */
+@media (max-width: 1080px) {
+  .layout {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .column--settings {
+    overflow: visible;
+  }
+
+  .card--log {
+    min-height: 240px;
+  }
+}
+
+
+/* --- страница гайда (не часть приложения) --- */
+html, body { height: auto; overflow: auto; user-select: text; }
+.guide { max-width: 1180px; margin: 0 auto; padding: 28px 24px 80px; }
+.guide h1.guide__title { font-size: 28px; margin: 0 0 6px; }
+.guide__lead { color: var(--text-dim); margin: 0 0 28px; }
+.guide h2.guide__h { margin: 36px 0 14px; font-size: 16px; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-dim); }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.swatch { border: 1px solid var(--border-soft); border-radius: 12px; overflow: hidden; background: var(--panel); }
+.swatch__chip { height: 56px; }
+.swatch__meta { padding: 8px 10px 10px; font-size: 11.5px; }
+.swatch__meta b { display: block; color: var(--text); font-weight: 600; }
+.swatch__meta span { color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.preview-frame {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  min-height: 720px;
+  background: var(--bg);
+}
+.preview-frame .app { height: 720px; }
+.type-sample { margin: 0 0 10px; }
+.type-sample small { color: var(--text-faint); margin-left: 10px; font-family: var(--mono); }
+  </style>
+</head>
+<body>
+  <div class="guide">
+    <header class="topbar" style="margin-bottom: 20px;">
+      <div class="brand">
+        <div class="brand__mark">SI</div>
+        <div class="brand__text">
+          <h1>Shorts Inserter</h1>
+          <p>Файл дизайна — токены, компоненты и макет интерфейса</p>
+        </div>
+      </div>
+      <div class="topbar__meta">
+        <span class="chip">v1.7.3</span>
+        <span class="chip chip--muted">styles.css + index.html</span>
+      </div>
+    </header>
+
+    <h1 class="guide__title">Дизайн-система</h1>
+    <p class="guide__lead">
+      Тёмный UI, акцент фиолетовый → синий. Шрифт Segoe UI / Inter 14px.
+      Карточки 14px radius, поля 10px. Этот файл открывается в браузере, Electron не нужен.
+    </p>
+
+    <h2 class="guide__h">Цвета</h2>
+    <div class="swatches">
+      <div class="swatch"><div class="swatch__chip" style="background:#0d1117"></div><div class="swatch__meta"><b>bg</b><span>#0d1117</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#121824"></div><div class="swatch__meta"><b>bg-soft</b><span>#121824</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#161d2b"></div><div class="swatch__meta"><b>panel</b><span>#161d2b</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#1c2534"></div><div class="swatch__meta"><b>panel-2</b><span>#1c2534</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#263047"></div><div class="swatch__meta"><b>border</b><span>#263047</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#e8eefc"></div><div class="swatch__meta"><b>text</b><span>#e8eefc</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#93a1bb"></div><div class="swatch__meta"><b>text-dim</b><span>#93a1bb</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#64718c"></div><div class="swatch__meta"><b>text-faint</b><span>#64718c</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:linear-gradient(135deg,#7c5cff,#4f8cff)"></div><div class="swatch__meta"><b>accent</b><span>#7c5cff → #4f8cff</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#34d399"></div><div class="swatch__meta"><b>success</b><span>#34d399</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#f87171"></div><div class="swatch__meta"><b>danger</b><span>#f87171</span></div></div>
+      <div class="swatch"><div class="swatch__chip" style="background:#fbbf24"></div><div class="swatch__meta"><b>warning</b><span>#fbbf24</span></div></div>
+    </div>
+
+    <h2 class="guide__h">Типографика</h2>
+    <p class="type-sample" style="font-size:19px;font-weight:600;margin:0">Shorts Inserter <small>H1 · 19px · 600</small></p>
+    <p class="type-sample" style="font-size:14px;font-weight:600;letter-spacing:0.3px;text-transform:uppercase">1. Источники <small>H2 карточки · 14px · uppercase</small></p>
+    <p class="type-sample" style="font-size:14px;color:#e8eefc">Основной текст 14px / 1.5</p>
+    <p class="type-sample" style="font-size:12.5px;color:#93a1bb">Подпись поля 12.5px · text-dim</p>
+    <p class="type-sample" style="font-size:11.5px;color:#64718c;font-family:var(--mono)">C:\Users\PC\Downloads\A4 <small>mono 11.5–12px</small></p>
+
+    <h2 class="guide__h">Кнопки и чипы</h2>
+    <div class="row">
+      <button class="btn btn--primary">Начать обработку</button>
+      <button class="btn btn--danger">Остановить</button>
+      <button class="btn btn--ghost">Обзор…</button>
+      <button class="btn btn--mini">Копировать</button>
+      <button class="btn" disabled>Неактивна</button>
+    </div>
+    <div class="row">
+      <span class="chip">v1.7.3</span>
+      <span class="chip chip--muted">FFmpeg: bundled</span>
+      <span class="badge">Ожидание</span>
+      <span class="badge badge--running">Идёт</span>
+      <span class="badge badge--done">Готово</span>
+      <span class="badge badge--error">Ошибка</span>
+      <button class="tab is-active">Вставка Shorts</button>
+      <button class="tab">Скачивание YouTube</button>
+    </div>
+
+    <h2 class="guide__h">Поля</h2>
+    <div class="card" style="max-width:560px">
+      <div class="field">
+        <label>Папка с исходными видео</label>
+        <div class="picker">
+          <input type="text" value="C:\Users\PC\Downloads\A4" readonly />
+          <button class="btn btn--ghost">Обзор…</button>
+        </div>
+        <p class="field__note field__note--ok">Найдено видео: 24</p>
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label>Процент обрезки: <b>80%</b></label>
+          <div class="percent-row">
+            <input type="number" value="80" min="50" max="99" />
+            <input type="range" min="50" max="99" value="80" />
+          </div>
+        </div>
+        <div class="field">
+          <label>Кодек результата</label>
+          <select>
+            <option>H.264 — быстро (veryfast)</option>
+            <option>H.265 — быстро (veryfast)</option>
+            <option>ProRes 422 HQ</option>
+          </select>
+        </div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" checked />
+        <span class="switch__track"><span class="switch__thumb"></span></span>
+        <span class="switch__label">Разделить экран</span>
+      </label>
+    </div>
+
+    <h2 class="guide__h">Схема монтажа и сплит</h2>
+    <div class="card">
+      <div class="scheme">
+        <div class="scheme__bar">
+          <span class="scheme__part scheme__part--head" style="flex-basis:56%">Исходник 80%</span>
+          <span class="scheme__part scheme__part--shorts">Shorts</span>
+          <span class="scheme__part scheme__part--tail">20%</span>
+        </div>
+        <div class="scheme__overlay">Оверлей поверх всего хронометража</div>
+      </div>
+      <div class="split-preview">
+        <div class="split-preview__left"><span>Основной ролик</span></div>
+        <div class="split-preview__seam"></div>
+        <div class="split-preview__right"><span>Крупный план</span></div>
+      </div>
+    </div>
+
+    <h2 class="guide__h">Прогресс и лог</h2>
+    <div class="grid-2">
+      <article class="card card--progress">
+        <div class="card__head">
+          <h2>Прогресс</h2>
+          <span class="badge badge--running">Идёт</span>
+        </div>
+        <p class="status">Обработка 3/24: clip12.mp4 — 62.4%</p>
+        <div class="progress">
+          <div class="progress__label"><span>Текущий файл</span><span>62%</span></div>
+          <div class="progress__track"><div class="progress__fill" style="width:62%"></div></div>
+        </div>
+        <div class="progress">
+          <div class="progress__label"><span>Всего</span><span>11%</span></div>
+          <div class="progress__track"><div class="progress__fill progress__fill--overall" style="width:11%"></div></div>
+        </div>
+        <div class="counters">
+          <div class="counter"><span>2</span><small>готово</small></div>
+          <div class="counter"><span>0</span><small>ошибок</small></div>
+          <div class="counter"><span>24</span><small>всего</small></div>
+        </div>
+      </article>
+      <article class="card card--log">
+        <div class="card__head"><h2>Лог выполнения</h2></div>
+        <div class="log">
+          <div class="log__row log__row--info"><span class="log__time">12:04:01</span><span class="log__text">Найдено видео: 24</span></div>
+          <div class="log__row log__row--info"><span class="log__time">12:04:01</span><span class="log__text">Кодек: H.264, обрезка: 80%</span></div>
+          <div class="log__row log__row--success"><span class="log__time">12:04:18</span><span class="log__text">[1/24] Готово: es1.mp4 (18.4 МБ)</span></div>
+          <div class="log__row log__row--warn"><span class="log__time">12:04:19</span><span class="log__text">Пауза 120 мс между файлами</span></div>
+          <div class="log__row log__row--error"><span class="log__time">12:04:22</span><span class="log__text">[3/24] Ошибка на файле broken.mp4</span></div>
+        </div>
+      </article>
+    </div>
+
+    <h2 class="guide__h">Макет окна — вкладка «Вставка Shorts»</h2>
+    <div class="preview-frame">
+      <div class="app">
+        <header class="topbar">
+          <div class="brand">
+            <div class="brand__mark">SI</div>
+            <div class="brand__text">
+              <h1>Shorts Inserter</h1>
+              <p>Вставка Shorts в середину видео и массовое скачивание YouTube с умной очередью</p>
+            </div>
+          </div>
+          <div class="topbar__meta">
+            <span class="chip">v1.7.3</span>
+            <span class="chip chip--muted">FFmpeg: bundled</span>
+            <span class="chip chip--muted">yt-dlp: bundled</span>
+          </div>
+        </header>
+        <nav class="tabs">
+          <button type="button" class="tab is-active">Вставка Shorts</button>
+          <button type="button" class="tab">Скачивание YouTube</button>
+          <button type="button" class="tab">Умное переименование</button>
+        </nav>
+        <main class="layout">
+          <section class="column column--settings">
+            <article class="card">
+              <div class="card__head">
+                <h2>1. Источники</h2>
+                <span class="card__hint">Что и куда вставляем</span>
+              </div>
+              <div class="field">
+                <label>Папка с исходными видео</label>
+                <div class="picker">
+                  <input type="text" value="C:\Users\PC\Downloads\исходники" readonly />
+                  <button class="btn btn--ghost">Обзор…</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Файл Shorts</label>
+                <div class="picker">
+                  <input type="text" value="C:\Users\PC\Downloads\shorts.mp4" readonly />
+                  <button class="btn btn--ghost">Обзор…</button>
+                </div>
+              </div>
+            </article>
+            <article class="card">
+              <div class="card__head">
+                <h2>2. Сплит-скрин</h2>
+                <label class="switch">
+                  <input type="checkbox" checked />
+                  <span class="switch__track"><span class="switch__thumb"></span></span>
+                  <span class="switch__label">Разделить экран</span>
+                </label>
+              </div>
+              <div class="split-preview">
+                <div class="split-preview__left"><span>Основной ролик</span></div>
+                <div class="split-preview__seam"></div>
+                <div class="split-preview__right"><span>Крупный план</span></div>
+              </div>
+            </article>
+            <article class="card">
+              <div class="card__head">
+                <h2>4. Экспорт</h2>
+                <span class="card__hint">Результат: es1.mp4, es2.mp4, …</span>
+              </div>
+              <div class="scheme">
+                <div class="scheme__bar">
+                  <span class="scheme__part scheme__part--head" style="flex-basis:56%">Исходник 80%</span>
+                  <span class="scheme__part scheme__part--shorts">Shorts</span>
+                  <span class="scheme__part scheme__part--tail">20%</span>
+                </div>
+              </div>
+            </article>
+            <div class="actions">
+              <button class="btn btn--primary">Начать обработку</button>
+              <button class="btn btn--danger" disabled>Остановить</button>
+              <button class="btn btn--ghost">Открыть папку результата</button>
+            </div>
+          </section>
+          <section class="column column--status">
+            <article class="card card--progress">
+              <div class="card__head">
+                <h2>Прогресс</h2>
+                <span class="badge">Ожидание</span>
+              </div>
+              <p class="status">Готово к запуску.</p>
+              <div class="progress">
+                <div class="progress__label"><span>Текущий файл</span><span>0%</span></div>
+                <div class="progress__track"><div class="progress__fill"></div></div>
+              </div>
+              <div class="progress">
+                <div class="progress__label"><span>Всего</span><span>0%</span></div>
+                <div class="progress__track"><div class="progress__fill progress__fill--overall"></div></div>
+              </div>
+              <div class="counters">
+                <div class="counter"><span>0</span><small>готово</small></div>
+                <div class="counter"><span>0</span><small>ошибок</small></div>
+                <div class="counter"><span>0</span><small>всего</small></div>
+              </div>
+            </article>
+            <article class="card card--log">
+              <div class="card__head"><h2>Лог выполнения</h2></div>
+              <div class="log"><p class="log__empty">Лог пуст. Запустите обработку.</p></div>
+            </article>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <h2 class="guide__h">Исходники в репозитории</h2>
+    <p class="guide__lead">
+      Живой интерфейс приложения: <code>index.html</code> + <code>styles.css</code>.
+      Этот гайд — статичная копия для просмотра и передачи дизайнеру.
+    </p>
+  </div>
+</body>
+</html>
