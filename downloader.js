@@ -24,7 +24,8 @@ const SOCKET_TIMEOUT_SEC = 60;
 const DOWNLOAD_RETRIES = 15;
 const FRAGMENT_RETRIES = 15;
 const HTTP_CHUNK_SIZE = '10M';
-const FALLBACK_FORMAT = 'bestvideo*+bestaudio/best';
+/** Тот же -f, что у Media Downloader: сначала H.264+AAC в mp4, иначе лучшее. */
+const FALLBACK_FORMAT = 'bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best';
 /** Как yt-dlp-aria2c в Media Downloader: много соединений, короткий connect, докачка. */
 const ARIA2_DOWNLOADER_ARGS = [
   '-x 8',
@@ -193,6 +194,7 @@ function shortYtError(message) {
 
 function buildBaseYtDlpArgs({ ytdlpPath, cookiesFromBrowser } = {}) {
   const args = [
+    '--ignore-config',
     '--no-playlist',
     '--encoding',
     'utf-8',
@@ -438,7 +440,9 @@ function shouldLogYtDlpLine(line) {
   if (parseProgressLine(text)) return false;
   return (
     /\[(youtube|info|Merger|ExtractAudio|ffmpeg|Fixup|download|aria2c)\]/i.test(text) ||
-    /^(WARNING|ERROR)/i.test(text)
+    /^(WARNING|ERROR)/i.test(text) ||
+    /Downloading (webpage|android|ios|tv|player|API|1 format)/i.test(text) ||
+    /JS runtime|Running deno|Extracting URL/i.test(text)
   );
 }
 
@@ -464,6 +468,8 @@ function buildYtDlpDownloadArgs({
     '--no-overwrites',
     '--no-mtime',
     '--windows-filenames',
+    '--output-na-placeholder',
+    'NA',
     '--retries',
     String(DOWNLOAD_RETRIES),
     '--fragment-retries',
@@ -1074,40 +1080,6 @@ class DownloadQueue {
     }
 
     this.log('info', `#${item.number} START ${item.url}`);
-    this.log('info', `#${item.number} FORMAT CHECK`);
-    let selection = {
-      mode: 'fallback',
-      format: FALLBACK_FORMAT,
-      preferMp4: true
-    };
-    try {
-      const info = await this.probeInfo(item.url);
-      const probed = this.applyInfo(item, info);
-      if (probed) selection = { ...probed, format: FALLBACK_FORMAT };
-      this.log(
-        'info',
-        `#${item.number} BEST VIDEO: ${item.resolution || 'auto'} ${item.fps ? `${item.fps}FPS` : ''}`.trim()
-      );
-      this.log('info', `#${item.number} BEST AUDIO: ${item.audioBitrate ? `${Math.round(item.audioBitrate)}kbps` : 'best'}`);
-    } catch (err) {
-      if (err && err.cancelled) throw err;
-      if (classifyError(err && err.message) === 'PERMANENT') throw err;
-      const message = shortYtError(err && err.message);
-      this.log('warn', `#${item.number} FORMAT CHECK SKIP: ${message}`);
-      if (isBotCheckError(message) && !this.cookiesFromBrowser) {
-        const browser = defaultCookieBrowser();
-        this.log('info', `#${item.number} FORMAT CHECK retry, cookies из ${browser}`);
-        try {
-          const info = await this.probeInfo(item.url, { cookiesFromBrowser: browser });
-          this.cookiesFromBrowser = browser;
-          const probed = this.applyInfo(item, info);
-          if (probed) selection = { ...probed, format: FALLBACK_FORMAT };
-        } catch (err2) {
-          if (err2 && err2.cancelled) throw err2;
-          this.log('warn', `#${item.number} cookies не открыли форматы: ${shortYtError(err2 && err2.message)}`);
-        }
-      }
-    }
     if (!item.title) item.title = `video-${item.videoId || item.number}`;
     this.persist();
     this.emitProgress({ status: `Downloading #${item.number}` });
@@ -1120,7 +1092,7 @@ class DownloadQueue {
       template,
       format: FALLBACK_FORMAT,
       ffmpegPath: this.ffmpegPath,
-      preferMp4: selection.preferMp4,
+      preferMp4: true,
       ytdlpPath: this.ytdlpPath,
       cookiesFromBrowser,
       aria2cPath: resolveAria2cPath(this.ytdlpPath)
@@ -1180,11 +1152,11 @@ class DownloadQueue {
     const sidecar = this.readSidecarInfo(outputFile);
     if (sidecar) this.applyInfo(item, sidecar);
     const prettyTitle = sanitizeFilename(item.title || safeTitle);
-    outputFile = await this.remuxIfNeeded(outputFile, selection.preferMp4);
+    outputFile = await this.remuxIfNeeded(outputFile, true);
     outputFile = renameToPrettyFilename(outputFile, item, prettyTitle);
     const probed = await this.probeOutput(outputFile);
     if (!probed.hasVideo) throw new Error('В результате нет видеопотока');
-    if (selection.audio && !probed.hasAudio) throw new Error('В результате нет аудиопотока');
+    if (!probed.hasAudio) throw new Error('В результате нет аудиопотока');
 
     item.filename = path.basename(outputFile);
     item.fileSize = fs.statSync(outputFile).size;

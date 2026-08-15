@@ -191,7 +191,8 @@ async function main() {
   check(dlArgs.includes('--extractor-args'), 'youtube extractor-args заданы');
   check(dlArgs.includes('--windows-filenames'), 'имена файлов Windows-безопасные');
   check(dlArgs.includes('--write-info-json'), 'название берём из info.json после скачивания');
-  check(dlArgs.includes(FALLBACK_FORMAT), 'скачивание не пинит конкретные format_id с FORMAT CHECK');
+  check(dlArgs.includes(FALLBACK_FORMAT), 'формат как у Media Downloader, без format_id с FORMAT CHECK');
+  check(dlArgs.includes('--ignore-config'), 'как Media Downloader: --ignore-config, без чужого yt-dlp.conf');
   check(SOCKET_TIMEOUT_SEC >= 45 && String(SOCKET_TIMEOUT_SEC) === String(dlArgs[dlArgs.indexOf('--socket-timeout') + 1]), 'socket-timeout не 20с — иначе googlevideo рвёт 1080p60');
   check(dlArgs.includes('--force-ipv4'), 'IPv4 для googlevideo — IPv6 на Windows часто даёт Read timed out');
   check(dlArgs.includes('--http-chunk-size') && dlArgs.includes(HTTP_CHUNK_SIZE), 'докачка кусками, чтобы таймаут не сбрасывал весь файл');
@@ -296,6 +297,7 @@ async function main() {
   check(seenDownloadArgs.length > 0 && seenDownloadArgs[0].includes('--progress'), 'реальный download-вызов идёт с --progress');
   check(seenDownloadArgs.every((args) => !args.includes('--print')), 'ни один download-вызов не использует --print');
   check(seenDownloadArgs.every((args) => args.includes(FALLBACK_FORMAT)), 'download не пинит format_id из FORMAT CHECK');
+  check(seenDownloadArgs.every((args) => !args.includes('-J')), 'как Media Downloader: один yt-dlp, без предварительного -J');
 
   const titles = fs.readFileSync(path.join(ROOT, 'nazvaniya.txt'), 'utf8').split(/\r?\n/).filter(Boolean);
   check(titles.length === 3, 'в nazvaniya.txt ровно три успешных названия', titles.join(' | '));
@@ -363,7 +365,7 @@ async function main() {
   check(fs.existsSync(path.join(pauseDir, 'download_queue.json')), 'download_queue.json сохранён до выхода');
   check(paused.completed <= 1, 'после STOP очередь не докачивает остальные', `completed=${paused.completed}`);
 
-  console.log('\n5) FORMAT CHECK не блокирует скачивание…');
+  console.log('\n5) Без FORMAT CHECK, как Media Downloader…');
   const skipDir = path.join(ROOT, 'skip-check');
   fs.mkdirSync(skipDir, { recursive: true });
   const skipRunner = createMockRunner({
@@ -371,12 +373,16 @@ async function main() {
     titles: { SKIPCHECK01: 'После проверки формата' }
   });
   const skipLogs = [];
+  let probeCalls = 0;
   const skipQueue = new DownloadQueue({
     outputDir: skipDir,
     ffmpegPath: 'ffmpeg',
     ffprobePath: null,
     runner: async (args, onLine) => {
-      if (args.includes('-J')) throw new Error('Sign in to confirm you’re not a bot. Use --cookies-from-browser');
+      if (args.includes('-J')) {
+        probeCalls += 1;
+        throw new Error('FORMAT CHECK больше не должен вызываться');
+      }
       return skipRunner(args, onLine);
     },
     now: () => clock,
@@ -389,10 +395,11 @@ async function main() {
   });
   skipQueue.setLinks('https://youtube.com/shorts/SKIPCHECK01');
   const skipped = await skipQueue.run();
-  check(skipped.completed === 1, 'после падения FORMAT CHECK видео всё равно скачивается', `completed=${skipped.completed}`);
-  check(skipLogs.some((line) => /FORMAT CHECK SKIP/i.test(line)), 'в лог пишется причина, а не голое ERROR');
+  check(skipped.completed === 1, 'скачивание идёт сразу, без предварительного -J', `completed=${skipped.completed}`);
+  check(probeCalls === 0, 'yt-dlp -J (FORMAT CHECK) больше не вызывается');
+  check(!skipLogs.some((line) => /FORMAT CHECK/i.test(line)), 'в логе нет FORMAT CHECK — очередь не молчит на пробе');
   const skipTitles = fs.readFileSync(path.join(skipDir, 'nazvaniya.txt'), 'utf8');
-  check(skipTitles.includes('После проверки формата'), 'название взято из info.json, а не из упавшего -J');
+  check(skipTitles.includes('После проверки формата'), 'название взято из info.json после скачивания');
 
   fs.rmSync(ROOT, { recursive: true, force: true });
   console.log(`\nИтог: ${failures ? `${failures} проверок провалено` : 'все проверки очереди пройдены'}`);
