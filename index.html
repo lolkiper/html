@@ -16,16 +16,22 @@
           <div class="brand__mark">SI</div>
           <div class="brand__text">
             <h1>Shorts Inserter</h1>
-            <p>Вставка Shorts в середину видео и наложение оверлея — пакетно, без DaVinci Resolve</p>
+            <p>Вставка Shorts в середину видео и массовое скачивание YouTube с умной очередью</p>
           </div>
         </div>
         <div class="topbar__meta">
           <span class="chip" id="chip-version">v—</span>
           <span class="chip chip--muted" id="chip-ffmpeg" title="Путь к FFmpeg">FFmpeg: —</span>
+          <span class="chip chip--muted" id="chip-ytdlp" title="Путь к yt-dlp">yt-dlp: —</span>
         </div>
       </header>
 
-      <main class="layout">
+      <nav class="tabs" id="app-tabs" aria-label="Разделы">
+        <button type="button" class="tab is-active" data-view="insert">Вставка Shorts</button>
+        <button type="button" class="tab" data-view="download">Скачивание YouTube</button>
+      </nav>
+
+      <main class="layout view" id="view-insert">
         <!-- ------------------------- Левая колонка ------------------------- -->
         <section class="column column--settings">
           <article class="card">
@@ -268,6 +274,131 @@
               </div>
             </div>
             <div class="log" id="log" role="log" aria-live="polite"></div>
+          </article>
+        </section>
+      </main>
+
+      <main class="layout view" id="view-download" hidden>
+        <section class="column column--settings">
+          <article class="card">
+            <div class="card__head">
+              <h2>1. Список ссылок</h2>
+              <span class="card__hint">YouTube и Shorts, по одной на строку</span>
+            </div>
+            <div class="field">
+              <label for="dl-links">Ссылки (100–200+)</label>
+              <textarea id="dl-links" rows="12" spellcheck="false" placeholder="https://youtube.com/shorts/&#10;https://youtube.com/shorts/&#10;https://www.youtube.com/watch?v="></textarea>
+              <p class="field__note" id="dl-links-note">Пустые строки и дубликаты уберутся автоматически, порядок сохранится.</p>
+            </div>
+            <div class="actions actions--inline">
+              <button class="btn btn--ghost" id="dl-import">Импортировать TXT</button>
+              <button class="btn btn--ghost" id="dl-clear">Очистить список</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>2. Папка</h2>
+              <span class="card__hint">Все ролики в одну папку</span>
+            </div>
+            <div class="field">
+              <label for="dl-dir">Куда сохранять</label>
+              <div class="picker">
+                <input type="text" id="dl-dir" placeholder="Не выбрана" spellcheck="false" />
+                <button class="btn btn--ghost" id="dl-pick-dir">Выбрать папку</button>
+              </div>
+              <p class="field__note" id="dl-dir-note">
+                В папке появятся видео, nazvaniya.txt, download_queue.json и download_log.txt. Отдельная папка на ролик не создаётся.
+              </p>
+            </div>
+          </article>
+
+          <div class="actions">
+            <button class="btn btn--primary" id="dl-start">Начать скачивание</button>
+            <button class="btn btn--ghost" id="dl-pause" disabled>Пауза</button>
+            <button class="btn btn--ghost" id="dl-resume" disabled>Продолжить</button>
+            <button class="btn btn--danger" id="dl-stop" disabled>Стоп</button>
+            <button class="btn btn--ghost" id="dl-open" disabled>Открыть папку</button>
+          </div>
+        </section>
+
+        <section class="column column--status">
+          <article class="card card--progress">
+            <div class="card__head">
+              <h2>Очередь</h2>
+              <span class="badge" id="dl-badge">Ожидание</span>
+            </div>
+            <p class="status" id="dl-status">Вставьте ссылки и выберите папку.</p>
+            <div class="progress">
+              <div class="progress__label">
+                <span id="dl-current-label">Текущее видео</span>
+                <span id="dl-file-percent">0%</span>
+              </div>
+              <div class="progress__track"><div class="progress__fill" id="dl-file-bar"></div></div>
+            </div>
+            <div class="progress">
+              <div class="progress__label">
+                <span>Всего</span>
+                <span id="dl-overall-percent">0 / 0</span>
+              </div>
+              <div class="progress__track">
+                <div class="progress__fill progress__fill--overall" id="dl-overall-bar"></div>
+              </div>
+            </div>
+            <p class="field__note" id="dl-speed-note">Скорость: — · ETA: —</p>
+            <p class="field__note" id="dl-quality-note">Качество последнего файла: —</p>
+            <div class="counters counters--6">
+              <div class="counter"><span id="dl-total">0</span><small>всего</small></div>
+              <div class="counter"><span id="dl-done">0</span><small>готово</small></div>
+              <div class="counter"><span id="dl-active">0</span><small>качается</small></div>
+              <div class="counter"><span id="dl-wait">0</span><small>ждут</small></div>
+              <div class="counter"><span id="dl-retry">0</span><small>retry</small></div>
+              <div class="counter"><span id="dl-perm">0</span><small>навсегда</small></div>
+            </div>
+          </article>
+
+          <article class="card card--table">
+            <div class="card__head">
+              <h2>Список</h2>
+              <span class="card__hint">№ · URL · статус · название · качество · попытки</span>
+            </div>
+            <div class="table-wrap" id="dl-table-wrap">
+              <table class="queue-table" id="dl-table">
+                <thead>
+                  <tr>
+                    <th>№</th>
+                    <th>URL</th>
+                    <th>Статус</th>
+                    <th>Название</th>
+                    <th>Качество</th>
+                    <th>Попытки</th>
+                  </tr>
+                </thead>
+                <tbody id="dl-table-body">
+                  <tr class="queue-table__empty"><td colspan="6">Список пуст</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card card--errors">
+            <div class="card__head">
+              <h2>Ошибки / Retry</h2>
+            </div>
+            <div class="error-list" id="dl-errors">
+              <p class="log__empty">Пока нет ошибок.</p>
+            </div>
+          </article>
+
+          <article class="card card--log">
+            <div class="card__head">
+              <h2>Лог скачивания</h2>
+              <div class="card__tools">
+                <button class="btn btn--mini" id="dl-copy-log">Копировать</button>
+                <button class="btn btn--mini" id="dl-clear-log">Очистить</button>
+              </div>
+            </div>
+            <div class="log" id="dl-log" role="log" aria-live="polite"></div>
           </article>
         </section>
       </main>

@@ -11,6 +11,7 @@ const MAX_LOG_ROWS = 2000;
 const el = {
   chipVersion: document.getElementById('chip-version'),
   chipFfmpeg: document.getElementById('chip-ffmpeg'),
+  chipYtdlp: document.getElementById('chip-ytdlp'),
 
   sourceDir: document.getElementById('source-dir'),
   sourceDirNote: document.getElementById('source-dir-note'),
@@ -74,12 +75,49 @@ const el = {
 
   log: document.getElementById('log'),
   copyLog: document.getElementById('copy-log'),
-  clearLog: document.getElementById('clear-log')
+  clearLog: document.getElementById('clear-log'),
+
+  viewInsert: document.getElementById('view-insert'),
+  viewDownload: document.getElementById('view-download'),
+  dlLinks: document.getElementById('dl-links'),
+  dlLinksNote: document.getElementById('dl-links-note'),
+  dlImport: document.getElementById('dl-import'),
+  dlClear: document.getElementById('dl-clear'),
+  dlDir: document.getElementById('dl-dir'),
+  dlDirNote: document.getElementById('dl-dir-note'),
+  dlPickDir: document.getElementById('dl-pick-dir'),
+  dlStart: document.getElementById('dl-start'),
+  dlPause: document.getElementById('dl-pause'),
+  dlResume: document.getElementById('dl-resume'),
+  dlStop: document.getElementById('dl-stop'),
+  dlOpen: document.getElementById('dl-open'),
+  dlBadge: document.getElementById('dl-badge'),
+  dlStatus: document.getElementById('dl-status'),
+  dlCurrentLabel: document.getElementById('dl-current-label'),
+  dlFilePercent: document.getElementById('dl-file-percent'),
+  dlFileBar: document.getElementById('dl-file-bar'),
+  dlOverallPercent: document.getElementById('dl-overall-percent'),
+  dlOverallBar: document.getElementById('dl-overall-bar'),
+  dlSpeedNote: document.getElementById('dl-speed-note'),
+  dlQualityNote: document.getElementById('dl-quality-note'),
+  dlTotal: document.getElementById('dl-total'),
+  dlDone: document.getElementById('dl-done'),
+  dlActive: document.getElementById('dl-active'),
+  dlWait: document.getElementById('dl-wait'),
+  dlRetry: document.getElementById('dl-retry'),
+  dlPerm: document.getElementById('dl-perm'),
+  dlTableBody: document.getElementById('dl-table-body'),
+  dlErrors: document.getElementById('dl-errors'),
+  dlLog: document.getElementById('dl-log'),
+  dlCopyLog: document.getElementById('dl-copy-log'),
+  dlClearLog: document.getElementById('dl-clear-log')
 };
 
 const state = {
   running: false,
-  logLines: []
+  logLines: [],
+  downloading: false,
+  downloadLog: []
 };
 
 const CLOSEUP_HINT = 'Для каждого следующего ролика крупный план продолжается с того места, где закончился предыдущий. Если видео кончится — начнётся сначала. Звук берётся из основного ролика.';
@@ -257,7 +295,9 @@ function collectSettings() {
     accel: el.accel.value,
     frame: el.frame.value,
     fit: el.fit.value,
-    verbose: el.verbose.checked
+    verbose: el.verbose.checked,
+    downloadDir: el.dlDir.value.trim(),
+    downloadLinks: el.dlLinks.value
   };
 }
 
@@ -314,6 +354,8 @@ function restoreSettings() {
   if (saved.accel) el.accel.value = saved.accel;
   el.frame.value = saved.frame && saved.frame !== 'source' ? saved.frame : 'square1080';
   if (saved.fit) el.fit.value = saved.fit;
+  if (saved.downloadDir) el.dlDir.value = saved.downloadDir;
+  if (saved.downloadLinks) el.dlLinks.value = saved.downloadLinks;
 }
 
 // ------------------------------------------------------- Проверка выбранного
@@ -653,6 +695,12 @@ window.api.onDone((payload) => {
   el.chipVersion.textContent = `v${info.version}`;
   el.chipFfmpeg.textContent = `FFmpeg: ${info.ffmpegPath}`;
   el.chipFfmpeg.title = `FFmpeg: ${info.ffmpegPath}\nFFprobe: ${info.ffprobePath}`;
+  if (el.chipYtdlp) {
+    el.chipYtdlp.textContent = `yt-dlp: ${info.ytdlpPath || '—'}`;
+    el.chipYtdlp.title = info.ytdlpOk
+      ? `yt-dlp: ${info.ytdlpPath}`
+      : 'yt-dlp не найден. При сборке он должен лежать в vendor/yt-dlp.';
+  }
 
   restoreSettings();
   updateOverlayState();
@@ -662,6 +710,285 @@ window.api.onDone((payload) => {
 
   el.openOutput.disabled = !el.outputDir.value.trim();
   refreshAllInfo();
+  bindDownloadUi();
+  await refreshDownloadQueue();
 
   appendLog('info', 'Приложение готово. Выберите папки и файлы, затем нажмите «Начать обработку».');
 })();
+
+// ------------------------------------------------------- Скачивание YouTube
+
+function setDownloadRunning(running, paused = false) {
+  state.downloading = running;
+  el.dlStart.disabled = running;
+  el.dlPause.disabled = !running || paused;
+  el.dlResume.disabled = !running || !paused;
+  el.dlStop.disabled = !running;
+  el.dlImport.disabled = running;
+  el.dlPickDir.disabled = running;
+}
+
+function appendDownloadLog(level, message) {
+  const time = timeLabel();
+  state.downloadLog.push(`[${time}] ${message}`);
+  const emptyHint = el.dlLog.querySelector('.log__empty');
+  if (emptyHint) emptyHint.remove();
+  const atBottom = el.dlLog.scrollHeight - el.dlLog.scrollTop - el.dlLog.clientHeight < 60;
+  const row = document.createElement('div');
+  row.className = `log__row log__row--${level || 'info'}`;
+  const timeNode = document.createElement('span');
+  timeNode.className = 'log__time';
+  timeNode.textContent = time;
+  const textNode = document.createElement('span');
+  textNode.className = 'log__text';
+  textNode.textContent = message;
+  row.append(timeNode, textNode);
+  el.dlLog.appendChild(row);
+  while (el.dlLog.children.length > MAX_LOG_ROWS) el.dlLog.removeChild(el.dlLog.firstChild);
+  if (atBottom) el.dlLog.scrollTop = el.dlLog.scrollHeight;
+}
+
+function renderDownloadTable(items) {
+  el.dlTableBody.innerHTML = '';
+  if (!items || !items.length) {
+    const row = document.createElement('tr');
+    row.className = 'queue-table__empty';
+    row.innerHTML = '<td colspan="6">Список пуст</td>';
+    el.dlTableBody.appendChild(row);
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement('tr');
+    if (item.status === 'SUCCESS') row.className = 'is-success';
+    else if (item.status === 'RETRY') row.className = 'is-retry';
+    else if (item.status === 'PERMANENT_ERROR') row.className = 'is-error';
+    else if (item.status === 'DOWNLOADING') row.className = 'is-run';
+    const cells = [
+      item.number,
+      item.url,
+      item.status,
+      item.title || '—',
+      item.quality || 'AUTO',
+      item.attempts || 0
+    ];
+    cells.forEach((value) => {
+      const td = document.createElement('td');
+      td.textContent = String(value);
+      row.appendChild(td);
+    });
+    el.dlTableBody.appendChild(row);
+  });
+}
+
+function renderDownloadErrors(errors) {
+  el.dlErrors.innerHTML = '';
+  if (!errors || !errors.length) {
+    const empty = document.createElement('p');
+    empty.className = 'log__empty';
+    empty.textContent = 'Пока нет ошибок.';
+    el.dlErrors.appendChild(empty);
+    return;
+  }
+  errors.forEach((item) => {
+    const node = document.createElement('div');
+    node.className = 'error-item';
+    const retry = item.nextRetry ? new Date(item.nextRetry).toLocaleTimeString('ru-RU', { hour12: false }) : '—';
+    node.textContent =
+      `#${item.number}  ${item.url}\nStatus: ${item.status}  Attempts: ${item.attempts || 0}\n` +
+      `Error: ${item.lastError || '—'}\nNext retry: ${retry}`;
+    el.dlErrors.appendChild(node);
+  });
+}
+
+function applyDownloadProgress(progress) {
+  if (!progress) return;
+  el.dlTotal.textContent = String(progress.total || 0);
+  el.dlDone.textContent = String(progress.completed || 0);
+  el.dlActive.textContent = String(progress.downloading || 0);
+  el.dlWait.textContent = String(progress.waiting || 0);
+  el.dlRetry.textContent = String(progress.retry || 0);
+  el.dlPerm.textContent = String(progress.permanent || 0);
+  const total = progress.total || 0;
+  const done = progress.completed || 0;
+  el.dlOverallPercent.textContent = `${done} / ${total}`;
+  el.dlOverallBar.style.width = `${total ? Math.min(100, (done / total) * 100) : 0}%`;
+  const current = progress.current;
+  if (current) {
+    el.dlCurrentLabel.textContent = `Downloading #${current.number}  ${current.title || ''}`;
+    el.dlFilePercent.textContent = `${Math.round(current.percent || 0)}%`;
+    el.dlFileBar.style.width = `${Math.min(100, current.percent || 0)}%`;
+    el.dlSpeedNote.textContent = `Скорость: ${current.speed || '—'} · ETA: ${current.eta || '—'}`;
+  }
+  if (progress.status) el.dlStatus.textContent = progress.status;
+  const lastOk = (progress.items || []).slice().reverse().find((item) => item.status === 'SUCCESS');
+  if (lastOk) {
+    el.dlQualityNote.textContent =
+      `✓ SUCCESS  ${lastOk.resolution || lastOk.quality || ''}  ` +
+      `${lastOk.fps ? `${lastOk.fps} FPS` : ''}  ` +
+      `${lastOk.videoCodec || ''} / ${lastOk.audioCodec || ''}  ` +
+      `${lastOk.fileSize ? `${Math.round(lastOk.fileSize / 1024 / 1024 * 10) / 10} MB` : ''}`.replace(/\s+/g, ' ').trim();
+  }
+  renderDownloadTable(progress.items);
+  renderDownloadErrors(progress.errors);
+}
+
+async function refreshDownloadQueue() {
+  const folder = el.dlDir.value.trim();
+  el.dlOpen.disabled = !folder;
+  if (!folder || !window.api.loadDownloadQueue) return;
+  const result = await window.api.loadDownloadQueue(folder);
+  if (!result || !result.ok) return;
+  if (result.note) el.dlDirNote.textContent = result.note;
+  if (result.urls && result.urls.length && !el.dlLinks.value.trim()) {
+    el.dlLinks.value = result.urls.join('\n');
+  }
+  applyDownloadProgress(result.progress);
+}
+
+function bindDownloadUi() {
+  document.querySelectorAll('#app-tabs .tab').forEach((button) => {
+    button.addEventListener('click', () => {
+      const view = button.dataset.view;
+      document.querySelectorAll('#app-tabs .tab').forEach((tab) => tab.classList.toggle('is-active', tab === button));
+      el.viewInsert.hidden = view !== 'insert';
+      el.viewDownload.hidden = view !== 'download';
+    });
+  });
+
+  el.dlLinks.addEventListener('change', saveSettings);
+  el.dlDir.addEventListener('change', async () => {
+    saveSettings();
+    await refreshDownloadQueue();
+  });
+
+  el.dlClear.addEventListener('click', () => {
+    el.dlLinks.value = '';
+    saveSettings();
+    el.dlLinksNote.textContent = 'Список очищен.';
+  });
+
+  el.dlImport.addEventListener('click', async () => {
+    const result = await window.api.importDownloadTxt();
+    if (!result || !result.ok) return;
+    const current = el.dlLinks.value.trim();
+    el.dlLinks.value = current ? `${current}\n${result.text}` : result.text;
+    const parsed = await window.api.parseDownloadLinks(el.dlLinks.value);
+    if (parsed && parsed.ok) {
+      el.dlLinks.value = parsed.urls.join('\n');
+      el.dlLinksNote.textContent = `Импортировано ссылок: ${parsed.urls.length}`;
+    }
+    saveSettings();
+  });
+
+  el.dlPickDir.addEventListener('click', async () => {
+    const picked = await window.api.pickDirectory({
+      title: 'Папка для скачанных видео',
+      defaultPath: el.dlDir.value.trim()
+    });
+    if (!picked) return;
+    el.dlDir.value = picked;
+    saveSettings();
+    await refreshDownloadQueue();
+  });
+
+  el.dlOpen.addEventListener('click', async () => {
+    const target = el.dlDir.value.trim();
+    if (!target) return;
+    const result = await window.api.openPath(target);
+    if (!result.ok) appendDownloadLog('error', `Не удалось открыть папку: ${result.error}`);
+  });
+
+  el.dlStart.addEventListener('click', async () => {
+    const outputDir = el.dlDir.value.trim();
+    const text = el.dlLinks.value;
+    if (!outputDir) {
+      el.dlStatus.textContent = 'Не выбрана папка для сохранения.';
+      appendDownloadLog('error', 'Не выбрана папка для сохранения.');
+      return;
+    }
+    if (!text.trim()) {
+      el.dlStatus.textContent = 'Список ссылок пуст.';
+      appendDownloadLog('error', 'Список ссылок пуст.');
+      return;
+    }
+    saveSettings();
+    setDownloadRunning(true, false);
+    el.dlBadge.textContent = 'Скачивание';
+    el.dlBadge.className = 'badge badge--running';
+    el.dlStatus.textContent = 'Запускаем очередь…';
+    appendDownloadLog('info', '— Запуск скачивания —');
+    const result = await window.api.startDownload({ outputDir, text });
+    if (!result.ok) {
+      setDownloadRunning(false, false);
+      el.dlBadge.textContent = 'Ошибка';
+      el.dlBadge.className = 'badge badge--error';
+      el.dlStatus.textContent = result.error || 'Не удалось запустить очередь.';
+      appendDownloadLog('error', result.error || 'Не удалось запустить очередь.');
+    }
+  });
+
+  el.dlPause.addEventListener('click', async () => {
+    await window.api.pauseDownload();
+    setDownloadRunning(true, true);
+    el.dlBadge.textContent = 'Пауза';
+  });
+
+  el.dlResume.addEventListener('click', async () => {
+    await window.api.resumeDownload();
+    setDownloadRunning(true, false);
+    el.dlBadge.textContent = 'Скачивание';
+    el.dlBadge.className = 'badge badge--running';
+  });
+
+  el.dlStop.addEventListener('click', async () => {
+    await window.api.stopDownload();
+    el.dlStatus.textContent = 'Останавливаем очередь…';
+  });
+
+  el.dlCopyLog.addEventListener('click', async () => {
+    if (!state.downloadLog.length) return;
+    try {
+      await navigator.clipboard.writeText(state.downloadLog.join('\n'));
+      appendDownloadLog('info', 'Лог скопирован в буфер обмена.');
+    } catch (err) {
+      appendDownloadLog('error', `Не удалось скопировать лог: ${err.message}`);
+    }
+  });
+
+  el.dlClearLog.addEventListener('click', () => {
+    state.downloadLog = [];
+    el.dlLog.innerHTML = '<p class="log__empty">Лог очищен.</p>';
+  });
+
+  window.api.onDownloadLog(({ level, message }) => appendDownloadLog(level, message));
+  window.api.onDownloadProgress((progress) => applyDownloadProgress(progress));
+  window.api.onDownloadState(({ running, paused }) => setDownloadRunning(Boolean(running), Boolean(paused)));
+  window.api.onDownloadDone((payload) => {
+    const summary = payload.summary || {};
+    const paused = Boolean(summary.cancelled);
+    setDownloadRunning(false, false);
+    el.dlStop.disabled = true;
+    if (!payload.ok) {
+      el.dlBadge.textContent = 'Ошибка';
+      el.dlBadge.className = 'badge badge--error';
+      el.dlStatus.textContent = payload.error || 'Очередь завершилась с ошибкой.';
+      return;
+    }
+    if (summary.complete) {
+      el.dlBadge.textContent = 'Готово';
+      el.dlBadge.className = 'badge badge--done';
+      el.dlStatus.textContent =
+        `DOWNLOAD COMPLETE  Success: ${summary.completed} / ${summary.total}` +
+        `${summary.permanent ? `  Permanent: ${summary.permanent}` : ''}`;
+      appendDownloadLog('success', `— Скачивание завершено. Готово: ${summary.completed}, постоянных ошибок: ${summary.permanent || 0} —`);
+    } else if (paused) {
+      el.dlBadge.textContent = 'Остановлено';
+      el.dlBadge.className = 'badge badge--error';
+      el.dlStatus.textContent = `Остановлено. Готово: ${summary.completed} из ${summary.total}.`;
+    } else {
+      el.dlBadge.textContent = 'Retry';
+      el.dlBadge.className = 'badge badge--running';
+      el.dlStatus.textContent = `${summary.retry || 0} videos waiting for automatic retry...`;
+    }
+  });
+}

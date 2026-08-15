@@ -25,5 +25,18 @@ contextBridge.exposeInMainWorld('api', {
   onLog: (callback) => subscribe('processing:log', callback),
   onProgress: (callback) => subscribe('processing:progress', callback),
   onState: (callback) => subscribe('processing:state', callback),
-  onDone: (callback) => subscribe('processing:done', callback)
+  onDone: (callback) => subscribe('processing:done', callback),
+
+  parseDownloadLinks: (text) => ipcRenderer.invoke('download:parse', text),
+  importDownloadTxt: () => ipcRenderer.invoke('download:import-txt'),
+  loadDownloadQueue: (outputDir) => ipcRenderer.invoke('download:load', outputDir),
+  startDownload: (payload) => ipcRenderer.invoke('download:start', payload),
+  pauseDownload: () => ipcRenderer.invoke('download:pause'),
+  resumeDownload: () => ipcRenderer.invoke('download:resume'),
+  stopDownload: () => ipcRenderer.invoke('download:stop'),
+
+  onDownloadLog: (callback) => subscribe('download:log', callback),
+  onDownloadProgress: (callback) => subscribe('download:progress', callback),
+  onDownloadState: (callback) => subscribe('download:state', callback),
+  onDownloadDone: (callback) => subscribe('download:done', callback)
 });

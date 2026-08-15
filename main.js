@@ -23,6 +23,14 @@ const {
   ffprobePath
 } = require('./processor');
 
+const {
+  DownloadQueue,
+  parseLinkList,
+  resolveYtDlpPath,
+  ytdlpExists,
+  summarizeItems
+} = require('./downloader');
+
 const VIDEO_FILTER = {
   name: 'Видео',
   extensions: VIDEO_EXTENSIONS.map((ext) => ext.replace('.', ''))
@@ -32,13 +40,15 @@ const VIDEO_FILTER = {
 let mainWindow = null;
 /** @type {BatchProcessor|null} */
 let activeBatch = null;
+/** @type {DownloadQueue|null} */
+let activeDownload = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 860,
-    minWidth: 960,
-    minHeight: 700,
+    width: 1280,
+    height: 900,
+    minWidth: 1040,
+    minHeight: 740,
     show: false,
     backgroundColor: '#0e1117',
     autoHideMenuBar: true,
@@ -95,7 +105,9 @@ ipcMain.handle('app:info', () => {
       cores: hardware.cores
     },
     ffmpegPath,
-    ffprobePath
+    ffprobePath,
+    ytdlpPath: resolveYtDlpPath(),
+    ytdlpOk: ytdlpExists(resolveYtDlpPath())
   };
 });
 
@@ -191,6 +203,124 @@ ipcMain.handle('processing:stop', () => {
   return { ok: true };
 });
 
+ipcMain.handle('download:parse', (_event, text) => {
+  const urls = parseLinkList(text);
+  return { ok: true, urls, count: urls.length };
+});
+
+ipcMain.handle('download:import-txt', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Импортировать список ссылок',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Текст', extensions: ['txt', 'csv'] },
+      { name: 'Все файлы', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || !result.filePaths.length) return { ok: false };
+  try {
+    const text = fs.readFileSync(result.filePaths[0], 'utf8');
+    return { ok: true, text, file: result.filePaths[0] };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('download:load', (_event, outputDir) => {
+  if (!outputDir || !fs.existsSync(outputDir)) {
+    return { ok: false, error: 'Папка не найдена' };
+  }
+  const queue = new DownloadQueue({
+    outputDir,
+    ffmpegPath,
+    ffprobePath,
+    ytdlpPath: resolveYtDlpPath()
+  });
+  queue.items = queue.loadFromDisk();
+  queue.reconcileExisting();
+  const urls = queue.items.map((item) => item.url);
+  const counts = summarizeItems(queue.items);
+  return {
+    ok: true,
+    urls,
+    note: counts.total
+      ? `Найдена сохранённая очередь: готово ${counts.completed} из ${counts.total}.`
+      : 'В папке появятся видео, nazvaniya.txt, download_queue.json и download_log.txt.',
+    progress: {
+      ...counts,
+      overallPercent: counts.total ? (counts.completed / counts.total) * 100 : 0,
+      current: null,
+      items: queue.items,
+      errors: queue.items.filter((item) => item.status === 'RETRY' || item.status === 'PERMANENT_ERROR'),
+      status: counts.total ? `Очередь восстановлена: ${counts.completed} / ${counts.total}` : null
+    }
+  };
+});
+
+ipcMain.handle('download:start', async (_event, payload = {}) => {
+  if (activeDownload && activeDownload.running) {
+    return { ok: false, error: 'Скачивание уже запущено' };
+  }
+  const outputDir = payload.outputDir;
+  const text = payload.text || '';
+  if (!outputDir) return { ok: false, error: 'Не выбрана папка для сохранения.' };
+  if (!ffmpegPath || (ffmpegPath !== 'ffmpeg' && !fs.existsSync(ffmpegPath))) {
+    return { ok: false, error: 'FFmpeg не найден. Установите/укажите путь к FFmpeg.' };
+  }
+  const ytdlpPath = resolveYtDlpPath();
+  if (!ytdlpExists(ytdlpPath)) {
+    return { ok: false, error: 'yt-dlp не найден. Переустановите программу или положите yt-dlp в vendor/yt-dlp.' };
+  }
+
+  const queue = new DownloadQueue({
+    outputDir,
+    ffmpegPath,
+    ffprobePath,
+    ytdlpPath,
+    hooks: {
+      onLog: (level, message) => send('download:log', { level, message, time: Date.now() }),
+      onProgress: (state) => send('download:progress', state)
+    }
+  });
+  queue.setLinks(text);
+  if (!queue.items.length) return { ok: false, error: 'В списке нет распознанных ссылок YouTube.' };
+
+  activeDownload = queue;
+  send('download:state', { running: true, paused: false });
+  try {
+    const summary = await queue.run();
+    send('download:done', { ok: true, summary });
+    return { ok: true, summary };
+  } catch (err) {
+    send('download:log', { level: 'error', message: err.message, time: Date.now() });
+    send('download:done', { ok: false, error: err.message });
+    return { ok: false, error: err.message };
+  } finally {
+    activeDownload = null;
+    send('download:state', { running: false, paused: false });
+  }
+});
+
+ipcMain.handle('download:pause', () => {
+  if (!activeDownload) return { ok: false, error: 'Скачивание не запущено' };
+  activeDownload.pause();
+  send('download:state', { running: true, paused: true });
+  return { ok: true };
+});
+
+ipcMain.handle('download:resume', () => {
+  if (!activeDownload) return { ok: false, error: 'Скачивание не запущено' };
+  activeDownload.resume();
+  send('download:state', { running: true, paused: false });
+  return { ok: true };
+});
+
+ipcMain.handle('download:stop', () => {
+  if (!activeDownload) return { ok: false, error: 'Скачивание не запущено' };
+  activeDownload.stop();
+  return { ok: true };
+});
+
 // ---------------------------------------------------------------------------
 // Жизненный цикл приложения
 // ---------------------------------------------------------------------------
@@ -215,6 +345,7 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('window-all-closed', () => {
   if (activeBatch) activeBatch.stop();
+  if (activeDownload) activeDownload.stop();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -238,4 +369,5 @@ process.on('unhandledRejection', (err) => {
 
 app.on('before-quit', () => {
   if (activeBatch) activeBatch.stop();
+  if (activeDownload) activeDownload.stop();
 });

@@ -1,8 +1,8 @@
 {
   "name": "shorts-inserter",
   "productName": "Shorts Inserter",
-  "version": "1.5.0",
-  "description": "Batch tool that inserts a Shorts clip into the middle of every source video and optionally blends a full-length overlay. Electron + FFmpeg, no DaVinci Resolve required.",
+  "version": "1.6.0",
+  "description": "Batch tool that inserts a Shorts clip into source videos and mass-downloads YouTube/Shorts with a smart retry queue.",
   "main": "main.js",
   "author": "Shorts Inserter",
   "license": "MIT",
@@ -12,7 +12,10 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win",
     "dist:portable": "electron-builder --win portable",
-    "smoke": "node scripts/smoke-test.js"
+    "smoke": "node scripts/smoke-test.js && node scripts/download-smoke-test.js",
+    "smoke:insert": "node scripts/smoke-test.js",
+    "smoke:download": "node scripts/download-smoke-test.js",
+    "ensure:ytdlp": "node scripts/ensure-ytdlp.js"
   },
   "dependencies": {
     "ffmpeg-static": "^5.2.0",
@@ -33,13 +36,16 @@
       "main.js",
       "preload.js",
       "processor.js",
+      "downloader.js",
       "renderer.js",
       "index.html",
-      "styles.css"
+      "styles.css",
+      "vendor/yt-dlp/**"
     ],
     "asarUnpack": [
       "node_modules/ffmpeg-static/**",
-      "node_modules/ffprobe-static/**"
+      "node_modules/ffprobe-static/**",
+      "vendor/yt-dlp/**"
     ],
     "win": {
       "files": [

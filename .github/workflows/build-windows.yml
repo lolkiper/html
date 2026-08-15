@@ -31,6 +31,9 @@ jobs:
       - name: Ensure FFmpeg has GPU encoders
         run: node scripts/ensure-gpu-ffmpeg.js
 
+      - name: Ensure yt-dlp
+        run: node scripts/ensure-ytdlp.js
+
       - name: Build installer and portable exe
         run: npx electron-builder --win --publish never
 
@@ -40,7 +43,8 @@ jobs:
         shell: pwsh
         run: |
           $root = 'dist/win-unpacked/resources/app.asar.unpacked/node_modules'
-          foreach ($binary in @("$root/ffmpeg-static/ffmpeg.exe", "$root/ffprobe-static/bin/win32/x64/ffprobe.exe")) {
+          $ytdlp = 'dist/win-unpacked/resources/app.asar.unpacked/vendor/yt-dlp/yt-dlp.exe'
+          foreach ($binary in @("$root/ffmpeg-static/ffmpeg.exe", "$root/ffprobe-static/bin/win32/x64/ffprobe.exe", $ytdlp)) {
             if (-not (Test-Path $binary)) { throw "Missing bundled binary: $binary" }
             Write-Host ("OK {0} ({1:N1} MB)" -f $binary, ((Get-Item $binary).Length / 1MB))
           }

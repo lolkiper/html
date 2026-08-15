@@ -1,3 +1,8 @@
+vendor/yt-dlp/yt-dlp
+vendor/yt-dlp/yt-dlp.exe
+vendor/yt-dlp/yt-dlp_macos
+vendor/yt-dlp/*.part
+
 node_modules/
 dist/
 out/
