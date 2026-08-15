@@ -31,6 +31,8 @@ const {
   summarizeItems
 } = require('./downloader');
 
+const { analyzeRename, applyRename } = require('./renamer');
+
 const VIDEO_FILTER = {
   name: 'Видео',
   extensions: VIDEO_EXTENSIONS.map((ext) => ext.replace('.', ''))
@@ -319,6 +321,58 @@ ipcMain.handle('download:stop', () => {
   if (!activeDownload) return { ok: false, error: 'Скачивание не запущено' };
   activeDownload.stop();
   return { ok: true };
+});
+
+ipcMain.handle('rename:detect-txt', (_event, directory) => {
+  if (!directory || !fs.existsSync(directory)) return { ok: false };
+  const guessed = path.join(directory, 'nazvaniya.txt');
+  if (fs.existsSync(guessed)) return { ok: true, file: guessed };
+  return { ok: false };
+});
+
+ipcMain.handle('rename:pick-txt', async (_event, options = {}) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Выберите nazvaniya.txt',
+    defaultPath: options.defaultPath && fs.existsSync(options.defaultPath) ? options.defaultPath : undefined,
+    properties: ['openFile'],
+    filters: [
+      { name: 'Текст', extensions: ['txt'] },
+      { name: 'Все файлы', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('rename:analyze', (_event, payload = {}) => {
+  try {
+    const analysis = analyzeRename({
+      directory: payload.directory,
+      titlesFile: payload.titlesFile,
+      minScore: payload.minScore
+    });
+    return { ok: true, analysis };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('rename:apply', (_event, payload = {}) => {
+  try {
+    const analysis = analyzeRename({
+      directory: payload.directory,
+      titlesFile: payload.titlesFile,
+      minScore: payload.minScore
+    });
+    const result = applyRename(analysis, {
+      removeUnmatchedVideos: payload.removeUnmatchedVideos,
+      createReports: payload.createReports,
+      keepOriginalTxt: payload.keepOriginalTxt
+    });
+    return { ok: true, analysis, ...result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 // ---------------------------------------------------------------------------

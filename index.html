@@ -29,6 +29,7 @@
       <nav class="tabs" id="app-tabs" aria-label="Разделы">
         <button type="button" class="tab is-active" data-view="insert">Вставка Shorts</button>
         <button type="button" class="tab" data-view="download">Скачивание YouTube</button>
+        <button type="button" class="tab" data-view="rename">Умное переименование</button>
       </nav>
 
       <main class="layout view" id="view-insert">
@@ -399,6 +400,115 @@
               </div>
             </div>
             <div class="log" id="dl-log" role="log" aria-live="polite"></div>
+          </article>
+        </section>
+      </main>
+
+      <main class="layout view" id="view-rename" hidden>
+        <section class="column column--settings">
+          <article class="card">
+            <div class="card__head">
+              <h2>1. Папка и TXT</h2>
+              <span class="card__hint">Номер = строка в nazvaniya.txt</span>
+            </div>
+            <div class="field">
+              <label for="rn-dir">Папка с видео</label>
+              <div class="picker">
+                <input type="text" id="rn-dir" placeholder="Не выбрана" spellcheck="false" />
+                <button class="btn btn--ghost" id="rn-pick-dir">Выбрать папку</button>
+              </div>
+              <p class="field__note" id="rn-dir-note">Видео найдено: —</p>
+            </div>
+            <div class="field">
+              <label for="rn-txt">Файл названий (nazvaniya.txt)</label>
+              <div class="picker">
+                <input type="text" id="rn-txt" placeholder="Не выбран" spellcheck="false" />
+                <button class="btn btn--ghost" id="rn-pick-txt">Выбрать TXT</button>
+              </div>
+              <p class="field__note" id="rn-txt-note">Названий в TXT: —</p>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>2. Настройки</h2>
+              <span class="card__hint">Сначала предпросмотр, потом файлы</span>
+            </div>
+            <div class="field">
+              <label for="rn-min">Минимальная похожесть: <b id="rn-min-value">60%</b></label>
+              <input type="range" id="rn-min" min="40" max="95" step="1" value="60" />
+            </div>
+            <label class="checkbox">
+              <input type="checkbox" id="rn-remove" checked />
+              <span>Удалять видео без совпадения</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="rn-reports" checked />
+              <span>Создавать отчёты</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="rn-keep-txt" checked />
+              <span>Не трогать исходный nazvaniya.txt</span>
+            </label>
+            <p class="field__note">
+              Одна строка TXT = одно видео. Уже существующие 1.mp4 / 37.mp4 не перезаписываются. Удаление только после подтверждения.
+            </p>
+          </article>
+
+          <div class="actions">
+            <button class="btn btn--ghost" id="rn-preview">Предпросмотр</button>
+            <button class="btn btn--primary" id="rn-apply" disabled>Начать переименование</button>
+            <button class="btn btn--ghost" id="rn-open-report" disabled>Открыть отчёт</button>
+            <button class="btn btn--ghost" id="rn-open-dir" disabled>Открыть папку</button>
+          </div>
+        </section>
+
+        <section class="column column--status">
+          <article class="card card--progress">
+            <div class="card__head">
+              <h2>Результат</h2>
+              <span class="badge" id="rn-badge">Ожидание</span>
+            </div>
+            <p class="status" id="rn-status">Выберите папку и nazvaniya.txt, затем нажмите «Предпросмотр».</p>
+            <div class="counters counters--6">
+              <div class="counter"><span id="rn-titles">0</span><small>TXT</small></div>
+              <div class="counter"><span id="rn-videos">0</span><small>видео</small></div>
+              <div class="counter"><span id="rn-matched">0</span><small>совпало</small></div>
+              <div class="counter"><span id="rn-low">0</span><small>слабо</small></div>
+              <div class="counter"><span id="rn-conflict">0</span><small>конфликт</small></div>
+              <div class="counter"><span id="rn-missing">0</span><small>нет видео</small></div>
+            </div>
+            <p class="field__note" id="rn-delete-note"></p>
+          </article>
+
+          <article class="card card--table">
+            <div class="card__head">
+              <h2>Таблица сопоставления</h2>
+              <span class="card__hint">Видео · TXT № · название · похожесть · статус</span>
+            </div>
+            <div class="table-wrap" id="rn-table-wrap">
+              <table class="queue-table">
+                <thead>
+                  <tr>
+                    <th>Видео</th>
+                    <th>TXT №</th>
+                    <th>Название TXT</th>
+                    <th>%</th>
+                    <th>Статус</th>
+                  </tr>
+                </thead>
+                <tbody id="rn-table-body">
+                  <tr class="queue-table__empty"><td colspan="5">Сначала сделайте предпросмотр</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card card--log">
+            <div class="card__head">
+              <h2>Лог переименования</h2>
+            </div>
+            <div class="log" id="rn-log" role="log" aria-live="polite"></div>
           </article>
         </section>
       </main>

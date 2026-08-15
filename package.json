@@ -1,8 +1,8 @@
 {
   "name": "shorts-inserter",
   "productName": "Shorts Inserter",
-  "version": "1.6.0",
-  "description": "Batch tool that inserts a Shorts clip into source videos and mass-downloads YouTube/Shorts with a smart retry queue.",
+  "version": "1.7.0",
+  "description": "Batch tool that inserts Shorts, mass-downloads YouTube, and smart-renames videos from nazvaniya.txt.",
   "main": "main.js",
   "author": "Shorts Inserter",
   "license": "MIT",
@@ -12,9 +12,10 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win",
     "dist:portable": "electron-builder --win portable",
-    "smoke": "node scripts/smoke-test.js && node scripts/download-smoke-test.js",
+    "smoke": "node scripts/smoke-test.js && node scripts/download-smoke-test.js && node scripts/rename-smoke-test.js",
     "smoke:insert": "node scripts/smoke-test.js",
     "smoke:download": "node scripts/download-smoke-test.js",
+    "smoke:rename": "node scripts/rename-smoke-test.js",
     "ensure:ytdlp": "node scripts/ensure-ytdlp.js"
   },
   "dependencies": {
@@ -37,6 +38,7 @@
       "preload.js",
       "processor.js",
       "downloader.js",
+      "renamer.js",
       "renderer.js",
       "index.html",
       "styles.css",

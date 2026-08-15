@@ -191,11 +191,13 @@ body {
   min-height: 0;
 }
 
-#view-download .column--status {
+#view-download .column--status,
+#view-rename .column--status {
   overflow-y: auto;
 }
 
-#view-download .card--log {
+#view-download .card--log,
+#view-rename .card--log {
   flex: 0 0 auto;
   min-height: 160px;
 }

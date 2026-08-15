@@ -38,5 +38,10 @@ contextBridge.exposeInMainWorld('api', {
   onDownloadLog: (callback) => subscribe('download:log', callback),
   onDownloadProgress: (callback) => subscribe('download:progress', callback),
   onDownloadState: (callback) => subscribe('download:state', callback),
-  onDownloadDone: (callback) => subscribe('download:done', callback)
+  onDownloadDone: (callback) => subscribe('download:done', callback),
+
+  detectRenameTxt: (directory) => ipcRenderer.invoke('rename:detect-txt', directory),
+  pickRenameTxt: (options) => ipcRenderer.invoke('rename:pick-txt', options),
+  analyzeRename: (payload) => ipcRenderer.invoke('rename:analyze', payload),
+  applyRename: (payload) => ipcRenderer.invoke('rename:apply', payload)
 });

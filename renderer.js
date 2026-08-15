@@ -79,6 +79,7 @@ const el = {
 
   viewInsert: document.getElementById('view-insert'),
   viewDownload: document.getElementById('view-download'),
+  viewRename: document.getElementById('view-rename'),
   dlLinks: document.getElementById('dl-links'),
   dlLinksNote: document.getElementById('dl-links-note'),
   dlImport: document.getElementById('dl-import'),
@@ -110,14 +111,43 @@ const el = {
   dlErrors: document.getElementById('dl-errors'),
   dlLog: document.getElementById('dl-log'),
   dlCopyLog: document.getElementById('dl-copy-log'),
-  dlClearLog: document.getElementById('dl-clear-log')
+  dlClearLog: document.getElementById('dl-clear-log'),
+
+  rnDir: document.getElementById('rn-dir'),
+  rnDirNote: document.getElementById('rn-dir-note'),
+  rnPickDir: document.getElementById('rn-pick-dir'),
+  rnTxt: document.getElementById('rn-txt'),
+  rnTxtNote: document.getElementById('rn-txt-note'),
+  rnPickTxt: document.getElementById('rn-pick-txt'),
+  rnMin: document.getElementById('rn-min'),
+  rnMinValue: document.getElementById('rn-min-value'),
+  rnRemove: document.getElementById('rn-remove'),
+  rnReports: document.getElementById('rn-reports'),
+  rnKeepTxt: document.getElementById('rn-keep-txt'),
+  rnPreview: document.getElementById('rn-preview'),
+  rnApply: document.getElementById('rn-apply'),
+  rnOpenReport: document.getElementById('rn-open-report'),
+  rnOpenDir: document.getElementById('rn-open-dir'),
+  rnBadge: document.getElementById('rn-badge'),
+  rnStatus: document.getElementById('rn-status'),
+  rnTitles: document.getElementById('rn-titles'),
+  rnVideos: document.getElementById('rn-videos'),
+  rnMatched: document.getElementById('rn-matched'),
+  rnLow: document.getElementById('rn-low'),
+  rnConflict: document.getElementById('rn-conflict'),
+  rnMissing: document.getElementById('rn-missing'),
+  rnDeleteNote: document.getElementById('rn-delete-note'),
+  rnTableBody: document.getElementById('rn-table-body'),
+  rnLog: document.getElementById('rn-log')
 };
 
 const state = {
   running: false,
   logLines: [],
   downloading: false,
-  downloadLog: []
+  downloadLog: [],
+  renamePreview: null,
+  renameReport: null
 };
 
 const CLOSEUP_HINT = 'Для каждого следующего ролика крупный план продолжается с того места, где закончился предыдущий. Если видео кончится — начнётся сначала. Звук берётся из основного ролика.';
@@ -297,7 +327,13 @@ function collectSettings() {
     fit: el.fit.value,
     verbose: el.verbose.checked,
     downloadDir: el.dlDir.value.trim(),
-    downloadLinks: el.dlLinks.value
+    downloadLinks: el.dlLinks.value,
+    renameDir: el.rnDir.value.trim(),
+    renameTxt: el.rnTxt.value.trim(),
+    renameMin: Number(el.rnMin.value),
+    renameRemove: el.rnRemove.checked,
+    renameReports: el.rnReports.checked,
+    renameKeepTxt: el.rnKeepTxt.checked
   };
 }
 
@@ -356,6 +392,12 @@ function restoreSettings() {
   if (saved.fit) el.fit.value = saved.fit;
   if (saved.downloadDir) el.dlDir.value = saved.downloadDir;
   if (saved.downloadLinks) el.dlLinks.value = saved.downloadLinks;
+  if (saved.renameDir) el.rnDir.value = saved.renameDir;
+  if (saved.renameTxt) el.rnTxt.value = saved.renameTxt;
+  if (Number.isFinite(saved.renameMin)) el.rnMin.value = saved.renameMin;
+  if (saved.renameRemove != null) el.rnRemove.checked = Boolean(saved.renameRemove);
+  if (saved.renameReports != null) el.rnReports.checked = Boolean(saved.renameReports);
+  if (saved.renameKeepTxt != null) el.rnKeepTxt.checked = Boolean(saved.renameKeepTxt);
 }
 
 // ------------------------------------------------------- Проверка выбранного
@@ -711,6 +753,7 @@ window.api.onDone((payload) => {
   el.openOutput.disabled = !el.outputDir.value.trim();
   refreshAllInfo();
   bindDownloadUi();
+  bindRenameUi();
   await refreshDownloadQueue();
 
   appendLog('info', 'Приложение готово. Выберите папки и файлы, затем нажмите «Начать обработку».');
@@ -852,6 +895,7 @@ function bindDownloadUi() {
       document.querySelectorAll('#app-tabs .tab').forEach((tab) => tab.classList.toggle('is-active', tab === button));
       el.viewInsert.hidden = view !== 'insert';
       el.viewDownload.hidden = view !== 'download';
+      if (el.viewRename) el.viewRename.hidden = view !== 'rename';
     });
   });
 
@@ -990,5 +1034,206 @@ function bindDownloadUi() {
       el.dlBadge.className = 'badge badge--running';
       el.dlStatus.textContent = `${summary.retry || 0} videos waiting for automatic retry...`;
     }
+  });
+}
+
+function appendRenameLog(level, message) {
+  const time = timeLabel();
+  const emptyHint = el.rnLog.querySelector('.log__empty');
+  if (emptyHint) emptyHint.remove();
+  const row = document.createElement('div');
+  row.className = `log__row log__row--${level || 'info'}`;
+  const timeNode = document.createElement('span');
+  timeNode.className = 'log__time';
+  timeNode.textContent = time;
+  const textNode = document.createElement('span');
+  textNode.className = 'log__text';
+  textNode.textContent = message;
+  row.append(timeNode, textNode);
+  el.rnLog.appendChild(row);
+  el.rnLog.scrollTop = el.rnLog.scrollHeight;
+}
+
+function renderRenameTable(rows) {
+  el.rnTableBody.innerHTML = '';
+  if (!rows || !rows.length) {
+    const empty = document.createElement('tr');
+    empty.className = 'queue-table__empty';
+    empty.innerHTML = '<td colspan="5">Сначала сделайте предпросмотр</td>';
+    el.rnTableBody.appendChild(empty);
+    return;
+  }
+  rows.forEach((item) => {
+    const tr = document.createElement('tr');
+    if (item.status === 'MATCH' || item.status === 'ALREADY_OK') tr.className = 'is-success';
+    else if (item.status === 'LOW_SCORE') tr.className = 'is-retry';
+    else if (item.status === 'CONFLICT') tr.className = 'is-error';
+    [item.video, item.txtNumber || '—', item.txtTitle || '—', `${item.score}%`, item.status]
+      .forEach((value) => {
+        const td = document.createElement('td');
+        td.textContent = String(value);
+        tr.appendChild(td);
+      });
+    el.rnTableBody.appendChild(tr);
+  });
+}
+
+function showRenameAnalysis(analysis) {
+  const summary = analysis.summary || {};
+  el.rnTitles.textContent = String(summary.titles || 0);
+  el.rnVideos.textContent = String(summary.videos || 0);
+  el.rnMatched.textContent = String(summary.matched || 0);
+  el.rnLow.textContent = String(summary.lowSimilarity || 0);
+  el.rnConflict.textContent = String(summary.conflicts || 0);
+  el.rnMissing.textContent = String(summary.missing || 0);
+  el.rnDirNote.textContent = `Видео найдено: ${summary.videos || 0}`;
+  el.rnTxtNote.textContent = `Названий в TXT: ${summary.titles || 0}`;
+  const toDelete = el.rnRemove.checked ? (summary.unmatched || 0) : 0;
+  el.rnDeleteNote.textContent = toDelete
+    ? `Будет удалено видео без совпадения: ${toDelete}. Исходный nazvaniya.txt не трогаем.`
+    : 'Несопоставленные видео не удаляются. Исходный nazvaniya.txt не трогаем.';
+  renderRenameTable(analysis.rows);
+  el.rnApply.disabled = !(summary.matched || summary.unmatched);
+  el.rnOpenDir.disabled = !el.rnDir.value.trim();
+}
+
+function bindRenameUi() {
+  const updateMin = () => {
+    el.rnMinValue.textContent = `${el.rnMin.value}%`;
+  };
+  updateMin();
+  el.rnMin.addEventListener('input', () => {
+    updateMin();
+    saveSettings();
+  });
+  [el.rnRemove, el.rnReports, el.rnKeepTxt].forEach((node) => {
+    node.addEventListener('change', saveSettings);
+  });
+
+  el.rnPickDir.addEventListener('click', async () => {
+    const picked = await window.api.pickDirectory({
+      title: 'Папка с видео для умного переименования',
+      defaultPath: el.rnDir.value.trim()
+    });
+    if (!picked) return;
+    el.rnDir.value = picked;
+    const detected = await window.api.detectRenameTxt(picked);
+    if (detected && detected.ok && detected.file && !el.rnTxt.value.trim()) {
+      el.rnTxt.value = detected.file;
+    }
+    saveSettings();
+    el.rnOpenDir.disabled = false;
+    appendRenameLog('info', `Папка: ${picked}`);
+  });
+
+  el.rnPickTxt.addEventListener('click', async () => {
+    const picked = await window.api.pickRenameTxt({ defaultPath: el.rnTxt.value.trim() || el.rnDir.value.trim() });
+    if (!picked) return;
+    el.rnTxt.value = picked;
+    saveSettings();
+    appendRenameLog('info', `TXT: ${picked}`);
+  });
+
+  el.rnPreview.addEventListener('click', async () => {
+    const directory = el.rnDir.value.trim();
+    const titlesFile = el.rnTxt.value.trim();
+    if (!directory || !titlesFile) {
+      el.rnStatus.textContent = 'Выберите папку и nazvaniya.txt.';
+      appendRenameLog('error', 'Не выбрана папка или TXT.');
+      return;
+    }
+    saveSettings();
+    el.rnStatus.textContent = 'Считаем совпадения…';
+    const result = await window.api.analyzeRename({
+      directory,
+      titlesFile,
+      minScore: Number(el.rnMin.value)
+    });
+    if (!result.ok) {
+      el.rnBadge.textContent = 'Ошибка';
+      el.rnBadge.className = 'badge badge--error';
+      el.rnStatus.textContent = result.error;
+      appendRenameLog('error', result.error);
+      return;
+    }
+    state.renamePreview = result.analysis;
+    showRenameAnalysis(result.analysis);
+    el.rnBadge.textContent = 'Предпросмотр';
+    el.rnBadge.className = 'badge badge--running';
+    el.rnStatus.textContent =
+      `Предпросмотр: совпало ${result.analysis.summary.matched}, слабо ${result.analysis.summary.lowSimilarity}, ` +
+      `конфликтов ${result.analysis.summary.conflicts}, нет видео для ${result.analysis.summary.missing} названий.`;
+    appendRenameLog('info', `Предпросмотр готов. Совпало ${result.analysis.summary.matched} из ${result.analysis.summary.videos}.`);
+    (result.analysis.rows || []).forEach((row) => {
+      if (row.status === 'MATCH' || row.status === 'ALREADY_OK') {
+        appendRenameLog('success', `✓ ${row.video} → ${row.newName} (${row.score}%)`);
+      } else if (row.status === 'CONFLICT') {
+        appendRenameLog('error', `✗ ${row.video} — ${row.reason}`);
+      } else if (row.status === 'LOW_SCORE') {
+        appendRenameLog('warn', `⚠ ${row.video} — low similarity ${row.score}%`);
+      } else {
+        appendRenameLog('warn', `⚠ ${row.video} — not matched`);
+      }
+    });
+    (result.analysis.missing || []).forEach((title) => {
+      appendRenameLog('warn', `⚠ ${title.number} — video not found`);
+    });
+  });
+
+  el.rnApply.addEventListener('click', async () => {
+    const directory = el.rnDir.value.trim();
+    const titlesFile = el.rnTxt.value.trim();
+    if (!directory || !titlesFile) return;
+    if (el.rnRemove.checked) {
+      const unmatched = state.renamePreview && state.renamePreview.summary
+        ? state.renamePreview.summary.unmatched
+        : 0;
+      if (unmatched && !window.confirm(`Удалить ${unmatched} видео без совпадения? Это нельзя отменить.`)) {
+        return;
+      }
+    }
+    el.rnApply.disabled = true;
+    el.rnStatus.textContent = 'Переименовываем…';
+    const result = await window.api.applyRename({
+      directory,
+      titlesFile,
+      minScore: Number(el.rnMin.value),
+      removeUnmatchedVideos: el.rnRemove.checked,
+      createReports: el.rnReports.checked,
+      keepOriginalTxt: el.rnKeepTxt.checked
+    });
+    if (!result.ok) {
+      el.rnApply.disabled = false;
+      el.rnBadge.textContent = 'Ошибка';
+      el.rnBadge.className = 'badge badge--error';
+      el.rnStatus.textContent = result.error;
+      appendRenameLog('error', result.error);
+      return;
+    }
+    state.renameReport = result.reportFile;
+    showRenameAnalysis(result.analysis);
+    el.rnBadge.textContent = 'Готово';
+    el.rnBadge.className = 'badge badge--done';
+    const s = result.summary || {};
+    el.rnStatus.textContent =
+      `RESULT  TXT: ${s.titles}  Videos: ${s.videos}  Matched: ${s.matched}  Renamed: ${s.renamed}  ` +
+      `Low: ${s.lowSimilarity}  Conflicts: ${s.conflicts}  Missing: ${s.missing}  Unmatched: ${s.unmatched}`;
+    (result.logs || []).forEach((line) => {
+      const level = line.startsWith('✓') ? 'success' : line.startsWith('✗') ? 'error' : 'warn';
+      appendRenameLog(level, line);
+    });
+    el.rnOpenReport.disabled = !result.reportFile;
+    el.rnOpenDir.disabled = false;
+    el.rnApply.disabled = false;
+  });
+
+  el.rnOpenReport.addEventListener('click', async () => {
+    if (!state.renameReport) return;
+    await window.api.openPath(state.renameReport);
+  });
+
+  el.rnOpenDir.addEventListener('click', async () => {
+    const target = el.rnDir.value.trim();
+    if (target) await window.api.openPath(target);
   });
 }
