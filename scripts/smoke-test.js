@@ -40,6 +40,8 @@ const SOURCE_DIR = path.join(ROOT, 'source');
 const OUTPUT_DIR = path.join(ROOT, 'output');
 const ASSETS_DIR = path.join(ROOT, 'assets');
 
+let failures = 0;
+
 function outH264(dir, n) {
   return path.join(dir, `es${n}${outputExtension('h264')}`);
 }
@@ -219,8 +221,8 @@ async function main() {
     width: 588, height: 1080, fps: 30, duration: 6, feather: 48, outputLabel: 'splitMask'
   });
   check(
-    maskGraph.includes('geq=') && maskGraph.includes('eval=init'),
-    'маска мягкой границы считается один раз (eval=init), без пустого loop-видео',
+    maskGraph.includes('geq=') && maskGraph.includes(`s=588x1080`) && !maskGraph.includes('eval='),
+    'маска мягкой границы того же размера, что и стык, без несовместимого eval=init',
     maskGraph
   );
   const shortGraphCmd = ffmpeg();

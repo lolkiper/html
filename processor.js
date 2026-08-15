@@ -764,8 +764,8 @@ function evenRound(value) {
 }
 
 /**
- * Мягкая граница split-screen. Raised-cosine считается один раз (`eval=init`)
- * на полном кадре маски — без loop, который на части сборок FFmpeg даёт пустое видео.
+ * Мягкая граница split-screen. Raised-cosine на полном кадре маски.
+ * Без loop/eval: на ffmpeg 6.1 `geq=...:eval=init` ломает разбор опций.
  */
 function buildFeatherMaskFilter({ width, height, fps, duration, feather, outputLabel }) {
   const denom = Math.max(1, feather - 1).toFixed(1);
@@ -774,7 +774,7 @@ function buildFeatherMaskFilter({ width, height, fps, duration, feather, outputL
   const rate = Number.isFinite(fps) && fps > 0 ? fps : MAX_OUTPUT_FPS;
   return (
     `color=c=black:s=${width}x${height}:r=${rate}:d=${maskDuration},` +
-      `format=gray,geq=lum='255*(${ease})':eval=init[${outputLabel}]`
+      `format=gray,geq=lum='255*(${ease})'[${outputLabel}]`
   );
 }
 
