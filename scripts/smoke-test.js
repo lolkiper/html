@@ -622,6 +622,12 @@ async function main() {
     seqLogs.some((line) => line.includes('Кодирование сессиями')),
     'два файла одного размера кодируются одной сессией энкодера'
   );
+  check(
+    seqLogs.filter((line) => line.startsWith('success:') && line.includes('Готово:')).length === 2,
+    'каждый файл сессии сразу попадает в лог как сохранённый'
+  );
+  const leftoverTemps = fs.readdirSync(seqOut).filter((name) => name.startsWith('.shorts-') || name.startsWith('shorts-seg-'));
+  check(leftoverTemps.length === 0, 'временные файлы сессии не остаются в папке результата', leftoverTemps.join(', '));
 
   const seq1 = path.join(seqOut, 'es1.mov');
   const seq2 = path.join(seqOut, 'es2.mov');

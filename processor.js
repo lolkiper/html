@@ -633,6 +633,22 @@ function safeUnlink(file) {
   }
 }
 
+function moveFile(src, dest) {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  try {
+    fs.renameSync(src, dest);
+  } catch (err) {
+    if (err.code !== 'EXDEV') throw err;
+    fs.copyFileSync(src, dest);
+    safeUnlink(src);
+  }
+}
+
+function extraOptionsWithoutFaststart(plan) {
+  const extras = plan && plan.extraOptions ? plan.extraOptions : [];
+  return extras.filter((opt, index, list) => opt !== '-movflags' && list[index - 1] !== '-movflags');
+}
+
 // ---------------------------------------------------------------------------
 // Построение графа фильтров
 // ---------------------------------------------------------------------------
@@ -1415,7 +1431,50 @@ function renderJobGroup(params) {
   }
 
   const keyTimes = boundaries.slice(0, -1).map((t) => Math.max(0, t).toFixed(3)).join(',');
-  const tempFile = path.join(path.dirname(jobs[0].outputFile), `.shorts-batch-${process.pid}-${Date.now()}.mov`);
+  const splitTimes = boundaries.slice(1, -1).map((t) => Math.max(0, t).toFixed(3)).join(',');
+  const stamp = `${process.pid}-${Date.now()}`;
+  const partPaths = jobs.map((_, i) => path.join(os.tmpdir(), `shorts-seg-${stamp}-${String(i).padStart(3, '0')}.mov`));
+  const pattern = path.join(os.tmpdir(), `shorts-seg-${stamp}-%03d.mov`);
+  const saved = new Set();
+
+  const cleanupParts = () => {
+    partPaths.forEach((part) => safeUnlink(part));
+  };
+
+  const promoteIndex = (index) => {
+    if (saved.has(index)) return false;
+    const part = partPaths[index];
+    if (!fs.existsSync(part) || fs.statSync(part).size < 64) return false;
+    safeUnlink(jobs[index].outputFile);
+    moveFile(part, jobs[index].outputFile);
+    saved.add(index);
+    if (typeof params.onFileSaved === 'function') params.onFileSaved(jobs[index]);
+    if (typeof onProgress === 'function') {
+      const groupSeconds = boundaries[index + 1];
+      onProgress({
+        job: jobs[index],
+        filePercent: 100,
+        groupSeconds,
+        groupPercent: totalDuration > 0 ? (groupSeconds / totalDuration) * 100 : 100,
+        saved: true
+      });
+    }
+    return true;
+  };
+
+  const promoteReady = ({ seconds = 0, finalize = false } = {}) => {
+    let acc = 0;
+    for (let i = 0; i < jobs.length; i += 1) {
+      acc += jobs[i].duration;
+      if (saved.has(i)) continue;
+      const closed = finalize || seconds >= acc + 0.25 || fs.existsSync(partPaths[i + 1]);
+      if (!closed) break;
+      if (!promoteIndex(i) && finalize) {
+        throw new Error(`Сегмент не записался: ${path.basename(partPaths[i])}`);
+      }
+      if (!saved.has(i)) break;
+    }
+  };
 
   const command = ffmpeg();
   applyInputs(command, inputs, plan, pace);
@@ -1435,16 +1494,25 @@ function renderJobGroup(params) {
       '-r', String(target.fps),
       '-vsync', 'cfr',
       '-force_key_frames', keyTimes,
-      ...(plan.extraOptions || []),
+      '-f', 'segment',
+      '-segment_times', splitTimes,
+      '-segment_format', 'mov',
+      '-reset_timestamps', '1',
+      '-segment_start_number', '0',
+      ...extraOptionsWithoutFaststart(plan),
       '-y'
     ])
-    .format('mov')
-    .output(tempFile);
+    .output(pattern);
 
   return runCommand(command, {
     plan,
     totalDuration,
     onProgress: (pct, seconds) => {
+      try {
+        promoteReady({ seconds });
+      } catch (err) {
+        /* файл ещё может быть открыт энкодером */
+      }
       if (typeof onProgress !== 'function') return;
       let acc = 0;
       let job = jobs[jobs.length - 1];
@@ -1464,33 +1532,31 @@ function renderJobGroup(params) {
     },
     onCommand,
     onDebug
-  }).then(async () => {
-    let offset = 0;
-    try {
-      for (const job of jobs) {
-        await copyMediaSlice({
-          inputFile: tempFile,
-          outputFile: job.outputFile,
-          start: offset,
-          duration: job.duration,
-          onCommand,
-          onDebug
-        });
-        offset += job.duration;
-        if (typeof onProgress === 'function') {
-          onProgress({ job, filePercent: 100, groupSeconds: offset, groupPercent: 100 });
-        }
-      }
-    } finally {
-      safeUnlink(tempFile);
-    }
+  }).then(() => {
+    promoteReady({ finalize: true });
+    cleanupParts();
   }).catch((err) => {
-    safeUnlink(tempFile);
-    jobs.forEach((job) => safeUnlink(job.outputFile));
+    try {
+      for (let i = 0; i < jobs.length; i += 1) {
+        if (saved.has(i)) continue;
+        if (!fs.existsSync(partPaths[i + 1])) break;
+        promoteIndex(i);
+      }
+    } catch (promoteErr) {
+      /* оставляем то, что уже лежит в esN.mov */
+    }
+    cleanupParts();
     if (isCommandTooLong(err) && jobs.length > 1) {
-      const mid = Math.ceil(jobs.length / 2);
-      return renderJobGroup({ ...params, jobs: jobs.slice(0, mid) })
-        .then(() => renderJobGroup({ ...params, jobs: jobs.slice(mid) }));
+      const leftover = jobs.filter((_, i) => !saved.has(i));
+      if (leftover.length > 1) {
+        const mid = Math.ceil(leftover.length / 2);
+        return renderJobGroup({ ...params, jobs: leftover.slice(0, mid) })
+          .then(() => renderJobGroup({ ...params, jobs: leftover.slice(mid) }));
+      }
+      if (leftover.length === 1) {
+        return renderJobGroup({ ...params, jobs: leftover });
+      }
+      return undefined;
     }
     throw err;
   });
@@ -1733,8 +1799,8 @@ class BatchProcessor {
       if (reuseEncoder) {
         this.log(
           'info',
-          `Кодирование сессиями по ${MAX_JOBS_PER_SESSION} файлов: энкодер не переоткрывается внутри сессии, ` +
-            'команда ffmpeg не превышает лимит Windows'
+          `Кодирование сессиями по ${MAX_JOBS_PER_SESSION} файлов: энкодер не переоткрывается, ` +
+            'каждый готовый ролик сразу сохраняется в папку'
         );
       }
 
@@ -1761,8 +1827,13 @@ class BatchProcessor {
         });
       };
 
+      const finished = new Set();
       const markJobDone = (job) => {
-        const size = fs.existsSync(job.outputFile) ? fs.statSync(job.outputFile).size : 0;
+        if (!job || finished.has(job.outputFile)) return;
+        if (!fs.existsSync(job.outputFile)) return;
+        const size = fs.statSync(job.outputFile).size;
+        if (size < 64) return;
+        finished.add(job.outputFile);
         summary.done += 1;
         summary.results.push({ source: job.source.file, output: job.outputFile, size });
         this.log(
@@ -1780,10 +1851,14 @@ class BatchProcessor {
         });
       };
 
+      const pendingJobs = (jobList) => jobList.filter((job) => !finished.has(job.outputFile));
+
       const renderJobList = async (jobList, encodePlan) => {
-        if (jobList.length > 1 && encodePlan.pixelFormat === 'yuv420p') {
+        const todo = pendingJobs(jobList);
+        if (!todo.length) return;
+        if (todo.length > 1 && encodePlan.pixelFormat === 'yuv420p') {
           await renderJobGroup({
-            jobs: jobList,
+            jobs: todo,
             shorts,
             overlay,
             closeup,
@@ -1794,16 +1869,23 @@ class BatchProcessor {
             onDebug: (line) => {
               if (this.settings.verbose) this.log('debug', line);
             },
-            onProgress: ({ job, filePercent }) => emitJobProgress(job, filePercent)
+            onFileSaved: (job) => {
+              this.currentOutput = job.outputFile;
+              markJobDone(job);
+            },
+            onProgress: ({ job, filePercent, saved }) => {
+              emitJobProgress(job, filePercent);
+              if (saved) markJobDone(job);
+            }
           });
-          jobList.forEach((job) => {
+          todo.forEach((job) => {
             this.currentOutput = job.outputFile;
             markJobDone(job);
           });
           return;
         }
 
-        for (const job of jobList) {
+        for (const job of todo) {
           if (this.cancelled) break;
           this.currentOutput = job.outputFile;
           this.emitProgress({
@@ -1856,22 +1938,22 @@ class BatchProcessor {
                 'warn',
                 `Видеокарта не приняла кадр (${shortenFfmpegError(err.message)}), повтор на процессоре`
               );
-              group.jobs.forEach((job) => safeUnlink(job.outputFile));
-              await renderJobList(group.jobs, cpuPlan);
+              pendingJobs(group.jobs).forEach((job) => safeUnlink(job.outputFile));
+              await renderJobList(pendingJobs(group.jobs), cpuPlan);
             } else {
               throw err;
             }
           }
         } catch (err) {
           if (this.cancelled) {
-            group.jobs.forEach((job) => safeUnlink(job.outputFile));
+            pendingJobs(group.jobs).forEach((job) => safeUnlink(job.outputFile));
             break;
           }
           this.log(
             'warn',
             `Общая сессия не записалась (${shortenFfmpegError(err.message)}), каждый файл отдельно`
           );
-          for (const job of group.jobs) {
+          for (const job of pendingJobs(group.jobs)) {
             if (this.cancelled) break;
             try {
               await renderJobList([job], plan);
