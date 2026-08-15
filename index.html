@@ -15,7 +15,7 @@
         <div class="brand">
           <div class="brand__text">
             <h1>Shorts Inserter</h1>
-            <p>Вставка Shorts в середину видео и массовое скачивание YouTube с умной очередью</p>
+            <p>Вставка Shorts, скачивание YouTube, умное переименование и проверка авторских прав</p>
           </div>
         </div>
         <div class="topbar__meta">
@@ -29,6 +29,7 @@
         <button type="button" class="tab is-active" data-view="insert">Вставка Shorts</button>
         <button type="button" class="tab" data-view="download">Скачивание YouTube</button>
         <button type="button" class="tab" data-view="rename">Умное переименование</button>
+        <button type="button" class="tab" data-view="copyright">Copyright Check</button>
       </nav>
 
       <main class="layout view" id="view-insert">
@@ -454,6 +455,10 @@
               <input type="checkbox" id="rn-keep-txt" checked />
               <span>Не трогать исходный nazvaniya.txt</span>
             </label>
+            <label class="checkbox">
+              <input type="checkbox" id="rn-copyright" />
+              <span>Проверять авторские права после переименования</span>
+            </label>
             <p class="field__note">
               Одна строка TXT = одно видео. Уже существующие 1.mp4 / 37.mp4 не перезаписываются. Удаление только после подтверждения.
             </p>
@@ -513,6 +518,135 @@
               <h2>Лог переименования</h2>
             </div>
             <div class="log" id="rn-log" role="log" aria-live="polite"></div>
+          </article>
+        </section>
+      </main>
+
+      <main class="layout view" id="view-copyright" hidden>
+        <section class="column column--settings">
+          <article class="card">
+            <div class="card__head">
+              <h2>1. Тестовый канал</h2>
+              <span class="card__hint">Только OAuth, без пароля Google</span>
+            </div>
+            <div class="field">
+              <label for="cc-client-id">OAuth Client ID</label>
+              <input type="text" id="cc-client-id" placeholder="….apps.googleusercontent.com" spellcheck="false" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="cc-client-secret">OAuth Client Secret</label>
+              <input type="password" id="cc-client-secret" placeholder="Из Google Cloud Console" spellcheck="false" autocomplete="off" />
+            </div>
+            <p class="field__note">
+              Desktop OAuth-клиент из Google Cloud. Пароль аккаунта Google не хранится — только refresh/access token.
+              Загрузка только как <b>private</b>. Модуль не обходит Content ID и ограничения YouTube.
+            </p>
+            <div class="actions actions--inline">
+              <button class="btn btn--primary" id="cc-connect">Проверить подключение</button>
+              <button class="btn btn--ghost" id="cc-disconnect">Отключить</button>
+            </div>
+            <p class="cc-status" id="cc-status">Канал не подключён</p>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>2. Папка</h2>
+              <span class="card__hint">После rename: 1.mp4, 2.mp4, …</span>
+            </div>
+            <div class="field">
+              <label for="cc-dir">Папка с видео</label>
+              <div class="picker">
+                <input type="text" id="cc-dir" placeholder="Не выбрана" spellcheck="false" />
+                <button class="btn btn--ghost" id="cc-pick-dir">Выбрать папку</button>
+              </div>
+              <p class="field__note" id="cc-dir-note">
+                В папке появятся copyright_queue.json и copyright_check.log. Исходный файл не удаляется, пока нет подтверждённого BLOCKED.
+              </p>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>3. Настройки</h2>
+              <span class="card__hint">CLAIM не равен BLOCK</span>
+            </div>
+            <label class="checkbox">
+              <input type="checkbox" id="cc-enabled" />
+              <span>Проверять авторские права после скачивания</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="cc-auto-delete" />
+              <span>Automatically delete test uploads</span>
+            </label>
+            <div class="field">
+              <label for="cc-wait">MAX_PROCESSING_WAIT, минут</label>
+              <input type="number" id="cc-wait" min="2" max="120" step="1" value="15" />
+              <p class="field__note">Не проверять claims сразу после загрузки. При timeout файл остаётся, статус CHECK_ERROR.</p>
+            </div>
+          </article>
+
+          <div class="actions">
+            <button class="btn btn--primary" id="cc-start">Начать проверку</button>
+            <button class="btn btn--danger" id="cc-stop" disabled>Стоп</button>
+            <button class="btn btn--ghost" id="cc-retry">RETRY CHECK</button>
+            <button class="btn btn--ghost" id="cc-retry-all">RETRY ALL FAILED</button>
+            <button class="btn btn--ghost" id="cc-open" disabled>Открыть папку</button>
+          </div>
+        </section>
+
+        <section class="column column--status">
+          <article class="card card--progress">
+            <div class="card__head">
+              <h2>Статистика</h2>
+              <span class="badge" id="cc-badge">Ожидание</span>
+            </div>
+            <p class="status" id="cc-status-line">Подключите тестовый канал и выберите папку.</p>
+            <div class="counters counters--8">
+              <div class="counter"><span id="cc-total">0</span><small>checked</small></div>
+              <div class="counter"><span id="cc-noclaim">0</span><small>no claims</small></div>
+              <div class="counter"><span id="cc-claims">0</span><small>claims</small></div>
+              <div class="counter"><span id="cc-blocked">0</span><small>blocked</small></div>
+              <div class="counter"><span id="cc-processing">0</span><small>processing</small></div>
+              <div class="counter"><span id="cc-errors">0</span><small>errors</small></div>
+              <div class="counter"><span id="cc-kept">0</span><small>kept</small></div>
+              <div class="counter"><span id="cc-deleted">0</span><small>deleted</small></div>
+            </div>
+          </article>
+
+          <article class="card card--table">
+            <div class="card__head">
+              <h2>Copyright Check</h2>
+              <span class="card__hint"># · File · Upload · Processing · Copyright · Availability · Action</span>
+            </div>
+            <div class="table-wrap" id="cc-table-wrap">
+              <table class="queue-table" id="cc-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>File</th>
+                    <th>Upload</th>
+                    <th>Processing</th>
+                    <th>Copyright</th>
+                    <th>Availability</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="cc-table-body">
+                  <tr class="queue-table__empty"><td colspan="7">Очередь пуста</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="card card--log">
+            <div class="card__head">
+              <h2>copyright_check.log</h2>
+              <div class="card__tools">
+                <button class="btn btn--mini" id="cc-copy-log">Копировать</button>
+                <button class="btn btn--mini" id="cc-clear-log">Очистить</button>
+              </div>
+            </div>
+            <div class="log" id="cc-log" role="log" aria-live="polite"></div>
           </article>
         </section>
       </main>

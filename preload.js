@@ -43,5 +43,18 @@ contextBridge.exposeInMainWorld('api', {
   detectRenameTxt: (directory) => ipcRenderer.invoke('rename:detect-txt', directory),
   pickRenameTxt: (options) => ipcRenderer.invoke('rename:pick-txt', options),
   analyzeRename: (payload) => ipcRenderer.invoke('rename:analyze', payload),
-  applyRename: (payload) => ipcRenderer.invoke('rename:apply', payload)
+  applyRename: (payload) => ipcRenderer.invoke('rename:apply', payload),
+
+  copyrightStatus: () => ipcRenderer.invoke('copyright:status'),
+  connectCopyright: (payload) => ipcRenderer.invoke('copyright:connect', payload),
+  disconnectCopyright: () => ipcRenderer.invoke('copyright:disconnect'),
+  loadCopyrightQueue: (payload) => ipcRenderer.invoke('copyright:load', payload),
+  startCopyrightCheck: (payload) => ipcRenderer.invoke('copyright:start', payload),
+  stopCopyrightCheck: () => ipcRenderer.invoke('copyright:stop'),
+  retryCopyright: (payload) => ipcRenderer.invoke('copyright:retry', payload),
+
+  onCopyrightLog: (callback) => subscribe('copyright:log', callback),
+  onCopyrightProgress: (callback) => subscribe('copyright:progress', callback),
+  onCopyrightState: (callback) => subscribe('copyright:state', callback),
+  onCopyrightDone: (callback) => subscribe('copyright:done', callback)
 });

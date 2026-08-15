@@ -140,7 +140,39 @@ const el = {
   rnMissing: document.getElementById('rn-missing'),
   rnDeleteNote: document.getElementById('rn-delete-note'),
   rnTableBody: document.getElementById('rn-table-body'),
-  rnLog: document.getElementById('rn-log')
+  rnLog: document.getElementById('rn-log'),
+  rnCopyright: document.getElementById('rn-copyright'),
+  viewCopyright: document.getElementById('view-copyright'),
+  ccClientId: document.getElementById('cc-client-id'),
+  ccClientSecret: document.getElementById('cc-client-secret'),
+  ccConnect: document.getElementById('cc-connect'),
+  ccDisconnect: document.getElementById('cc-disconnect'),
+  ccStatus: document.getElementById('cc-status'),
+  ccDir: document.getElementById('cc-dir'),
+  ccDirNote: document.getElementById('cc-dir-note'),
+  ccPickDir: document.getElementById('cc-pick-dir'),
+  ccEnabled: document.getElementById('cc-enabled'),
+  ccAutoDelete: document.getElementById('cc-auto-delete'),
+  ccWait: document.getElementById('cc-wait'),
+  ccStart: document.getElementById('cc-start'),
+  ccStop: document.getElementById('cc-stop'),
+  ccRetry: document.getElementById('cc-retry'),
+  ccRetryAll: document.getElementById('cc-retry-all'),
+  ccOpen: document.getElementById('cc-open'),
+  ccBadge: document.getElementById('cc-badge'),
+  ccStatusLine: document.getElementById('cc-status-line'),
+  ccTotal: document.getElementById('cc-total'),
+  ccNoclaim: document.getElementById('cc-noclaim'),
+  ccClaims: document.getElementById('cc-claims'),
+  ccBlocked: document.getElementById('cc-blocked'),
+  ccProcessing: document.getElementById('cc-processing'),
+  ccErrors: document.getElementById('cc-errors'),
+  ccKept: document.getElementById('cc-kept'),
+  ccDeleted: document.getElementById('cc-deleted'),
+  ccTableBody: document.getElementById('cc-table-body'),
+  ccLog: document.getElementById('cc-log'),
+  ccCopyLog: document.getElementById('cc-copy-log'),
+  ccClearLog: document.getElementById('cc-clear-log')
 };
 
 const state = {
@@ -149,7 +181,9 @@ const state = {
   downloading: false,
   downloadLog: [],
   renamePreview: null,
-  renameReport: null
+  renameReport: null,
+  copyrighting: false,
+  copyrightLog: []
 };
 
 const CLOSEUP_HINT = 'Для каждого следующего ролика крупный план продолжается с того места, где закончился предыдущий. Если видео кончится — начнётся сначала. Звук берётся из основного ролика.';
@@ -336,7 +370,13 @@ function collectSettings() {
     renameMin: Number(el.rnMin.value),
     renameRemove: el.rnRemove.checked,
     renameReports: el.rnReports.checked,
-    renameKeepTxt: el.rnKeepTxt.checked
+    renameKeepTxt: el.rnKeepTxt.checked,
+    copyrightDir: el.ccDir ? el.ccDir.value.trim() : '',
+    copyrightClientId: el.ccClientId ? el.ccClientId.value.trim() : '',
+    copyrightClientSecret: el.ccClientSecret ? el.ccClientSecret.value : '',
+    copyrightCheckEnabled: el.ccEnabled ? el.ccEnabled.checked : false,
+    copyrightAutoDeleteUploads: el.ccAutoDelete ? el.ccAutoDelete.checked : false,
+    copyrightMaxWaitMinutes: el.ccWait ? Number(el.ccWait.value) || 15 : 15
   };
 }
 
@@ -407,6 +447,15 @@ function restoreSettings() {
   if (saved.renameRemove != null) el.rnRemove.checked = Boolean(saved.renameRemove);
   if (saved.renameReports != null) el.rnReports.checked = Boolean(saved.renameReports);
   if (saved.renameKeepTxt != null) el.rnKeepTxt.checked = Boolean(saved.renameKeepTxt);
+  if (el.ccDir && saved.copyrightDir) el.ccDir.value = saved.copyrightDir;
+  else if (el.ccDir && saved.renameDir) el.ccDir.value = saved.renameDir;
+  else if (el.ccDir && saved.downloadDir) el.ccDir.value = saved.downloadDir;
+  if (el.ccClientId && saved.copyrightClientId) el.ccClientId.value = saved.copyrightClientId;
+  if (el.ccClientSecret && saved.copyrightClientSecret) el.ccClientSecret.value = saved.copyrightClientSecret;
+  if (el.ccEnabled) el.ccEnabled.checked = Boolean(saved.copyrightCheckEnabled);
+  if (el.rnCopyright) el.rnCopyright.checked = Boolean(saved.copyrightCheckEnabled);
+  if (el.ccAutoDelete) el.ccAutoDelete.checked = Boolean(saved.copyrightAutoDeleteUploads);
+  if (el.ccWait && Number.isFinite(saved.copyrightMaxWaitMinutes)) el.ccWait.value = saved.copyrightMaxWaitMinutes;
 }
 
 // ------------------------------------------------------- Проверка выбранного
@@ -779,7 +828,10 @@ window.api.onDone((payload) => {
   refreshAllInfo();
   bindDownloadUi();
   bindRenameUi();
+  bindCopyrightUi();
   await refreshDownloadQueue();
+  await refreshCopyrightStatus();
+  await refreshCopyrightQueue();
 
   appendLog('info', 'Приложение готово. Выберите папки и файлы, затем нажмите «Начать обработку».');
 })();
@@ -925,6 +977,7 @@ function bindDownloadUi() {
       el.viewInsert.hidden = view !== 'insert';
       el.viewDownload.hidden = view !== 'download';
       if (el.viewRename) el.viewRename.hidden = view !== 'rename';
+      if (el.viewCopyright) el.viewCopyright.hidden = view !== 'copyright';
     });
   });
 
@@ -1135,8 +1188,11 @@ function bindRenameUi() {
     updateMin();
     saveSettings();
   });
-  [el.rnRemove, el.rnReports, el.rnKeepTxt].forEach((node) => {
-    node.addEventListener('change', saveSettings);
+  [el.rnRemove, el.rnReports, el.rnKeepTxt, el.rnCopyright].filter(Boolean).forEach((node) => {
+    node.addEventListener('change', () => {
+      if (node === el.rnCopyright && el.ccEnabled) el.ccEnabled.checked = el.rnCopyright.checked;
+      saveSettings();
+    });
   });
 
   el.rnPickDir.addEventListener('click', async () => {
@@ -1254,6 +1310,15 @@ function bindRenameUi() {
     el.rnOpenReport.disabled = !result.reportFile;
     el.rnOpenDir.disabled = false;
     el.rnApply.disabled = false;
+    const checkAfter = (el.ccEnabled && el.ccEnabled.checked) || (el.rnCopyright && el.rnCopyright.checked);
+    if (checkAfter && result.keptFiles && result.keptFiles.length) {
+      if (el.ccDir) el.ccDir.value = directory;
+      saveSettings();
+      appendRenameLog('info', `Copyright Check: ${result.keptFiles.length} файл(ов) после переименования.`);
+      const tab = document.querySelector('#app-tabs .tab[data-view="copyright"]');
+      if (tab) tab.click();
+      await startCopyrightCheck(result.keptFiles);
+    }
   });
 
   el.rnOpenReport.addEventListener('click', async () => {
@@ -1264,5 +1329,277 @@ function bindRenameUi() {
   el.rnOpenDir.addEventListener('click', async () => {
     const target = el.rnDir.value.trim();
     if (target) await window.api.openPath(target);
+  });
+}
+
+function copyrightMark(status, kind) {
+  if (!status || status === 'PENDING' || status === 'UNKNOWN') return kind === 'action' ? '—' : '—';
+  if (status === 'SUCCESS' || status === 'READY') return '✓';
+  if (status === 'UPLOADING' || status === 'PROCESSING') return '...';
+  if (status === 'ERROR' || status === 'TIMEOUT' || status === 'CHECK_ERROR') return 'ERROR';
+  if (status === 'NO_CLAIM') return 'No claim';
+  if (status === 'CLAIM') return 'Claim';
+  if (status === 'BLOCKED') return kind === 'availability' ? 'Blocked' : 'Blocked';
+  if (status === 'AVAILABLE') return 'Available';
+  if (status === 'KEEP') return 'KEEP';
+  if (status === 'DELETE') return 'DELETE';
+  if (status === 'RETRY') return 'RETRY';
+  if (status === 'WAIT') return 'WAIT';
+  return status;
+}
+
+function showCopyrightChannel(payload) {
+  if (!el.ccStatus) return;
+  if (payload && payload.connected && payload.channel) {
+    el.ccStatus.className = 'cc-status is-ok';
+    el.ccStatus.textContent =
+      `✓ Connected\nChannel: ${payload.channel.title || '—'}\nChannel ID: ${payload.channel.id || '—'}`;
+  } else if (payload && payload.connected) {
+    el.ccStatus.className = 'cc-status is-ok';
+    el.ccStatus.textContent = '✓ Connected';
+  } else {
+    el.ccStatus.className = 'cc-status';
+    el.ccStatus.textContent = payload && payload.error ? payload.error : 'Канал не подключён';
+  }
+}
+
+async function refreshCopyrightStatus() {
+  if (!window.api.copyrightStatus) return;
+  const result = await window.api.copyrightStatus();
+  showCopyrightChannel(result);
+}
+
+function renderCopyrightTable(items) {
+  if (!el.ccTableBody) return;
+  el.ccTableBody.innerHTML = '';
+  if (!items || !items.length) {
+    const row = document.createElement('tr');
+    row.className = 'queue-table__empty';
+    row.innerHTML = '<td colspan="7">Очередь пуста</td>';
+    el.ccTableBody.appendChild(row);
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement('tr');
+    if (item.action === 'KEEP' && item.checkComplete) row.className = 'is-success';
+    else if (item.action === 'DELETE' && item.deleteVerified) row.className = 'is-error';
+    else if (item.action === 'RETRY' || item.copyrightStatus === 'CHECK_ERROR') row.className = 'is-retry';
+    else if (item.action === 'WAIT' || item.uploadStatus === 'UPLOADING' || item.processingStatus === 'PROCESSING') {
+      row.className = 'is-run';
+    }
+    [
+      item.id,
+      item.filename,
+      copyrightMark(item.uploadStatus),
+      copyrightMark(item.processingStatus),
+      copyrightMark(item.copyrightStatus, 'copyright'),
+      copyrightMark(item.availabilityStatus, 'availability'),
+      copyrightMark(item.action, 'action')
+    ].forEach((value) => {
+      const td = document.createElement('td');
+      td.textContent = String(value);
+      row.appendChild(td);
+    });
+    el.ccTableBody.appendChild(row);
+  });
+}
+
+function applyCopyrightProgress(snapshot) {
+  if (!snapshot) return;
+  const stats = snapshot.stats || {};
+  el.ccTotal.textContent = String(stats.total || 0);
+  el.ccNoclaim.textContent = String(stats.noClaims || 0);
+  el.ccClaims.textContent = String(stats.claims || 0);
+  el.ccBlocked.textContent = String(stats.blocked || 0);
+  el.ccProcessing.textContent = String(stats.processing || 0);
+  el.ccErrors.textContent = String(stats.errors || 0);
+  el.ccKept.textContent = String(stats.kept || 0);
+  el.ccDeleted.textContent = String(stats.deleted || 0);
+  renderCopyrightTable(snapshot.items);
+  if (snapshot.current) {
+    el.ccStatusLine.textContent =
+      `#${snapshot.current.id} ${snapshot.current.filename} · ${snapshot.current.action}`;
+  }
+}
+
+async function refreshCopyrightQueue() {
+  const folder = el.ccDir && el.ccDir.value.trim();
+  if (el.ccOpen) el.ccOpen.disabled = !folder;
+  if (!folder || !window.api.loadCopyrightQueue) return;
+  const result = await window.api.loadCopyrightQueue({ directory: folder });
+  if (result && result.ok) applyCopyrightProgress(result.snapshot);
+}
+
+function setCopyrightRunning(running) {
+  state.copyrighting = Boolean(running);
+  if (el.ccStart) el.ccStart.disabled = Boolean(running);
+  if (el.ccStop) el.ccStop.disabled = !running;
+  if (el.ccConnect) el.ccConnect.disabled = Boolean(running);
+  if (el.ccPickDir) el.ccPickDir.disabled = Boolean(running);
+}
+
+function appendCopyrightLog(level, message) {
+  const text = String(message || '');
+  state.copyrightLog.push(text);
+  const emptyHint = el.ccLog.querySelector('.log__empty');
+  if (emptyHint) emptyHint.remove();
+  const atBottom = el.ccLog.scrollHeight - el.ccLog.scrollTop - el.ccLog.clientHeight < 60;
+  const row = document.createElement('div');
+  row.className = `log__row log__row--${level || 'info'}`;
+  const textNode = document.createElement('span');
+  textNode.className = 'log__text';
+  textNode.textContent = text;
+  row.appendChild(textNode);
+  el.ccLog.appendChild(row);
+  while (el.ccLog.childElementCount > MAX_LOG_ROWS) el.ccLog.removeChild(el.ccLog.firstChild);
+  if (atBottom) el.ccLog.scrollTop = el.ccLog.scrollHeight;
+}
+
+async function startCopyrightCheck(files) {
+  const directory = (el.ccDir && el.ccDir.value.trim()) || (el.rnDir && el.rnDir.value.trim());
+  if (!directory) {
+    el.ccStatusLine.textContent = 'Не выбрана папка с видео.';
+    appendCopyrightLog('error', 'Не выбрана папка с видео.');
+    return;
+  }
+  const clientId = el.ccClientId.value.trim();
+  const clientSecret = el.ccClientSecret.value;
+  if (!clientId || !clientSecret) {
+    el.ccStatusLine.textContent = 'Укажите OAuth Client ID и Client Secret.';
+    appendCopyrightLog('error', 'Нет OAuth Client ID / Secret.');
+    return;
+  }
+  saveSettings();
+  setCopyrightRunning(true);
+  el.ccBadge.textContent = 'Проверка';
+  el.ccBadge.className = 'badge badge--running';
+  el.ccStatusLine.textContent = 'Загружаем private и ждём обработку YouTube…';
+  appendCopyrightLog('info', '— Запуск Copyright Check —');
+  const result = await window.api.startCopyrightCheck({
+    directory,
+    files,
+    enqueueDirectory: !files,
+    clientId,
+    clientSecret,
+    autoDeleteUploads: el.ccAutoDelete.checked,
+    maxWaitMinutes: Number(el.ccWait.value) || 15
+  });
+  if (!result.ok) {
+    setCopyrightRunning(false);
+    el.ccBadge.textContent = 'Ошибка';
+    el.ccBadge.className = 'badge badge--error';
+    el.ccStatusLine.textContent = result.error || 'Не удалось запустить проверку.';
+    appendCopyrightLog('error', result.error || 'Не удалось запустить проверку.');
+  }
+}
+
+function bindCopyrightUi() {
+  if (!el.ccStart) return;
+
+  [el.ccClientId, el.ccClientSecret, el.ccWait].forEach((node) => {
+    node.addEventListener('change', saveSettings);
+  });
+  el.ccEnabled.addEventListener('change', () => {
+    if (el.rnCopyright) el.rnCopyright.checked = el.ccEnabled.checked;
+    saveSettings();
+  });
+  el.ccAutoDelete.addEventListener('change', saveSettings);
+  el.ccDir.addEventListener('change', async () => {
+    saveSettings();
+    await refreshCopyrightQueue();
+  });
+
+  el.ccPickDir.addEventListener('click', async () => {
+    const picked = await window.api.pickDirectory({
+      title: 'Папка для Copyright Check',
+      defaultPath: el.ccDir.value.trim() || el.rnDir.value.trim() || el.dlDir.value.trim()
+    });
+    if (!picked) return;
+    el.ccDir.value = picked;
+    saveSettings();
+    await refreshCopyrightQueue();
+  });
+
+  el.ccOpen.addEventListener('click', async () => {
+    const target = el.ccDir.value.trim();
+    if (target) await window.api.openPath(target);
+  });
+
+  el.ccConnect.addEventListener('click', async () => {
+    const clientId = el.ccClientId.value.trim();
+    const clientSecret = el.ccClientSecret.value;
+    if (!clientId || !clientSecret) {
+      showCopyrightChannel({ connected: false, error: 'Укажите Client ID и Client Secret из Google Cloud.' });
+      return;
+    }
+    saveSettings();
+    el.ccStatus.textContent = 'Откройте окно Google и подтвердите доступ…';
+    const result = await window.api.connectCopyright({ clientId, clientSecret });
+    showCopyrightChannel(result);
+    if (!result.ok) appendCopyrightLog('error', result.error);
+    else appendCopyrightLog('success', `Подключён канал ${result.channel && result.channel.title}`);
+  });
+
+  el.ccDisconnect.addEventListener('click', async () => {
+    const result = await window.api.disconnectCopyright();
+    showCopyrightChannel(result);
+    appendCopyrightLog('info', 'Тестовый канал отключён. Токены удалены.');
+  });
+
+  el.ccStart.addEventListener('click', async () => {
+    await startCopyrightCheck(null);
+  });
+
+  el.ccStop.addEventListener('click', async () => {
+    await window.api.stopCopyrightCheck();
+    el.ccStatusLine.textContent = 'Останавливаем проверку…';
+  });
+
+  el.ccRetry.addEventListener('click', async () => {
+    const directory = el.ccDir.value.trim();
+    const result = await window.api.retryCopyright({ directory });
+    if (result && result.ok) applyCopyrightProgress(result.snapshot);
+    await startCopyrightCheck(null);
+  });
+
+  el.ccRetryAll.addEventListener('click', async () => {
+    const directory = el.ccDir.value.trim();
+    const result = await window.api.retryCopyright({ directory });
+    if (result && result.ok) applyCopyrightProgress(result.snapshot);
+    await startCopyrightCheck(null);
+  });
+
+  el.ccCopyLog.addEventListener('click', async () => {
+    if (!state.copyrightLog.length) return;
+    try {
+      await navigator.clipboard.writeText(state.copyrightLog.join('\n'));
+      appendCopyrightLog('info', 'Лог скопирован в буфер обмена.');
+    } catch (err) {
+      appendCopyrightLog('error', `Не удалось скопировать лог: ${err.message}`);
+    }
+  });
+
+  el.ccClearLog.addEventListener('click', () => {
+    state.copyrightLog = [];
+    el.ccLog.innerHTML = '<p class="log__empty">Лог очищен.</p>';
+  });
+
+  window.api.onCopyrightLog(({ level, message }) => appendCopyrightLog(level, message));
+  window.api.onCopyrightProgress((snapshot) => applyCopyrightProgress(snapshot));
+  window.api.onCopyrightState(({ running }) => setCopyrightRunning(Boolean(running)));
+  window.api.onCopyrightDone((payload) => {
+    setCopyrightRunning(false);
+    if (payload && payload.ok) {
+      el.ccBadge.textContent = 'Готово';
+      el.ccBadge.className = 'badge badge--done';
+      const s = payload.summary || {};
+      el.ccStatusLine.textContent =
+        `Total checked: ${s.total || 0} · Kept: ${s.kept || 0} · Deleted: ${s.deleted || 0}`;
+      appendCopyrightLog('success', '— Copyright Check завершён —');
+    } else {
+      el.ccBadge.textContent = 'Ошибка';
+      el.ccBadge.className = 'badge badge--error';
+      el.ccStatusLine.textContent = (payload && payload.error) || 'Проверка прервана.';
+    }
   });
 }

@@ -33,6 +33,13 @@ const {
 } = require('./downloader');
 
 const { analyzeRename, applyRename } = require('./renamer');
+const {
+  YoutubeClient,
+  runOAuthLoopback,
+  loadTokenFile,
+  saveTokenFile
+} = require('./youtube-api');
+const { CopyrightChecker } = require('./copyright-check');
 
 const VIDEO_FILTER = {
   name: 'Видео',
@@ -45,6 +52,8 @@ let mainWindow = null;
 let activeBatch = null;
 /** @type {DownloadQueue|null} */
 let activeDownload = null;
+/** @type {CopyrightChecker|null} */
+let activeCopyright = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -86,6 +95,49 @@ function send(channel, payload) {
   }
 }
 
+function youtubeTokenPath() {
+  return path.join(app.getPath('userData'), 'youtube-oauth.json');
+}
+
+function publicYoutubeChannel(stored) {
+  if (!stored || !stored.channel) return null;
+  return {
+    id: stored.channel.id || '',
+    title: stored.channel.title || '',
+    customUrl: stored.channel.customUrl || ''
+  };
+}
+
+function saveYoutubeTokens(tokens, extra = {}) {
+  const previous = loadTokenFile(youtubeTokenPath()) || {};
+  saveTokenFile(youtubeTokenPath(), {
+    ...previous,
+    ...tokens,
+    ...extra,
+    channel: extra.channel || previous.channel || null
+  });
+}
+
+function createYoutubeClient(payload = {}) {
+  const stored = loadTokenFile(youtubeTokenPath()) || {};
+  const client = new YoutubeClient({
+    clientId: payload.clientId || stored.clientId,
+    clientSecret: payload.clientSecret,
+    tokens: stored.refresh_token ? stored : null
+  });
+  client.onTokens = (tokens) => saveYoutubeTokens(tokens, { clientId: client.clientId });
+  return client;
+}
+
+function copyrightHooks() {
+  return {
+    onLog: (level, message) => send('copyright:log', { level, message, time: Date.now() }),
+    onProgress: (state) => send('copyright:progress', state),
+    onState: (state) => send('copyright:state', state),
+    onDone: (payload) => send('copyright:done', payload)
+  };
+}
+
 // ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
@@ -111,7 +163,9 @@ ipcMain.handle('app:info', () => {
     ffmpegPath,
     ffprobePath,
     ytdlpPath: resolveYtDlpPath(),
-    ytdlpOk: ytdlpExists(resolveYtDlpPath())
+    ytdlpOk: ytdlpExists(resolveYtDlpPath()),
+    copyrightConnected: Boolean((loadTokenFile(youtubeTokenPath()) || {}).refresh_token),
+    copyrightChannel: publicYoutubeChannel(loadTokenFile(youtubeTokenPath()))
   };
 });
 
@@ -377,6 +431,136 @@ ipcMain.handle('rename:apply', (_event, payload = {}) => {
   }
 });
 
+ipcMain.handle('copyright:status', async () => {
+  const stored = loadTokenFile(youtubeTokenPath());
+  return {
+    ok: true,
+    connected: Boolean(stored && stored.refresh_token),
+    channel: publicYoutubeChannel(stored)
+  };
+});
+
+ipcMain.handle('copyright:connect', async (_event, payload = {}) => {
+  try {
+    const tokens = await runOAuthLoopback({
+      clientId: payload.clientId,
+      clientSecret: payload.clientSecret,
+      onOpenUrl: (url) => shell.openExternal(url)
+    });
+    const packed = {
+      ...tokens,
+      clientId: payload.clientId,
+      expires_at: Date.now() + (Number(tokens.expires_in) || 3600) * 1000
+    };
+    saveYoutubeTokens(packed, { clientId: payload.clientId });
+    const client = new YoutubeClient({
+      clientId: payload.clientId,
+      clientSecret: payload.clientSecret,
+      tokens: packed
+    });
+    client.onTokens = (next) => saveYoutubeTokens(next, { clientId: payload.clientId });
+    const channel = await client.getChannel();
+    saveYoutubeTokens(client.tokens, { clientId: payload.clientId, channel });
+    return { ok: true, connected: true, channel };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('copyright:disconnect', () => {
+  const file = youtubeTokenPath();
+  try {
+    if (fs.existsSync(file)) fs.unlinkSync(file);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  return { ok: true, connected: false, channel: null };
+});
+
+ipcMain.handle('copyright:load', (_event, payload = {}) => {
+  const directory = payload.directory;
+  if (!directory || !fs.existsSync(directory)) {
+    return { ok: false, error: 'Папка не найдена' };
+  }
+  const checker = new CopyrightChecker({ directory });
+  checker.loadFromDisk();
+  return { ok: true, snapshot: checker.snapshot() };
+});
+
+ipcMain.handle('copyright:start', async (_event, payload = {}) => {
+  const directory = payload.directory;
+  if (!directory) return { ok: false, error: 'Не выбрана папка с видео.' };
+  const stored = loadTokenFile(youtubeTokenPath());
+  if (!stored || !stored.refresh_token) {
+    return { ok: false, error: 'Сначала подключите тестовый YouTube-канал.' };
+  }
+  if (!payload.clientId || !payload.clientSecret) {
+    return { ok: false, error: 'Укажите OAuth Client ID и Client Secret.' };
+  }
+  if (activeCopyright && activeCopyright.running && path.resolve(activeCopyright.directory) !== path.resolve(directory)) {
+    return { ok: false, error: 'Уже идёт проверка в другой папке.' };
+  }
+
+  const client = createYoutubeClient(payload);
+  const maxWaitMs = Number(payload.maxWaitMinutes) > 0
+    ? Number(payload.maxWaitMinutes) * 60 * 1000
+    : undefined;
+
+  if (activeCopyright && path.resolve(activeCopyright.directory) === path.resolve(directory) && activeCopyright.running) {
+    if (payload.files && payload.files.length) activeCopyright.enqueueFiles(payload.files);
+    else if (payload.enqueueDirectory) activeCopyright.enqueueDirectory();
+    return { ok: true, running: true, snapshot: activeCopyright.snapshot() };
+  }
+
+  const checker = new CopyrightChecker({
+    directory,
+    client,
+    maxWaitMs,
+    autoDeleteUploads: Boolean(payload.autoDeleteUploads),
+    hooks: copyrightHooks()
+  });
+  checker.loadFromDisk();
+  if (payload.files && payload.files.length) checker.enqueueFiles(payload.files);
+  else checker.enqueueDirectory();
+  if (!checker.items.length) return { ok: false, error: 'В папке нет видео для проверки.' };
+
+  activeCopyright = checker;
+  send('copyright:state', { running: true });
+  try {
+    const snapshot = await checker.run();
+    send('copyright:done', { ok: true, summary: snapshot.stats });
+    return { ok: true, snapshot };
+  } catch (err) {
+    send('copyright:log', { level: 'error', message: err.message, time: Date.now() });
+    send('copyright:done', { ok: false, error: err.message });
+    return { ok: false, error: err.message };
+  } finally {
+    if (activeCopyright === checker) activeCopyright = null;
+    send('copyright:state', { running: false });
+  }
+});
+
+ipcMain.handle('copyright:stop', () => {
+  if (!activeCopyright) return { ok: false, error: 'Проверка не запущена' };
+  activeCopyright.stop();
+  return { ok: true };
+});
+
+ipcMain.handle('copyright:retry', async (_event, payload = {}) => {
+  if (activeCopyright && activeCopyright.running) {
+    if (payload.itemId) activeCopyright.retryOne(payload.itemId);
+    else activeCopyright.retryFailed();
+    return { ok: true, snapshot: activeCopyright.snapshot() };
+  }
+  const directory = payload.directory;
+  if (!directory || !fs.existsSync(directory)) return { ok: false, error: 'Папка не найдена' };
+  const checker = new CopyrightChecker({ directory });
+  checker.loadFromDisk();
+  if (payload.itemId) checker.retryOne(payload.itemId);
+  else checker.retryFailed();
+  return { ok: true, snapshot: checker.snapshot() };
+});
+
 // ---------------------------------------------------------------------------
 // Жизненный цикл приложения
 // ---------------------------------------------------------------------------
@@ -402,6 +586,7 @@ if (!app.requestSingleInstanceLock()) {
 app.on('window-all-closed', () => {
   if (activeBatch) activeBatch.stop();
   if (activeDownload) activeDownload.stop();
+  if (activeCopyright) activeCopyright.stop();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -426,4 +611,5 @@ process.on('unhandledRejection', (err) => {
 app.on('before-quit', () => {
   if (activeBatch) activeBatch.stop();
   if (activeDownload) activeDownload.stop();
+  if (activeCopyright) activeCopyright.stop();
 });

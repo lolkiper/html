@@ -161,6 +161,7 @@ MI NOVIO ME DEJÓ POR OTRA 😭 #roblox
   check(!fs.existsSync(files.extra), 'несопоставленное видео удалено только после применения');
   check(fs.existsSync(txt), 'nazvaniya.txt на месте');
   check(result.renamed === 4, 'четыре файла переименованы', `renamed=${result.renamed}`);
+  check(Array.isArray(result.keptFiles) && result.keptFiles.length === 4, 'keptFiles после rename: 4 файла');
   check(fs.existsSync(path.join(ROOT, 'missing_titles.txt')), 'отчёт missing_titles.txt');
   check(fs.existsSync(path.join(ROOT, 'unmatched_videos.txt')), 'отчёт unmatched_videos.txt');
 

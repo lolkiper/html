@@ -1,8 +1,8 @@
 {
   "name": "shorts-inserter",
   "productName": "Shorts Inserter",
-  "version": "1.7.11",
-  "description": "Batch tool that inserts Shorts, mass-downloads YouTube, and smart-renames videos from nazvaniya.txt.",
+  "version": "1.8.0",
+  "description": "Batch tool that inserts Shorts, mass-downloads YouTube, smart-renames videos, and checks YouTube copyright claims on a private test channel.",
   "main": "main.js",
   "author": "Shorts Inserter",
   "license": "MIT",
@@ -12,10 +12,11 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win",
     "dist:portable": "electron-builder --win portable",
-    "smoke": "node scripts/smoke-test.js && node scripts/download-smoke-test.js && node scripts/rename-smoke-test.js",
+    "smoke": "node scripts/smoke-test.js && node scripts/download-smoke-test.js && node scripts/rename-smoke-test.js && node scripts/copyright-smoke-test.js",
     "smoke:insert": "node scripts/smoke-test.js",
     "smoke:download": "node scripts/download-smoke-test.js",
     "smoke:rename": "node scripts/rename-smoke-test.js",
+    "smoke:copyright": "node scripts/copyright-smoke-test.js",
     "ensure:ytdlp": "node scripts/ensure-ytdlp.js"
   },
   "dependencies": {
@@ -39,6 +40,8 @@
       "processor.js",
       "downloader.js",
       "renamer.js",
+      "copyright-check.js",
+      "youtube-api.js",
       "renderer.js",
       "index.html",
       "styles.css",

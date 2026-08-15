@@ -25,7 +25,9 @@ const REPORT_NAMES = new Set([
   'conflicts.txt',
   'rename_report.txt',
   'download_queue.json',
-  'download_log.txt'
+  'download_log.txt',
+  'copyright_queue.json',
+  'copyright_check.log'
 ]);
 
 const TEMP_PREFIX = '.smart-rename-';
@@ -426,10 +428,15 @@ function applyRename(analysis, options = {}) {
     logs.push('Исходный nazvaniya.txt не удалялся — только отчёты.');
   }
 
+  const keptFiles = analysis.rows
+    .filter((row) => (row.status === 'MATCH' || row.status === 'ALREADY_OK') && row.videoPath && fs.existsSync(row.videoPath))
+    .map((row) => row.videoPath);
+
   return {
     renamed,
     deleted,
     logs,
+    keptFiles,
     reportFile: path.join(dir, 'rename_report.txt'),
     summary: {
       ...analysis.summary,
