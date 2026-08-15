@@ -715,7 +715,7 @@ window.api.onDone((payload) => {
   const hardware = info.hardware || {};
   if (hardware.gpu) {
     el.accelNote.textContent =
-      `Найдена ${hardware.gpu}. Склейка на 1–2 ядрах CPU, кодирование около 50% GPU. Каждый файл сразу сохраняется в папку.`;
+      `Найдена ${hardware.gpu}. Склейка на 1–2 ядрах CPU, кодирование около 50% GPU без лишней нагрузки. Каждый файл сразу сохраняется в папку.`;
   } else if (hardware.compiledGpu && hardware.compiledGpu.length) {
     el.accelNote.textContent =
       `FFmpeg видит ${hardware.compiledGpu.join(', ')}, но тестовый кадр не прошёл` +

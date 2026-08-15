@@ -24,6 +24,7 @@ const {
   planCloseupInputs,
   isolateJobTimeline,
   segmentInputOptions,
+  buildFeatherMaskFilter,
   resolveEncodePlan,
   ENCODE_PACE_SPEED,
   INTER_FILE_DELAY_MS,
@@ -203,9 +204,22 @@ async function main() {
     paceArgs
   );
   check(
-    INTER_FILE_DELAY_MS >= 200 && INTER_FILE_DELAY_MS <= 500,
+    INTER_FILE_DELAY_MS >= 80 && INTER_FILE_DELAY_MS <= 400,
     'между файлами короткая пауза, чтобы NVENC закрыл предыдущую сессию',
     `delay=${INTER_FILE_DELAY_MS}`
+  );
+  const maskGraph = buildFeatherMaskFilter({
+    width: 588, height: 1080, fps: 30, duration: 6, feather: 48, outputLabel: 'splitMask'
+  });
+  check(
+    maskGraph.includes('geq=') && maskGraph.includes('loop=-1:size=1') && maskGraph.includes('r=1:d=1'),
+    'маска мягкой границы считается один раз и повторяется, а не geq на каждый кадр',
+    maskGraph
+  );
+  check(
+    !maskGraph.includes('r=30:d='),
+    'маска не генерирует полнокадровый geq на всю длительность ролика',
+    maskGraph
   );
   const shortGraphCmd = ffmpeg();
   attachFilterGraph(shortGraphCmd, ['[0:v]null[v]']);

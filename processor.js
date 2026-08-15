@@ -38,7 +38,7 @@ const MAX_OUTPUT_FPS = 30;
  */
 const ENCODE_PACE_SPEED = 4;
 /** Пауза между файлами, чтобы NVENC успел закрыть предыдущую сессию. */
-const INTER_FILE_DELAY_MS = 350;
+const INTER_FILE_DELAY_MS = 120;
 const MIN_OUTPUT_BYTES = 64;
 
 function paceGlobalArgs() {
@@ -743,6 +743,22 @@ function evenRound(value) {
   return Math.max(2, Math.round(value / 2) * 2);
 }
 
+/**
+ * Мягкая граница split-screen. Градиент считается один раз на полном кадре,
+ * затем кадр повторяется. Тот же raised-cosine, без geq на каждый кадр ролика.
+ */
+function buildFeatherMaskFilter({ width, height, fps, duration, feather, outputLabel }) {
+  const denom = Math.max(1, feather - 1).toFixed(1);
+  const ease = `0.5-0.5*cos(PI*clip(X/${denom},0,1))`;
+  const maskDuration = Math.max(1, duration + 1).toFixed(3);
+  const rate = Number.isFinite(fps) && fps > 0 ? fps : MAX_OUTPUT_FPS;
+  return (
+    `color=c=black:s=${width}x${height}:r=1:d=1,` +
+      `format=gray,geq=lum='255*(${ease})',` +
+      `loop=-1:size=1,fps=${rate},trim=duration=${maskDuration}[${outputLabel}]`
+  );
+}
+
 /** Приводит настройки раскладки к безопасным значениям. */
 function normalizeSplit(config = {}) {
   const number = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
@@ -977,17 +993,14 @@ function buildSplitFilters({
     )
   );
   filters.push(`[${L('splitRightRgb')}]format=${alphaFormatFor(target.pixelFormat)}[${L('splitRight')}]`);
-
-  const maskDuration = Math.max(1, duration + 1).toFixed(3);
-  // Raised-cosine вместо линейного lerp: по краям стык полностью непрозрачный,
-  // в середине нет «двойной экспозиции». Маска сразу того же размера, что и
-  // правая полоса — без loop/hstack, которые сжимают градиент в несколько пикселей.
-  const denom = Math.max(1, feather - 1).toFixed(1);
-  const ease = `0.5-0.5*cos(PI*clip(X/${denom},0,1))`;
-  filters.push(
-    `color=c=black:s=${rightWindow}x${height}:r=${target.fps}:d=${maskDuration},` +
-      `format=gray,geq=lum='255*(${ease})'[${L('splitMask')}]`
-  );
+  filters.push(buildFeatherMaskFilter({
+    width: rightWindow,
+    height,
+    fps: target.fps,
+    duration,
+    feather,
+    outputLabel: L('splitMask')
+  }));
   filters.push(`[${L('splitRight')}][${L('splitMask')}]alphamerge=shortest=1[${L('splitSoft')}]`);
   filters.push(
     `[${L('splitBase')}][${L('splitSoft')}]overlay=x=${seam}:y=0:shortest=1:format=yuv444:alpha=straight[${outputLabel}]`
@@ -1048,7 +1061,7 @@ function buildGraph({
   if (overlay) {
     // Бесконечный луп: короткий оверлей повторяется, длинный обрежется по shortest=1.
     overlayIndex = inputBase + inputs.length;
-    inputs.push({ file: overlay.file, options: ['-stream_loop', '-1'] });
+    inputs.push({ file: overlay.file, options: ['-stream_loop', '-1'], pace: false });
   }
 
   let closeupIndex = -1;
@@ -1063,7 +1076,7 @@ function buildGraph({
     closeupIndex = inputBase + inputs.length;
     closeupWrap = planned.wrap;
     closeupRemaining = planned.remaining;
-    planned.inputs.forEach((input) => inputs.push(input));
+    planned.inputs.forEach((input) => inputs.push({ ...input, pace: false }));
   }
 
   const segments = [
@@ -1124,11 +1137,13 @@ function buildGraph({
   if (overlay) {
     const opacity = clamp(Number(overlayOpacity) / 100, 0, 1);
     const overlayFps = needsFpsConvert(target.fps, overlay.fps) ? `fps=${target.fps},` : '';
+    const overlayAlpha = opacity >= 0.999
+      ? 'format=rgba'
+      : `format=rgba,colorchannelmixer=aa=${opacity.toFixed(3)}`;
     filters.push(
       `[${overlayIndex}:v:0]setpts=PTS-STARTPTS,${overlayFps}` +
         `scale=${target.width}:${target.height}:force_original_aspect_ratio=increase:flags=${SCALE_FLAGS},` +
-        `crop=${target.width}:${target.height},setsar=1,format=rgba,` +
-        `colorchannelmixer=aa=${opacity.toFixed(3)}[${L('ovl')}]`
+        `crop=${target.width}:${target.height},setsar=1,${overlayAlpha}[${L('ovl')}]`
     );
     filters.push(`[${videoOut}][${L('ovl')}]overlay=x=0:y=0:shortest=1:eof_action=pass:format=auto[${L('vout')}]`);
     videoOut = L('vout');
@@ -1139,18 +1154,10 @@ function buildGraph({
   filters.push(`[${videoOut}]format=${target.pixelFormat}[${L('vfinal')}]`);
 
   const audioOut = L('ca');
+  // Потолок 4× держит только -readrate на исходниках. realtime/arealtime в графе
+  // дублировали паузу и нагружали CPU, не меняя качество.
   const pace = Boolean(applyPace && target.pixelFormat === 'yuv420p');
-  if (pace) {
-    filters.push(
-      `[${L('vfinal')}]setpts=PTS-STARTPTS,realtime=speed=${ENCODE_PACE_SPEED}[${L('vpaced')}]`
-    );
-    filters.push(
-      `[${audioOut}]asetpts=PTS-STARTPTS,arealtime=speed=${ENCODE_PACE_SPEED}[${L('apaced')}]`
-    );
-    return { inputs, filters, videoOut: L('vpaced'), audioOut: L('apaced'), layout, pace: true };
-  }
-
-  return { inputs, filters, videoOut: L('vfinal'), audioOut, layout, pace: false };
+  return { inputs, filters, videoOut: L('vfinal'), audioOut, layout, pace };
 }
 
 // ---------------------------------------------------------------------------
@@ -1202,7 +1209,7 @@ function applyInputs(command, inputs, plan, pace) {
   inputs.forEach((input) => {
     const added = command.input(input.file);
     if (plan.hwaccel) added.inputOptions(['-hwaccel', plan.hwaccel]);
-    if (pace) added.inputOptions(paceGlobalArgs());
+    if (pace && input.pace !== false) added.inputOptions(paceGlobalArgs());
     if (input.options && input.options.length) added.inputOptions(input.options);
   });
 }
@@ -1462,7 +1469,7 @@ class BatchProcessor {
       if (plan.pixelFormat === 'yuv420p') {
         this.log(
           'info',
-          `Скорость: до ${ENCODE_PACE_SPEED}× (~50% Video Encode). ` +
+          `Скорость: до ${ENCODE_PACE_SPEED}× (~50% Video Encode), без лишней нагрузки на CPU. ` +
             `Каждый ролик пишется сразу в ${prefix}N.mov, пауза ${INTER_FILE_DELAY_MS} мс между файлами`
         );
       }
@@ -1754,6 +1761,7 @@ module.exports = {
   isolateJobTimeline,
   segmentInputOptions,
   resolveSplitAt,
+  buildFeatherMaskFilter,
   isVideoFile,
   shortenFfmpegError,
   ENCODE_PACE_SPEED,
