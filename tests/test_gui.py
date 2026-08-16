@@ -200,3 +200,13 @@ def test_status_bar_follows_the_live_counters(app, context):
     app._update_status()
     text = app._status_label.cget("text")
     assert "Frames: 42" in text and "Cycles: 7" in text
+
+
+def test_details_panel_follows_the_running_step(app):
+    node = [n for n in app.project.workflow.walk() if n.type is NodeType.ACTION][0]
+    app._queue.put(("node", node.id))
+    app._drain_queue()
+    details = app._details.get("1.0", "end")
+    assert "RUNNING" in details
+    assert node.describe() in details
+    assert app._canvas._active_node == node.id

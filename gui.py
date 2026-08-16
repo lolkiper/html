@@ -1648,13 +1648,19 @@ class App(tk.Tk):
                      values=("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR")).pack(side="right", padx=6)
         ttk.Button(header, text="Clear", command=self.clear_log).pack(side="right")
         ttk.Button(header, text="Save log...", command=self.save_log).pack(side="right", padx=6)
-        self._log_view = tk.Text(frame, height=11, wrap="none", background="#12141a",
+        body = ttk.Frame(frame)
+        body.pack(fill="both", expand=True, pady=(4, 0))
+        self._log_view = tk.Text(body, height=11, wrap="none", background="#12141a",
                                 foreground=PALETTE["text"], borderwidth=0, state="disabled",
                                 font=("Consolas", 9))
-        scroll = ttk.Scrollbar(frame, orient="vertical", command=self._log_view.yview)
-        self._log_view.configure(yscrollcommand=scroll.set)
-        self._log_view.pack(side="left", fill="both", expand=True, pady=(4, 0))
-        scroll.pack(side="right", fill="y", pady=(4, 0))
+        scroll_y = ttk.Scrollbar(body, orient="vertical", command=self._log_view.yview)
+        scroll_x = ttk.Scrollbar(body, orient="horizontal", command=self._log_view.xview)
+        self._log_view.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        self._log_view.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
         for level, color in LEVEL_COLORS.items():
             self._log_view.tag_configure(level.name, foreground=color)
 
@@ -1734,6 +1740,11 @@ class App(tk.Tk):
                     self._status["confidence"] = payload.confidence
                 elif kind == "node":
                     self._canvas.set_active(payload)
+                    running = self.project.workflow.find(payload)
+                    if running is not None:
+                        self._set_text(
+                            self._details, self._describe_node(running, prefix="RUNNING - ")
+                        )
                 elif kind == "run_state":
                     self._start_button.configure(
                         text="⏸ PAUSE (F8)" if payload == RunState.RUNNING else "▶ START (F8)"
@@ -2098,9 +2109,11 @@ class App(tk.Tk):
     def _on_node_selected(self, node_id: str, branch: str) -> None:
         self._selection = (node_id, branch)
         node = self.project.workflow.find(node_id)
-        if node is None:
-            return
-        lines = [f"{node.type.value}: {node.describe()}"]
+        if node is not None:
+            self._set_text(self._details, self._describe_node(node, branch))
+
+    def _describe_node(self, node: WorkflowNode, branch: str = "", prefix: str = "") -> str:
+        lines = [f"{prefix}{node.type.value}: {node.describe()}"]
         if branch:
             lines.append(f"Selected branch: {branch}")
         if node.condition is not None:
@@ -2115,7 +2128,7 @@ class App(tk.Tk):
             lines.append(f"Count: {node.count}, iteration limit {node.max_iterations}")
         if not node.enabled:
             lines.append("This step is disabled.")
-        self._set_text(self._details, "\n".join(lines))
+        return "\n".join(lines)
 
     def _insertion_point(self) -> tuple[list[WorkflowNode], int]:
         """Where a new step goes: into the selected branch, or after the node."""
