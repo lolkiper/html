@@ -122,6 +122,15 @@ class Win32WindowBackend:
         self._ctypes = ctypes
         self._wintypes = wintypes
         self._user32 = ctypes.windll.user32
+        # Declared explicitly: a default ctypes call would return the window
+        # handle as a 32 bit int.
+        self._user32.GetForegroundWindow.restype = wintypes.HWND
+        self._user32.IsWindow.argtypes = [wintypes.HWND]
+        self._user32.IsWindow.restype = wintypes.BOOL
+        self._user32.IsIconic.argtypes = [wintypes.HWND]
+        self._user32.IsIconic.restype = wintypes.BOOL
+        self._user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        self._user32.SetForegroundWindow.restype = wintypes.BOOL
 
     # -- helpers ----------------------------------------------------------
     def _rect(self, handle: int, client: bool) -> WindowRect:  # pragma: no cover - Windows
@@ -444,6 +453,9 @@ def _process_executable(process_id: int) -> str:  # pragma: no cover - Windows o
 
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, process_id)
     if not handle:
         return ""

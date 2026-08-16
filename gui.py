@@ -367,6 +367,15 @@ class RegionSelector(tk.Toplevel):
         self.destroy()
 
 
+def pillow_available() -> bool:
+    """Pillow is only needed to show frames in the editor, so it stays optional."""
+    try:
+        import PIL.ImageTk  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def to_photo_image(image: np.ndarray, max_size: tuple[int, int] = (400, 400)):
     """Convert a BGR frame to a Tk image in memory (never touches the disk)."""
     from PIL import Image, ImageTk
@@ -382,7 +391,7 @@ def to_photo_image(image: np.ndarray, max_size: tuple[int, int] = (400, 400)):
 
 def ask_roi(parent: tk.Misc, roi: Roi, app: "App | None") -> Roi | None:
     """Edit a region either numerically or by dragging on the current frame."""
-    if app is not None and messagebox.askyesno(
+    if app is not None and pillow_available() and messagebox.askyesno(
         "Select region",
         "Select the region on the current LDPlayer screen?\n"
         "Choose No to type the values manually.",
@@ -1136,6 +1145,14 @@ class StateEditor(tk.Toplevel):
             self._references.insert("end", spec.describe())
 
     def _add_reference_from_screen(self) -> None:
+        if not pillow_available():
+            messagebox.showinfo(
+                "Pillow required",
+                "Selecting a region on screen needs Pillow (pip install Pillow).\n"
+                "You can still add a reference image from a file.",
+                parent=self,
+            )
+            return
         frame = self.app.grab_preview_frame()
         if frame is None:
             return

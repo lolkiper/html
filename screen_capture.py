@@ -158,6 +158,7 @@ class WindowsGdiBackend:
         self._wintypes = wintypes
         self._user32 = ctypes.windll.user32
         self._gdi32 = ctypes.windll.gdi32
+        self._declare_signatures()
         try:  # per monitor DPI awareness -> window rects match real pixels
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:  # pragma: no cover - older Windows
@@ -165,6 +166,41 @@ class WindowsGdiBackend:
                 self._user32.SetProcessDPIAware()
             except Exception:
                 pass
+
+    def _declare_signatures(self) -> None:  # pragma: no cover - Windows only
+        """Declare the GDI signatures.
+
+        Without this, ctypes assumes a 32 bit ``int`` return value, which would
+        truncate the device context and bitmap handles on 64 bit Windows.
+        """
+        ctypes, wintypes = self._ctypes, self._wintypes
+        user32, gdi32 = self._user32, self._gdi32
+        user32.GetWindowDC.argtypes = [wintypes.HWND]
+        user32.GetWindowDC.restype = wintypes.HDC
+        user32.GetDC.argtypes = [wintypes.HWND]
+        user32.GetDC.restype = wintypes.HDC
+        user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+        user32.ReleaseDC.restype = ctypes.c_int
+        user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+        user32.PrintWindow.restype = wintypes.BOOL
+        gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi32.CreateCompatibleDC.restype = wintypes.HDC
+        gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+        gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi32.SelectObject.restype = wintypes.HGDIOBJ
+        gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi32.DeleteDC.argtypes = [wintypes.HDC]
+        gdi32.BitBlt.argtypes = [
+            wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD,
+        ]
+        gdi32.BitBlt.restype = wintypes.BOOL
+        gdi32.GetDIBits.argtypes = [
+            wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT,
+            ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT,
+        ]
+        gdi32.GetDIBits.restype = ctypes.c_int
 
     def _bitmap_info(self, width: int, height: int):  # pragma: no cover - Windows only
         ctypes = self._ctypes
@@ -237,10 +273,12 @@ class WindowsGdiBackend:
                     user32.ReleaseDC(0, screen_dc)
             if not copied:
                 raise CaptureError("Both PrintWindow and BitBlt failed")
-            gdi32.GetDIBits(
+            scanlines = gdi32.GetDIBits(
                 memory_dc, bitmap, 0, height, buffer,
                 ctypes.byref(info), self.DIB_RGB_COLORS,
             )
+            if not scanlines:
+                raise CaptureError("GetDIBits returned no pixel data")
             bgra = np.frombuffer(buffer, dtype=np.uint8).reshape(height, width, 4)
             image = np.ascontiguousarray(bgra[:, :, :3])
             if not image.any() and handle:
