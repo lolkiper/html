@@ -326,7 +326,16 @@ class MssBackend:
     def grab(self, x: int, y: int, width: int, height: int, handle: int | None = None) -> np.ndarray:
         if width <= 0 or height <= 0:
             raise CaptureError(f"Invalid capture size {width}x{height}")
-        raw = self._session().grab({"left": x, "top": y, "width": width, "height": height})
+        try:
+            raw = self._session().grab({"left": x, "top": y, "width": width, "height": height})
+        except Exception as exc:
+            # A region reaching outside the desktop makes the X server or the
+            # Windows backend fail; report it as a capture problem instead of
+            # letting a backend specific exception escape.
+            raise CaptureError(
+                f"The region {width}x{height} at ({x},{y}) could not be captured; "
+                f"is the window off-screen? ({exc})"
+            ) from exc
         frame = np.frombuffer(raw.rgb, dtype=np.uint8).reshape(raw.height, raw.width, 3)
         return np.ascontiguousarray(frame[:, :, ::-1])  # RGB -> BGR
 

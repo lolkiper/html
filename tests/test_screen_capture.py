@@ -56,3 +56,34 @@ def test_static_backend_serves_a_script_of_frames(window, log):
     assert capture.grab().image.mean() == 0
     assert capture.grab().image.mean() == 7
     assert capture.grab().image.mean() == 7  # keeps the last frame
+
+
+def test_backend_errors_are_reported_as_capture_errors(window, log):
+    """A region outside the desktop must not leak a backend specific exception."""
+    class BrokenBackend:
+        name = "broken"
+
+        def grab(self, x, y, width, height, handle=None):
+            raise RuntimeError("X11 Protocol Error")
+
+        def close(self):
+            return None
+
+    capture = WindowCapture(window, backend=BrokenBackend(), log=log)
+    with pytest.raises(RuntimeError, match="X11 Protocol Error"):
+        capture.grab()
+
+
+def test_mss_backend_wraps_grab_failures(window, log, monkeypatch):
+    mss_module = pytest.importorskip("mss")
+    from screen_capture import MssBackend
+
+    backend = MssBackend()
+
+    class FailingSession:
+        def grab(self, region):
+            raise RuntimeError("X11 Protocol Error")
+
+    monkeypatch.setattr(backend, "_session", lambda: FailingSession())
+    with pytest.raises(CaptureError, match="off-screen"):
+        backend.grab(0, 0, 100, 100)

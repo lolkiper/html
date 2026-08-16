@@ -42,6 +42,7 @@ from actions import (
     TypeText,
     Wait,
 )
+from i18n import tr
 from logger import EventLog, get_logger
 from vision import PixelRect, crop_copy
 
@@ -126,26 +127,27 @@ class RecordedStep:
 
     def describe(self) -> str:
         if self.kind in ("click", "double", "right") and self.position:
-            name = {"click": "Click", "double": "Double click", "right": "Right click"}[self.kind]
-            where = f"({self.position[0]:.3f}, {self.position[1]:.3f})"
+            name = {
+                "click": tr("Click"), "double": tr("Double click"), "right": tr("Right click")
+            }[self.kind]
+            where = "(%.3f, %.3f)" % self.position
             if self.patch is not None or self.reference:
-                return f"{name} on the recognised element {where}"
-            return f"{name} at {where}"
+                return tr("%s on the recognised element %s") % (name, where)
+            return tr("%s at %s") % (name, where)
         if self.kind == "drag" and self.position and self.end_position:
-            return (
-                f"Drag ({self.position[0]:.3f}, {self.position[1]:.3f}) -> "
-                f"({self.end_position[0]:.3f}, {self.end_position[1]:.3f})"
+            return tr("Drag %s -> %s") % (
+                "(%.3f, %.3f)" % self.position, "(%.3f, %.3f)" % self.end_position
             )
         if self.kind == "move" and self.position:
-            return f"Move pointer to ({self.position[0]:.3f}, {self.position[1]:.3f})"
+            return tr("Move pointer to %s") % ("(%.3f, %.3f)" % self.position)
         if self.kind == "hotkey":
-            return f"Hotkey {'+'.join(self.keys)}"
+            return tr("Hotkey %s") % "+".join(self.keys)
         if self.kind == "key":
-            return f"Key {self.key}"
+            return tr("Key %s") % self.key
         if self.kind == "text":
-            return f"Type text ({len(self.text)} characters)"
+            return tr("Type text (%s characters)") % len(self.text)
         if self.kind == "wait":
-            return f"Wait {self.seconds:.2f}s"
+            return tr("Wait %.2fs") % self.seconds
         return self.kind
 
 

@@ -612,6 +612,16 @@ RU: dict[str, str] = {
         "Нечего делать. Используйте --run, --analyze, --print-workflow или --list-instances.",
     "WARNING, unexpected image artefacts found:":
         "ВНИМАНИЕ: найдены неожидаемые файлы изображений:",
+    # ------------------------------------------------------- recorded steps
+    "%s at %s": "%s в %s",
+    "%s on the recognised element %s": "%s по распознанному элементу %s",
+    "Right click": "Правый клик",
+    "Drag %s -> %s": "Перетаскивание %s -> %s",
+    "Move pointer to %s": "Подвести мышь к %s",
+    "Hotkey %s": "Горячие клавиши %s",
+    "Key %s": "Клавиша %s",
+    "Type text (%s characters)": "Ввод текста (%s символов)",
+    "Wait %.2fs": "Пауза %.2f с",
     # -------------------------------------------------------- example project
     "Main screen the test starts from": "Основной экран, с которого начинается тест",
     "Error message screen": "Экран с сообщением об ошибке",

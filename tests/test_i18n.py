@@ -131,3 +131,20 @@ def test_the_russian_dictionary_has_no_empty_entries():
     }
     identical = {key for key, value in RU.items() if key == value} - layout_only
     assert identical == set()
+
+
+def test_recorded_step_descriptions_are_translated(russian, window, log):
+    from recorder import ActionRecorder, RawEvent, RecorderSettings
+
+    recorder = ActionRecorder(window, RecorderSettings(insert_waits=True), log=log)
+    recorder.start()
+    recorder.feed(RawEvent(kind="down", x=200, y=200, at=1.0))
+    recorder.feed(RawEvent(kind="up", x=200, y=200, at=1.1))
+    recorder.feed(RawEvent(kind="key_down", key="t", char="t", at=2.0))
+    recorder.feed(RawEvent(kind="key_down", key="enter", at=3.0))
+    recorder.stop()
+    descriptions = recorder.summary()
+    assert descriptions[0].startswith("Клик в (")
+    assert "Пауза" in descriptions[1]
+    assert "Ввод текста (1 символов)" in descriptions
+    assert "Клавиша enter" in descriptions

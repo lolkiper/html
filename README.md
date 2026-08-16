@@ -16,6 +16,9 @@ Captured frames never touch the disk:
 LDPlayer -> capture -> RAM -> OpenCV / OCR -> result -> release memory
 ```
 
+Русская документация: [README.ru.md](README.ru.md). The interface itself is
+Russian by default and can be switched to English in the toolbar.
+
 No `screenshots/`, `temp/` or `cache_images/` directory is ever created, and no
 image data is written to the log.  The only images stored on disk are the
 reference images **you** add to a project.
@@ -27,6 +30,7 @@ reference images **you** add to a project.
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [How recognition works](#how-recognition-works)
+- [Recording a macro](#recording-a-macro)
 - [Visual states](#visual-states)
 - [Scenarios: conditions, actions, verification](#scenarios-conditions-actions-verification)
 - [State machine mode](#state-machine-mode)
@@ -78,6 +82,7 @@ Notes on the dependencies:
 | `Pillow` | decoding reference images, preview in the editor | `requirements.txt` |
 | `mss` | capture fallback / screen-region capture | `requirements.txt` |
 | `pyperclip` | typing non-ASCII text | `requirements.txt` |
+| `pynput` | the macro recorder | `requirements.txt` |
 | `paddleocr` + `paddlepaddle` | OCR for text and number conditions | `requirements-ocr.txt` |
 | `pytesseract` | lighter OCR alternative | install on demand |
 | `pytest` | running the tests | `requirements-dev.txt` |
@@ -108,6 +113,39 @@ CPython on Windows, so the GUI needs no extra install.
 
 Tip: switch on **Dry run** first.  The engine then analyses, decides and logs
 exactly what it would do, without moving the mouse.
+
+---
+
+## Recording a macro
+
+**RECORD MACRO** in the scenario panel, or **Record...** in the state editor,
+opens the recorder: press *Start recording*, perform the combination in LDPlayer,
+press **F10**, then *Use the recording*.
+
+Raw input is condensed into meaningful actions:
+
+| What you did | What was recorded |
+|---|---|
+| press and release on one spot | Left Click |
+| two quick clicks | Double Click |
+| press here, release far away | Drag |
+| Ctrl+A and friends | Hotkey |
+| a run of characters | one Type Text action |
+| a gap between actions | a Wait of the same length |
+| anything outside the emulator window | ignored |
+
+Positions are stored relative to the window (0..1), so a recording keeps working
+after the emulator is moved or resized.  With **Anchor clicks to images** the
+recorder also keeps a small patch of what was clicked, stores it as a reference
+image and clicks the element the engine finds - which is what makes this a visual
+macro rather than a coordinate replay.
+
+To run a different combination per screen, record one into each state
+(`REWARD_SCREEN`, `ERROR_SCREEN`, ...) and let the scenario dispatch on the
+detected state, or use the *states* engine mode, which walks the state table on
+its own.
+
+Recording needs the `pynput` package (part of `requirements.txt`).
 
 ---
 
@@ -316,7 +354,8 @@ python main.py --project MyTest.ldproj --run --region 120,90,360,560
 ```
 
 Useful flags: `--instance` (index, handle or part of the title), `--mode
-workflow|states`, `--start-state`, `--duration`, `--log-file`, `--log-level`.
+workflow|states`, `--start-state`, `--duration`, `--log-file`, `--log-level`,
+`--lang ru|en`.
 The exit code is `0` when no step failed, `1` otherwise, so a scenario can be
 used as a CI check.
 
@@ -339,7 +378,9 @@ used as a CI check.
 | `mouse.py`, `keyboard.py` | window-relative input, global hotkeys |
 | `safety.py` | pre-action checks, cooldowns, run/pause/stop |
 | `project.py` | project storage and reference images |
+| `recorder.py` | records real input and condenses it into actions |
 | `logger.py` | text-only log with redaction |
+| `i18n.py` | interface and log translations |
 
 ---
 
