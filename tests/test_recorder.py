@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pytest
 
@@ -333,3 +335,84 @@ def test_listener_creation_reports_a_missing_dependency(window, log, monkeypatch
     monkeypatch.setattr(PynputListener, "available", lambda self: False)
     assert create_listener(recorder, log=log) is None
     assert any("pynput" in line for line in log.lines())
+
+
+def test_the_anchor_patch_shows_what_was_clicked_not_the_result(window, log):
+    """The screen usually changes on click, so the patch is taken at press time."""
+    from vision import match_template
+
+    served: list[str] = []
+
+    def provider() -> np.ndarray:
+        # the first call happens on press (screen A), later calls would be the
+        # screen the click led to (screen B)
+        name = "A" if not served else "B"
+        served.append(name)
+        return SCREENS[name]
+
+    recorder = ActionRecorder(
+        window,
+        RecorderSettings(
+            insert_waits=False, anchor_clicks_to_images=True, anchor_patch=25,
+            anchor_interval=30.0,      # one capture at start, none during the test
+        ),
+        log=log,
+        frame_provider=provider,
+    )
+    recorder.start()
+    press_release(recorder, 100 + BUTTON.center[0], 50 + BUTTON.center[1], at=1.0)
+    recorder.stop()
+    patch = recorder.steps[0].patch
+    assert patch is not None
+    assert served == ["A"], "the anchor frame must predate the click"
+    assert match_template(SCREENS["A"], patch, threshold=0.9).found
+    assert not match_template(SCREENS["B"], patch, threshold=0.9).found
+
+
+def test_a_failing_frame_capture_does_not_break_the_recording(window, log):
+    def provider():
+        raise RuntimeError("capture failed")
+
+    recorder = ActionRecorder(
+        window,
+        RecorderSettings(insert_waits=False, anchor_clicks_to_images=True),
+        log=log,
+        frame_provider=provider,
+    )
+    recorder.start()
+    press_release(recorder, 200, 200, at=1.0)
+    recorder.stop()
+    assert [step.kind for step in recorder.steps] == ["click"]
+    assert recorder.steps[0].patch is None
+    assert recorder.to_actions()[0].target.mode is TargetMode.WINDOW
+
+
+def test_frame_buffer_returns_a_frame_from_before_the_click(log):
+    from recorder import FrameBuffer
+
+    images = [SCREENS["A"], SCREENS["B"], SCREENS["C"]]
+    index = {"n": 0}
+
+    def provider() -> np.ndarray:
+        image = images[min(index["n"], len(images) - 1)]
+        index["n"] += 1
+        return image
+
+    buffer = FrameBuffer(provider, interval=0.05, keep=3, log=log)
+    buffer.capture_once()
+    moment = time.monotonic()
+    time.sleep(0.02)
+    buffer.capture_once()
+    chosen = buffer.frame_before(moment + 0.01, margin=0.0)
+    assert np.array_equal(chosen, SCREENS["A"])
+    assert index["n"] == 2
+    buffer.stop()
+    assert buffer.frame_before(time.monotonic()) is None
+
+
+def test_frame_buffer_survives_a_failing_provider(log):
+    from recorder import FrameBuffer
+
+    buffer = FrameBuffer(lambda: (_ for _ in ()).throw(RuntimeError("boom")), log=log)
+    assert buffer.capture_once() is None
+    assert any("Could not capture" in line for line in log.lines())

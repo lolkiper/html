@@ -22,7 +22,9 @@ ordinary reference images of the project.
 from __future__ import annotations
 
 import string
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Protocol, Sequence
 
@@ -79,6 +81,7 @@ class RecorderSettings:
     typing_gap: float = 1.2         # a longer pause splits the text
     anchor_clicks_to_images: bool = False
     anchor_patch: int = 40          # half the size of the captured patch
+    anchor_interval: float = 0.25   # how often the anchor frame buffer refreshes
     anchor_confidence: float = 0.85
     ignore_outside_window: bool = True
     record_moves: bool = False      # pointer paths are usually just noise
@@ -95,6 +98,7 @@ class RecorderSettings:
             "typing_gap": self.typing_gap,
             "anchor_clicks_to_images": self.anchor_clicks_to_images,
             "anchor_patch": self.anchor_patch,
+            "anchor_interval": self.anchor_interval,
             "anchor_confidence": self.anchor_confidence,
             "ignore_outside_window": self.ignore_outside_window,
             "record_moves": self.record_moves,
@@ -106,6 +110,71 @@ class RecorderSettings:
         data = dict(data or {})
         known = {name for name in cls.__dataclass_fields__}
         return cls(**{key: value for key, value in data.items() if key in known})
+
+
+class FrameBuffer:
+    """Keeps the last few frames in RAM while a recording runs.
+
+    An application usually reacts to the button *press*, so a frame captured
+    after the click already shows the result.  This buffer refreshes in the
+    background, which lets the recorder pick a frame from just before the click
+    and anchor it to what the user actually clicked on.
+    """
+
+    def __init__(
+        self,
+        provider: Callable[[], np.ndarray | None],
+        interval: float = 0.25,
+        keep: int = 3,
+        log: EventLog | None = None,
+    ) -> None:
+        self.provider = provider
+        self.interval = max(0.05, float(interval))
+        self.log = log or get_logger()
+        self._frames: deque[tuple[float, np.ndarray]] = deque(maxlen=max(2, keep))
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._stop.clear()
+        self.capture_once()
+        self._thread = threading.Thread(target=self._run, name="anchor-frames", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            self.capture_once()
+
+    def capture_once(self) -> np.ndarray | None:
+        try:
+            image = self.provider()
+        except Exception as exc:
+            self.log.debug("Could not capture the screen for anchoring: %s", exc)
+            return None
+        if image is None:
+            return None
+        with self._lock:
+            self._frames.append((time.monotonic(), image))
+        return image
+
+    def frame_before(self, moment: float, margin: float = 0.05) -> np.ndarray | None:
+        """The newest frame captured before ``moment``, or the oldest one kept."""
+        with self._lock:
+            frames = list(self._frames)
+        if not frames:
+            return None
+        older = [image for at, image in frames if at <= moment - margin]
+        return older[-1] if older else frames[0][1]
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+        self._thread = None
+        with self._lock:
+            self._frames.clear()
 
 
 @dataclass
@@ -169,6 +238,8 @@ class ActionRecorder:
         self.recording = False
         self.skipped_outside = 0
         self._pending_press: RawEvent | None = None
+        self._press_image: np.ndarray | None = None
+        self._frames: FrameBuffer | None = None
         self._modifiers: set[str] = set()
         self._text_buffer: str = ""
         self._text_started: float = 0.0
@@ -178,6 +249,11 @@ class ActionRecorder:
     # ------------------------------------------------------------ lifecycle
     def start(self) -> None:
         self.clear()
+        if self.settings.anchor_clicks_to_images and self.frame_provider is not None:
+            self._frames = FrameBuffer(
+                self.frame_provider, self.settings.anchor_interval, log=self.log
+            )
+            self._frames.start()
         self.recording = True
         self._started_at = time.monotonic()
         self.log.info("Recording started (press %s to stop)", self.settings.stop_key.upper())
@@ -187,6 +263,9 @@ class ActionRecorder:
             return
         self._flush_text()
         self.recording = False
+        if self._frames is not None:
+            self._frames.stop()
+            self._frames = None
         self.log.success("Recording finished: %s step(s)", len(self.steps))
         if self.skipped_outside:
             self.log.info(
@@ -197,12 +276,17 @@ class ActionRecorder:
         self.steps.clear()
         self.skipped_outside = 0
         self._pending_press = None
+        self._press_image = None
         self._modifiers.clear()
         self._text_buffer = ""
         self._last_step_at = None
 
     def release(self) -> None:
         """Drop the captured patches (they are frames and must not linger)."""
+        self._press_image = None
+        if self._frames is not None:
+            self._frames.stop()
+            self._frames = None
         for step in self.steps:
             if step.patch is not None:
                 step.patch = None
@@ -243,12 +327,11 @@ class ActionRecorder:
         return step
 
     def _capture_patch(self, step: RecordedStep) -> None:
-        """Grab a small patch around the click, so the click can be anchored."""
-        if not self.settings.anchor_clicks_to_images or self.frame_provider is None:
+        """Cut a small patch around the click out of the frame taken at press time."""
+        if not self.settings.anchor_clicks_to_images or step.position is None:
             return
-        if step.position is None:
-            return
-        frame = self.frame_provider()
+        frame = self._press_image
+        self._press_image = None
         if frame is None:
             return
         height, width = frame.shape[:2]
@@ -276,6 +359,15 @@ class ActionRecorder:
             return
         if event.kind == "down":
             self._pending_press = event
+            if self._frames is not None:
+                # The buffer already holds frames from before this press.
+                self._press_image = self._frames.frame_before(event.at)
+            elif self.settings.anchor_clicks_to_images and self.frame_provider is not None:
+                try:
+                    self._press_image = self.frame_provider()
+                except Exception as exc:  # pragma: no cover - capture safety
+                    self.log.debug("Could not capture the screen for anchoring: %s", exc)
+                    self._press_image = None
         elif event.kind == "up":
             self._feed_release(event)
         elif event.kind == "move" and self.settings.record_moves:

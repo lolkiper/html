@@ -76,23 +76,25 @@ class Target:
                 x, y = int(self.x), int(self.y)
             else:
                 x, y = ctx.window.normalized_to_client(self.x, self.y)
-            return ResolvedPoint(x + self.offset_x, y + self.offset_y, None, "window position")
+            return ResolvedPoint(
+                x + self.offset_x, y + self.offset_y, None, tr("window position")
+            )
         if mode is TargetMode.CURRENT:
-            return ResolvedPoint(-1, -1, None, "current pointer position")
+            return ResolvedPoint(-1, -1, None, tr("current pointer position"))
         match: MatchResult | None = None
         source = ""
         if mode is TargetMode.LAST_MATCH:
-            match, source = ctx.last_match, "last match"
+            match, source = ctx.last_match, tr("last match")
         elif mode is TargetMode.REFERENCE:
             match = ctx.find_reference(self.reference, threshold=self.threshold, roi=self.roi)
-            source = f"reference '{self.reference}'"
+            source = tr("reference '%s'") % self.reference
         elif mode is TargetMode.TEXT:
             match = ctx.find_text(self.text, roi=self.roi)
-            source = f"text '{self.text}'"
+            source = tr("text '%s'") % self.text
         elif mode is TargetMode.STATE:
             state_name = self.state or ctx.detect().state
             match = ctx.state_match(state_name)
-            source = f"element of state '{state_name}'"
+            source = tr("element of state '%s'") % state_name
         if match is None or match.rect is None or not match.found:
             return None
         if self.anchor == "topleft":

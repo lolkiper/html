@@ -424,6 +424,9 @@ RU: dict[str, str] = {
     "element of state '%s'": "элемент состояния «%s»",
     "current": "текущее",
     "current pointer": "текущая позиция мыши",
+    "window position": "позиция в окне",
+    "current pointer position": "текущая позиция мыши",
+    "reference '%s'": "эталон «%s»",
     # ---------------------------------------------------------- state/report
     "full screen": "весь экран",
     "ROI %.2fx%.2f at (%.2f,%.2f)": "область %.2fx%.2f в (%.2f,%.2f)",
