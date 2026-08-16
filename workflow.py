@@ -149,25 +149,34 @@ class WorkflowNode:
     reason: str = ""
 
     # -------------------------------------------------------------- children
-    def branches(self) -> list[Branch]:
-        """Every child branch, in display order."""
+    def branches(self, include_empty: bool = False) -> list[Branch]:
+        """Every child branch, in display order.
+
+        ``include_empty`` also lists the branches a node could have but does not
+        use yet, which is how the editor offers an empty SUCCESS or ON FAILURE
+        slot to drop a step into.
+        """
         result: list[Branch] = []
         if self.type is NodeType.IF:
             result.append(Branch("YES", self.then_nodes, self.condition))
-            for branch in self.elif_branches:
-                result.append(branch)
-            if self.else_nodes:
+            result.extend(self.elif_branches)
+            if self.else_nodes or include_empty:
                 result.append(Branch("ELSE", self.else_nodes, None))
         elif self.type in (NodeType.RETRY, NodeType.LOOP):
             result.append(Branch("BODY", self.body, None))
-            if self.on_failure:
+            if self.on_failure or (include_empty and self.type is NodeType.RETRY):
                 result.append(Branch("ON FAILURE", self.on_failure, None))
         elif self.type is NodeType.VERIFY:
-            if self.on_success:
+            if self.on_success or self.on_failure or include_empty:
                 result.append(Branch("SUCCESS", self.on_success, None))
-            if self.on_failure:
                 result.append(Branch("FAILED", self.on_failure, None))
         return result
+
+    def branch(self, label: str) -> Branch | None:
+        for item in self.branches(include_empty=True):
+            if item.label == label:
+                return item
+        return None
 
     def child_lists(self) -> list[list["WorkflowNode"]]:
         lists = [self.then_nodes, self.else_nodes, self.body, self.on_success, self.on_failure]
@@ -418,9 +427,14 @@ class OutlineRow:
         return f"{self.prefix}{self.text}"
 
 
-def outline_rows(workflow: Workflow) -> list[OutlineRow]:
-    """Flatten the tree into printable rows, keeping the branch structure."""
+def outline_rows(workflow: Workflow, expand: Iterable[str] = ()) -> list[OutlineRow]:
+    """Flatten the tree into printable rows, keeping the branch structure.
+
+    ``expand`` lists node ids whose unused branches should be shown as empty
+    slots (the editor passes the current selection).
+    """
     rows: list[OutlineRow] = [OutlineRow("", 0, "START", "marker")]
+    expanded = set(expand)
 
     def render(nodes: Sequence[WorkflowNode], depth: int, prefix: str) -> None:
         for index, node in enumerate(nodes):
@@ -430,7 +444,7 @@ def outline_rows(workflow: Workflow) -> list[OutlineRow]:
             if not node.enabled:
                 label = f"{label}  [disabled]"
             rows.append(OutlineRow(node.id, depth, label, "node", prefix))
-            branches = node.branches()
+            branches = node.branches(include_empty=node.id in expanded)
             for branch_index, branch in enumerate(branches):
                 last = branch_index == len(branches) - 1
                 connector = "└── " if last else "├── "

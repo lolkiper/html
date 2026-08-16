@@ -1408,7 +1408,8 @@ class WorkflowCanvas(ttk.Frame):
         if workflow is None:
             return
         y = 16
-        for row in outline_rows(workflow):
+        expand = [self.selection[0]] if self.selection[0] else []
+        for row in outline_rows(workflow, expand=expand):
             x = 16 + row.depth * self.INDENT
             text = row.text
             if row.kind == "marker":
@@ -2111,10 +2112,8 @@ class App(tk.Tk):
                     "ON FAILURE": node.on_failure,
                 }.get(branch)
                 if container is None:
-                    for elif_branch in node.elif_branches:
-                        if elif_branch.label == branch:
-                            container = elif_branch.nodes
-                            break
+                    selected = node.branch(branch)
+                    container = selected.nodes if selected is not None else None
                 if container is not None:
                     return container, len(container)
             container = workflow.parent_list(node_id)
@@ -2215,7 +2214,11 @@ class App(tk.Tk):
             condition = ConditionEditor.ask(self, self)
             if condition is None:
                 return
-            node.elif_branches.append(Branch("ELSE IF", [], condition))
+            # The label identifies the branch when a step is inserted, so it has
+            # to stay unique per IF node.
+            node.elif_branches.append(
+                Branch(f"ELSE IF {len(node.elif_branches) + 1}", [], condition)
+            )
         elif not node.else_nodes:
             node.else_nodes.append(make_node(NodeType.WAIT, seconds=1.0))
         else:

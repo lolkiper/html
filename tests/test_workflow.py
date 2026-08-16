@@ -333,3 +333,46 @@ def test_node_descriptions_cover_every_type():
     assert labels[0] == "ANALYZE SCREEN"
     titled = make_node(NodeType.WAIT, title="Custom label")
     assert titled.describe() == "Custom label"
+
+
+def test_empty_branch_slots_appear_only_for_expanded_nodes():
+    verify = make_node(NodeType.VERIFY, state="STATE_C")
+    retry = make_node(NodeType.RETRY, attempts=2, body=[mark("x")])
+    workflow = Workflow(nodes=[verify, retry])
+    plain = outline_text(workflow)
+    assert "SUCCESS" not in plain and "ON FAILURE" not in plain
+    expanded = "\n".join(row.line for row in outline_rows(workflow, expand=[verify.id, retry.id]))
+    assert "SUCCESS" in expanded and "FAILED" in expanded and "ON FAILURE" in expanded
+    assert verify.branch("SUCCESS") is not None
+    assert verify.branch("nope") is None
+
+
+def test_multiple_else_if_branches_keep_distinct_labels():
+    node = make_node(
+        NodeType.IF,
+        condition=Always(False),
+        elif_branches=[
+            Branch("ELSE IF 1", [mark("first")], Always(False)),
+            Branch("ELSE IF 2", [mark("second")], Always(True)),
+        ],
+    )
+    labels = [branch.label for branch in node.branches()]
+    assert labels == ["YES", "ELSE IF 1", "ELSE IF 2"]
+    assert node.branch("ELSE IF 2").nodes[0].id == node.elif_branches[1].nodes[0].id
+    text = outline_text(Workflow(nodes=[node]))
+    assert text.count("ELSE IF") == 2
+
+
+def test_second_else_if_branch_is_executed(context):
+    node = make_node(
+        NodeType.IF,
+        condition=Always(False),
+        then_nodes=[mark("path", "then")],
+        elif_branches=[
+            Branch("ELSE IF 1", [mark("path", "first")], Always(False)),
+            Branch("ELSE IF 2", [mark("path", "second")], Always(True)),
+        ],
+        else_nodes=[mark("path", "else")],
+    )
+    run(context, single_pass([node]))
+    assert context.variables["path"] == "second"
