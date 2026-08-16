@@ -87,3 +87,49 @@ def test_mss_backend_wraps_grab_failures(window, log, monkeypatch):
     monkeypatch.setattr(backend, "_session", lambda: FailingSession())
     with pytest.raises(CaptureError, match="off-screen"):
         backend.grab(0, 0, 100, 100)
+
+
+def test_looks_blank_detects_a_black_buffer():
+    from screen_capture import looks_blank
+
+    assert looks_blank(None)
+    assert looks_blank(np.zeros((10, 10, 3), dtype=np.uint8))
+    assert looks_blank(np.ones((10, 10, 3), dtype=np.uint8))  # mean 1.0
+    assert not looks_blank(np.full((10, 10, 3), 40, dtype=np.uint8))
+
+
+def test_a_black_gdi_frame_is_replaced_by_a_screen_copy(window, log, monkeypatch):
+    """PrintWindow of LDPlayer often 'succeeds' with a black bitmap."""
+    import screen_capture
+
+    class BlackGdi:
+        name = "windows-gdi"
+
+        def grab(self, x, y, width, height, handle=None):
+            return np.zeros((height, width, 3), dtype=np.uint8)
+
+        def close(self):
+            return None
+
+    colourful = np.full((480, 320, 3), 40, dtype=np.uint8)
+
+    class FakeMss:
+        def grab(self, x, y, width, height, handle=None):
+            return colourful.copy()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(screen_capture, "MssBackend", FakeMss)
+    capture = WindowCapture(window, backend=BlackGdi(), log=log)
+    frame = capture.grab()
+    assert frame.image.mean() == 40
+    assert any("screen copy" in line for line in log.lines())
+
+
+def test_a_static_black_script_is_not_rewritten(window, log):
+    """Tests and dry-run feeds must keep an intentionally black frame."""
+    black = np.zeros((480, 320, 3), dtype=np.uint8)
+    capture = WindowCapture(window, backend=StaticBackend([black], loop=False), log=log)
+    assert capture.grab().image.mean() == 0
+

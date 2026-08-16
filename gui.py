@@ -51,7 +51,7 @@ from logger import EventLog, LogLevel, LogRecord, get_logger
 from ocr import Preprocess
 from project import Project, ProjectError, example_project
 from safety import RunState, SafetyController
-from screen_capture import CaptureError, WindowCapture, create_backend
+from screen_capture import CaptureError, WindowCapture, create_backend, looks_blank
 from state_machine import (
     AnalysisContext,
     EngineState,
@@ -364,6 +364,17 @@ class RegionSelector(tk.Toplevel):
         )
         self.canvas.pack(padx=8, pady=8)
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
+        if looks_blank(image):
+            ttk.Label(
+                self,
+                text=tr(
+                    "The frame is black: LDPlayer is covered or GPU capture failed. "
+                    "Move this window aside, uncover the emulator, then try again. "
+                    "Engine settings → Capture backend → mss."
+                ),
+                style="Heading.TLabel",
+                wraplength=max(360, self._photo.width() - 16),
+            ).pack(padx=8, pady=(0, 4))
         ttk.Label(
             self, text=tr('Drag to select. The frame is only shown, never saved.'),
             style="Muted.TLabel",
@@ -1390,7 +1401,7 @@ class StateEditor(tk.Toplevel):
         frame = self.app.grab_preview_frame()
         if frame is None:
             return
-        selector = RegionSelector(self, frame, "Select the region to remember")
+        selector = RegionSelector(self, frame, tr("Select the region to remember"))
         self.wait_window(selector)
         if selector.result is None:
             return
@@ -2313,6 +2324,31 @@ class App(tk.Tk):
             if not quiet:
                 messagebox.showinfo(tr("No window"), tr("Select an LDPlayer instance first."))
             return None
+        image = self._grab_once(quiet=quiet)
+        if image is None:
+            return None
+        if looks_blank(image):
+            try:
+                self.window.activate()
+            except Exception:
+                pass
+            self.update_idletasks()
+            time.sleep(0.15)
+            retry = self._grab_once(quiet=True)
+            if retry is not None:
+                image = retry
+        if looks_blank(image) and not quiet:
+            messagebox.showwarning(
+                tr("Capture failed"),
+                tr(
+                    "The captured frame is black. Uncover the LDPlayer window "
+                    "(do not minimise it), move this editor aside, then try again. "
+                    "If it stays black: Engine settings → Capture backend → mss."
+                ),
+            )
+        return image
+
+    def _grab_once(self, quiet: bool = False) -> np.ndarray | None:
         try:
             capture = WindowCapture(self.window, backend=self.project.settings.capture_backend,
                                     log=self.log)

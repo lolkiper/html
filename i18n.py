@@ -139,8 +139,15 @@ RU: dict[str, str] = {
     "Select the region on the current LDPlayer screen?\nChoose No to type the values manually.":
         "Выделить область на текущем экране LDPlayer?\nНет — ввести значения вручную.",
     "Select a region": "Выделите область",
+    "Select the region to remember": "Выделите область, которую нужно запомнить",
     "Drag to select. The frame is only shown, never saved.":
         "Выделите область мышью. Кадр только показывается и не сохраняется.",
+    "The frame is black: LDPlayer is covered or GPU capture failed. "
+    "Move this window aside, uncover the emulator, then try again. "
+    "Engine settings → Capture backend → mss.":
+        "Кадр чёрный: LDPlayer перекрыт или GPU-захват не сработал. "
+        "Отодвиньте это окно, чтобы был виден эмулятор, и повторите. "
+        "Настройки движка → Захват → mss.",
     "Use selection": "Использовать",
     "Whole screen": "Весь экран",
     "No selection": "Ничего не выделено",
@@ -311,6 +318,12 @@ RU: dict[str, str] = {
     "Select LDPlayer": "Выбор LDPlayer",
     "Refresh the list and pick an instance.": "Обновите список и выберите экземпляр.",
     "Capture failed": "Не удалось захватить экран",
+    "The captured frame is black. Uncover the LDPlayer window "
+    "(do not minimise it), move this editor aside, then try again. "
+    "If it stays black: Engine settings → Capture backend → mss.":
+        "Кадр чёрный. Не сворачивайте LDPlayer, отодвиньте этот редактор, "
+        "чтобы было видно окно эмулятора, и повторите. "
+        "Если снова чёрный: Настройки движка → Захват → mss.",
     "Screen region": "Область экрана",
     "Open project": "Открыть проект",
     "Open a project folder (*.ldproj)": "Открыть папку проекта (*.ldproj)",
@@ -563,6 +576,16 @@ RU: dict[str, str] = {
     "Window moved: (%s,%s) -> (%s,%s)": "Окно перемещено: (%s,%s) -> (%s,%s)",
     "Window resized: %sx%s -> %sx%s (coordinates rescaled)":
         "Размер окна изменён: %sx%s -> %sx%s (координаты пересчитаны)",
+    "PrintWindow returned a black frame; used a screen copy instead":
+        "PrintWindow вернул чёрный кадр; снята копия области экрана",
+    "Captured frame is black (mean=%.2f); PrintWindow often fails on LDPlayer":
+        "Кадр чёрный (яркость=%.2f); PrintWindow на LDPlayer часто так делает",
+    "mss fallback after a black frame failed: %s":
+        "Запасной захват mss после чёрного кадра не удался: %s",
+    "Captured frame is black (mean=%.2f). Uncover the LDPlayer window "
+    "and try capture backend 'mss' in engine settings":
+        "Кадр чёрный (яркость=%.2f). Откройте окно LDPlayer и в настройках "
+        "движка поставьте захват mss",
     "The selected LDPlayer window has disappeared": "Выбранное окно LDPlayer исчезло",
     "Project saved: %s": "Проект сохранён: %s",
     "Project loaded: %s (%s state(s), %s reference image(s))":

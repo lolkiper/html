@@ -30,6 +30,18 @@ IS_WINDOWS = sys.platform.startswith("win")
 
 _frame_counter = itertools.count(1)
 
+# PrintWindow of a GPU window (LDPlayer) often succeeds but paints nothing.
+# A real Android screen is never this dark as a whole; treat it as a failed grab.
+BLANK_MEAN = 2.0
+
+
+def looks_blank(image: np.ndarray | None, max_mean: float = BLANK_MEAN) -> bool:
+    """True when the buffer is empty or essentially black."""
+    if image is None or getattr(image, "size", 0) == 0:
+        return True
+    return float(image.mean()) <= max_mean
+
+
 
 class CaptureError(RuntimeError):
     """Raised when a frame could not be acquired."""
@@ -138,6 +150,12 @@ class WindowsGdiBackend:
     partially covered, which matters for an emulator running behind the editor.
     Hardware accelerated renderers sometimes return an empty (black) surface; in
     that case the screen area of the window is copied instead.
+
+    The compatible bitmap is created from the *screen* DC, not the memory DC.
+    A memory DC starts with a 1x1 monochrome bitmap selected; creating the
+    capture bitmap from that DC yields a 1-bit surface and PrintWindow then
+    "succeeds" while every pixel stays black, which is what LDPlayer users saw
+    in the region picker.
     """
 
     name = "windows-gdi"
@@ -241,60 +259,60 @@ class WindowsGdiBackend:
         ctypes = self._ctypes
         user32, gdi32 = self._user32, self._gdi32
 
-        source_dc = user32.GetWindowDC(handle) if handle else user32.GetDC(0)
-        if not source_dc:
-            raise CaptureError("Could not obtain a device context for the window")
-        memory_dc = gdi32.CreateCompatibleDC(source_dc)
-        bitmap = gdi32.CreateCompatibleBitmap(memory_dc, width, height)
+        screen_dc = user32.GetDC(0)
+        if not screen_dc:
+            raise CaptureError("Could not obtain a device context for the screen")
+        memory_dc = gdi32.CreateCompatibleDC(screen_dc)
+        # Must be compatible with the screen, not the empty memory DC (1-bit).
+        bitmap = gdi32.CreateCompatibleBitmap(screen_dc, width, height)
+        if not memory_dc or not bitmap:
+            user32.ReleaseDC(0, screen_dc)
+            raise CaptureError("Could not create a capture bitmap")
         previous = gdi32.SelectObject(memory_dc, bitmap)
-        buffer = ctypes.create_string_buffer(width * height * 4)
-        info = self._bitmap_info(width, height)
         try:
-            copied = False
+            image = None
             if handle:
-                # PW_CLIENTONLY keeps the title bar and the border out of the
-                # bitmap, so the frame matches the client rectangle the engine
-                # measured and coordinates stay valid.
-                copied = bool(
-                    user32.PrintWindow(
-                        handle, memory_dc, self.PW_CLIENTONLY | self.PW_RENDERFULLCONTENT
-                    )
+                for flags in (
+                    self.PW_CLIENTONLY | self.PW_RENDERFULLCONTENT,
+                    self.PW_RENDERFULLCONTENT,
+                    self.PW_CLIENTONLY,
+                    0,
+                ):
+                    if not user32.PrintWindow(handle, memory_dc, flags):
+                        continue
+                    image = self._read_bitmap(memory_dc, bitmap, width, height)
+                    if image is not None and not looks_blank(image):
+                        return image
+            copied = bool(
+                gdi32.BitBlt(
+                    memory_dc, 0, 0, width, height,
+                    screen_dc, x, y, self.SRCCOPY | self.CAPTUREBLT,
                 )
-            if not copied:
-                screen_dc = user32.GetDC(0)
-                try:
-                    copied = bool(
-                        gdi32.BitBlt(
-                            memory_dc, 0, 0, width, height,
-                            screen_dc, x, y, self.SRCCOPY | self.CAPTUREBLT,
-                        )
-                    )
-                finally:
-                    user32.ReleaseDC(0, screen_dc)
+            )
             if not copied:
                 raise CaptureError("Both PrintWindow and BitBlt failed")
-            scanlines = gdi32.GetDIBits(
-                memory_dc, bitmap, 0, height, buffer,
-                ctypes.byref(info), self.DIB_RGB_COLORS,
-            )
-            if not scanlines:
+            image = self._read_bitmap(memory_dc, bitmap, width, height)
+            if image is None:
                 raise CaptureError("GetDIBits returned no pixel data")
-            bgra = np.frombuffer(buffer, dtype=np.uint8).reshape(height, width, 4)
-            image = np.ascontiguousarray(bgra[:, :, :3])
-            if not image.any() and handle:
-                # Hardware surface returned nothing: copy the screen region.
-                return self._grab_screen_region(x, y, width, height)
             return image
         finally:
             gdi32.SelectObject(memory_dc, previous)
             gdi32.DeleteObject(bitmap)
             gdi32.DeleteDC(memory_dc)
-            user32.ReleaseDC(handle or 0, source_dc)
+            user32.ReleaseDC(0, screen_dc)
 
-    def _grab_screen_region(  # pragma: no cover - Windows only
-        self, x: int, y: int, width: int, height: int
-    ) -> np.ndarray:
-        return self.grab(x, y, width, height, handle=None)
+    def _read_bitmap(self, memory_dc, bitmap, width: int, height: int):  # pragma: no cover
+        ctypes = self._ctypes
+        buffer = ctypes.create_string_buffer(width * height * 4)
+        info = self._bitmap_info(width, height)
+        scanlines = self._gdi32.GetDIBits(
+            memory_dc, bitmap, 0, height, buffer,
+            ctypes.byref(info), self.DIB_RGB_COLORS,
+        )
+        if not scanlines:
+            return None
+        bgra = np.frombuffer(buffer, dtype=np.uint8).reshape(height, width, 4)
+        return np.ascontiguousarray(bgra[:, :, :3])
 
     def close(self) -> None:  # pragma: no cover - nothing to release
         return None
@@ -470,12 +488,45 @@ class WindowCapture:
         image = self.backend.grab(*geometry, handle=handle)
         if image is None or image.size == 0:
             raise CaptureError("The capture backend returned an empty frame")
+        if looks_blank(image) and getattr(self.backend, "name", "") != "static":
+            image = self._grab_via_mss(geometry, image)
         self.frames_captured += 1
         return Frame(
             image=image,
             origin=(geometry[0], geometry[1]),
             source=getattr(window, "title", "window"),
         )
+
+    def _grab_via_mss(
+        self, geometry: tuple[int, int, int, int], previous: np.ndarray
+    ) -> np.ndarray:
+        """Copy the screen rectangle when PrintWindow painted a black surface."""
+        if getattr(self.backend, "name", "") == "mss":
+            return previous
+        try:
+            fallback = MssBackend()
+        except CaptureError:
+            self.log.warning(
+                "Captured frame is black (mean=%.2f); PrintWindow often fails on LDPlayer",
+                float(previous.mean()),
+            )
+            return previous
+        try:
+            image = fallback.grab(*geometry[:4], handle=None)
+        except CaptureError as exc:
+            self.log.warning("mss fallback after a black frame failed: %s", exc)
+            return previous
+        finally:
+            fallback.close()
+        if looks_blank(image):
+            self.log.warning(
+                "Captured frame is black (mean=%.2f). Uncover the LDPlayer window "
+                "and try capture backend 'mss' in engine settings",
+                float(image.mean()),
+            )
+            return image
+        self.log.info("PrintWindow returned a black frame; used a screen copy instead")
+        return image
 
     def close(self) -> None:
         self.backend.close()
