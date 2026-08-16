@@ -1,0 +1,17 @@
+# Optional OCR support: needed only for the "Text visible" and
+# "Number comparison" conditions.
+#
+#   pip install -r requirements-ocr.txt
+#
+# This download is large (PaddlePaddle is a full inference runtime) and the first
+# recognition also fetches the detection and recognition models.
+#
+# Lighter alternative, if Tesseract is already installed on the machine:
+#   pip install pytesseract
+# and set the OCR engine to "tesseract" in Engine settings.
+#
+# Without any OCR engine the app still runs: text and number conditions simply
+# never match and a warning is written to the log.
+
+paddleocr>=2.7
+paddlepaddle>=2.6

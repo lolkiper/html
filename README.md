@@ -40,8 +40,20 @@ reference images **you** add to a project.
 
 ## Installation
 
-Python 3.11 or newer on Windows (the engine also runs on Linux against a screen
-region, which is how its test suite exercises the full pipeline).
+Requires Python 3.11 or newer on Windows (the engine also runs on Linux against
+a screen region, which is how its test suite exercises the full pipeline).
+Install Python from [python.org](https://www.python.org/downloads/windows/) with
+**Add python.exe to PATH** ticked.
+
+Download the code as a ZIP from GitHub (**Code → Download ZIP**) or clone it:
+
+```bat
+git clone https://github.com/lolkiper/html.git
+cd html
+```
+
+Then double-click **`run.bat`**, which creates the virtual environment, installs
+the dependencies on first start and launches the app. The manual equivalent:
 
 ```bat
 python -m venv .venv
@@ -50,17 +62,25 @@ pip install -r requirements.txt
 python main.py
 ```
 
+OCR is optional and is a large download, so it is kept separate. Install it only
+if you need the text or number conditions:
+
+```bat
+pip install -r requirements-ocr.txt
+```
+
 Notes on the dependencies:
 
-| Package | Used for | Required |
+| Package | Used for | File |
 |---|---|---|
-| `numpy`, `opencv-python` | frame handling, template / colour / feature matching | yes |
-| `pyautogui` | mouse and keyboard input | yes (dry run works without it) |
-| `Pillow` | decoding reference images, GUI preview | yes |
-| `paddleocr` + `paddlepaddle` | OCR (text and number conditions) | optional |
-| `pytesseract` | lighter OCR alternative | optional |
-| `mss` | capture fallback / non-Windows capture | optional |
-| `pyperclip` | typing non-ASCII text | optional |
+| `numpy`, `opencv-python` | frame handling, template / colour / feature matching | `requirements.txt` |
+| `pyautogui` | mouse and keyboard input (dry run works without it) | `requirements.txt` |
+| `Pillow` | decoding reference images, preview in the editor | `requirements.txt` |
+| `mss` | capture fallback / screen-region capture | `requirements.txt` |
+| `pyperclip` | typing non-ASCII text | `requirements.txt` |
+| `paddleocr` + `paddlepaddle` | OCR for text and number conditions | `requirements-ocr.txt` |
+| `pytesseract` | lighter OCR alternative | install on demand |
+| `pytest` | running the tests | `requirements-dev.txt` |
 
 If no OCR engine is installed the app still runs; text and number conditions
 simply never match and a warning is written to the log.  Tkinter ships with
@@ -326,7 +346,7 @@ used as a CI check.
 ## Tests
 
 ```bash
-pip install pytest
+pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
