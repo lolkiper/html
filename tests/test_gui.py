@@ -313,3 +313,15 @@ def test_scenario_buttons_wrap_and_stay_reachable(app):
         assert right <= width + toolbar.spacing, f"{widget.cget('text')} is clipped"
     assert toolbar.rows() > 1, "the buttons should occupy more than one row"
     assert toolbar.winfo_reqheight() > 1
+
+
+def test_the_macro_button_keeps_the_centre_column_wide(app):
+    """The recorder must not be squeezed into a 280px pane and clipped again."""
+    app.geometry("1440x900")
+    app.update_idletasks()
+    app._place_sashes()
+    app.update_idletasks()
+    assert app._main.sashpos(0) <= 360
+    assert app._record_macro_button.winfo_width() >= 500
+    assert app._record_macro_button.winfo_rooty() < app._scenario_buttons.winfo_rooty()
+    assert app._scenario_buttons.rows() <= 4

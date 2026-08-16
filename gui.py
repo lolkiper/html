@@ -1844,11 +1844,13 @@ class App(tk.Tk):
 
         main = ttk.PanedWindow(self, orient="horizontal")
         main.pack(fill="both", expand=True, padx=8, pady=(8, 4))
-        main.add(self._build_left_panel(main), weight=0)
-        main.add(self._build_center_panel(main), weight=3)
+        main.add(self._build_left_panel(main), weight=1)
+        main.add(self._build_center_panel(main), weight=4)
         main.add(self._build_right_panel(main), weight=1)
+        self._main = main
         self._build_log_panel()
         self._build_status_bar()
+        self.after_idle(self._place_sashes)
 
     def _build_left_panel(self, parent: tk.Misc) -> ttk.Frame:
         frame = ttk.Frame(parent, width=330)
@@ -1988,6 +1990,27 @@ class App(tk.Tk):
                                       style="MutedToolbar.TLabel")
         self._window_label.pack(side="right")
         self._update_status()
+
+    def _place_sashes(self) -> None:
+        """Keep the scenario (and the MACRO button) the widest column."""
+        paned = getattr(self, "_main", None)
+        if paned is None:
+            return
+        width = paned.winfo_width()
+        if width < 400:
+            return
+        left = 310
+        right = max(width - 330, left + 480)
+        try:
+            if abs(paned.sashpos(0) - left) > 40:
+                paned.sashpos(0, left)
+            if abs(paned.sashpos(1) - right) > 40:
+                paned.sashpos(1, right)
+        except tk.TclError:  # pragma: no cover - widget gone
+            return
+        toolbar = getattr(self, "_scenario_buttons", None)
+        if toolbar is not None:
+            toolbar.relayout()
 
     # -------------------------------------------------------------- helpers
     def _set_text(self, widget: tk.Text, content: str) -> None:
