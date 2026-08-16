@@ -28,11 +28,19 @@ from i18n import DEFAULT_LANGUAGE, tr
 from logger import EventLog, get_logger
 from mouse import PointerSettings
 from ocr import Preprocess
+from pipeline import (
+    Macro,
+    PipelineSettings,
+    TestData,
+    build_pipeline_workflow,
+    default_macros,
+    default_pipeline_states,
+)
 from recorder import RecorderSettings
 from safety import SafetySettings, audit_no_frame_artifacts
 from state_machine import ReferenceSpec, RunnerSettings, UNKNOWN_STATE, VisualState, build_states
 from vision import Roi, load_image
-from workflow import Workflow, example_workflow
+from workflow import Workflow
 
 PROJECT_FILE = "project.json"
 REFERENCES_DIR = "references"
@@ -143,6 +151,9 @@ class Project:
         settings: ProjectSettings | None = None,
         references: dict[str, ReferenceRecord] | None = None,
         variables: dict[str, Any] | None = None,
+        macros: dict[str, Macro] | None = None,
+        test_data: TestData | None = None,
+        pipeline: PipelineSettings | None = None,
         log: EventLog | None = None,
     ) -> None:
         self.name = name
@@ -152,6 +163,9 @@ class Project:
         self.settings = settings or ProjectSettings()
         self.references: dict[str, ReferenceRecord] = dict(references or {})
         self.variables: dict[str, Any] = dict(variables or {})
+        self.macros: dict[str, Macro] = dict(macros or {})
+        self.test_data = test_data or TestData()
+        self.pipeline = pipeline or PipelineSettings()
         self.log = log or get_logger()
         self._image_cache: dict[str, np.ndarray] = {}
         self.dirty = False
@@ -290,6 +304,26 @@ class Project:
     def state_names(self) -> list[str]:
         return sorted(self.states)
 
+    def rebuild_pipeline(self) -> None:
+        """Regenerate the sequential-macro workflow from AUTH_VK / MACRO_2 / states."""
+        self.workflow = build_pipeline_workflow(self.pipeline)
+        self.mark_dirty()
+
+    def ensure_macro(self, name: str) -> Macro:
+        macro = self.macros.get(name)
+        if macro is None:
+            macro = Macro(name)
+            self.macros[name] = macro
+            self.mark_dirty()
+        return macro
+
+    def ensure_result_state(self, name: str, description: str = "") -> VisualState:
+        state = self.states.get(name)
+        if state is None:
+            state = VisualState(name=name, description=description, confidence=0.85, retry_count=0)
+            self.add_state(state)
+        return state
+
     # ------------------------------------------------------------- storage
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -301,6 +335,9 @@ class Project:
             "workflow": self.workflow.to_dict(),
             "references": [record.to_dict() for record in self.references.values()],
             "variables": self.variables,
+            "macros": [macro.to_dict() for macro in self.macros.values()],
+            "test_data": self.test_data.to_dict(),
+            "pipeline": self.pipeline.to_dict(),
         }
 
     @classmethod
@@ -310,6 +347,11 @@ class Project:
             record = ReferenceRecord.from_dict(item)
             if record.name:
                 references[record.name] = record
+        macros = {}
+        for item in data.get("macros") or []:
+            macro = Macro.from_dict(item)
+            if macro.name:
+                macros[macro.name] = macro
         return cls(
             name=str(data.get("name", "Project")),
             path=path,
@@ -318,6 +360,9 @@ class Project:
             settings=ProjectSettings.from_dict(data.get("settings")),
             references=references,
             variables=dict(data.get("variables") or {}),
+            macros=macros,
+            test_data=TestData.from_dict(data.get("test_data")),
+            pipeline=PipelineSettings.from_dict(data.get("pipeline")),
             log=log,
         )
 
@@ -433,39 +478,23 @@ def _write_png(path: Path, image: np.ndarray) -> None:
 
 
 def example_project(name: str | None = None) -> Project:
-    """A ready to edit project with the four example states and the scenario."""
-    states = {
-        "STATE_A": VisualState(
-            name="STATE_A",
-            description=tr("Main screen the test starts from"),
-            confidence=0.85,
-            timeout=10.0,
-            retry_count=3,
-            expected_state="STATE_C",
-            fallback="STATE_B",
-        ),
-        "STATE_B": VisualState(
-            name="STATE_B",
-            description=tr("Error message screen"),
-            confidence=0.85,
-            timeout=8.0,
-            retry_count=2,
-            fallback="STOP",
-        ),
-        "STATE_C": VisualState(
-            name="STATE_C",
-            description=tr("Success screen"),
-            confidence=0.85,
-            terminal=False,
-        ),
-        UNKNOWN_STATE: VisualState(
-            name=UNKNOWN_STATE,
-            description=tr("Nothing recognised: wait and analyse again"),
-            confidence=0.99,
-            retry_count=0,
-        ),
-    }
-    project = Project(name=name or tr("LDPlayer example"), states=states,
-                      workflow=example_workflow())
+    """A new project: sequential macros AUTH_VK → visual check → MACRO_2.
+
+    Result states exist as names only. Reference images are added when the user
+    presses Capture error/success — never as a full-screen demo.
+    """
+    from pipeline import AUTH_MACRO, RESET_MACRO, SECOND_MACRO
+
+    project = Project(
+        name=name or tr("LDPlayer sequential macros"),
+        states=default_pipeline_states(),
+        macros=default_macros(),
+        test_data=TestData(),
+        pipeline=PipelineSettings(),
+        workflow=build_pipeline_workflow(),
+    )
     project.settings.engine_mode = "workflow"
+    project.ensure_macro(AUTH_MACRO)
+    project.ensure_macro(SECOND_MACRO)
+    project.ensure_macro(RESET_MACRO)
     return project

@@ -34,6 +34,8 @@ RU: dict[str, str] = {
     "Engine mode:": "Режим движка:",
     "Dry run (analyse only, no input)": "Пробный прогон (только анализ, без ввода)",
     "F8 start/pause    F9 emergency stop": "F8 старт/пауза    F9 аварийный стоп",
+    "F8 start/pause    F9 stop    F10 step": "F8 старт/пауза    F9 стоп    F10 шаг",
+    "STEP BY STEP (F10)": "ШАГ ЗА ШАГОМ (F10)",
     "▶ START (F8)": "▶ СТАРТ (F8)",
     "⏸ PAUSE (F8)": "⏸ ПАУЗА (F8)",
     "■ STOP (F9)": "■ СТОП (F9)",
@@ -68,7 +70,24 @@ RU: dict[str, str] = {
     "ADD LOOP": "ДОБАВИТЬ ЦИКЛ",
     "ADD STOP": "ДОБАВИТЬ СТОП",
     "RECORD MACRO": "ЗАПИСАТЬ МАКРОС",
+    "RECORD MACRO 2": "ЗАПИСАТЬ MACRO_2",
+    "CAPTURE ERROR STATE": "ЗАХВАТИТЬ СОСТОЯНИЕ ОШИБКИ",
+    "CAPTURE SUCCESS STATE": "ЗАХВАТИТЬ СОСТОЯНИЕ УСПЕХА",
+    "CAPTURE MACRO 2 ERROR STATE": "ЗАХВАТИТЬ ОШИБКУ MACRO_2",
+    "CAPTURE MACRO 2 SUCCESS STATE": "ЗАХВАТИТЬ УСПЕХ MACRO_2",
     "MACRO": "МАКРОС",
+    "MACROS": "МАКРОСЫ",
+    "STATES": "СОСТОЯНИЯ",
+    "Pipeline": "Пайплайн",
+    "Record": "Запись",
+    "Test": "Прогон",
+    "Capture": "Захват",
+    "Test detection": "Проверить распознавание",
+    "TEST DATA": "ТЕСТОВЫЕ ДАННЫЕ",
+    "login / password — AUTH_VK types these; passwords are not logged":
+        "login / password — AUTH_VK подставляет эти поля; пароли в журнал не пишутся",
+    "+ Add row": "+ Строка",
+    "Test data row": "Тестовая запись",
     "On/off": "Вкл/выкл",
     # ---------------------------------------------------------- right panel
     "Details": "Подробности",
@@ -657,6 +676,47 @@ RU: dict[str, str] = {
         "Ничего не распознано: ждём и анализируем снова",
     "Example scenario": "Пример сценария",
     "LDPlayer example": "Пример для LDPlayer",
+    "LDPlayer sequential macros": "Последовательные макросы LDPlayer",
+    "Sequential macros": "Последовательные макросы",
+    "Record the VK authorisation": "Запишите авторизацию через VK",
+    "Record the steps after a successful login": "Запишите шаги после успешного входа",
+    "Optional reset after AUTH_ERROR": "Необязательный сброс после AUTH_ERROR",
+    "Unsuccessful authorisation screen": "Экран неудачной авторизации",
+    "Screen after a successful authorisation": "Экран после успешной авторизации",
+    "MACRO_2 failed": "MACRO_2 завершился ошибкой",
+    "MACRO_2 succeeded": "MACRO_2 завершился успешно",
+    "there is another test row": "есть ещё тестовая запись",
+    "FAIL (%s)": "СБОЙ (%s)",
+    "LOAD TEST DATA": "ЗАГРУЗИТЬ ТЕСТОВЫЕ ДАННЫЕ",
+    "NEXT TEST DATA": "СЛЕДУЮЩАЯ ТЕСТОВАЯ ЗАПИСЬ",
+    "This macro has no steps. Press Record first.":
+        "В этом макросе ещё нет шагов. Сначала нажмите «Запись».",
+    "(empty)": "(пусто)",
+    "Save the project before capturing a result state.":
+        "Сначала сохраните проект, затем захватывайте эталон состояния.",
+    "Region too large": "Область слишком большая",
+    "The selection covers most of the screen. A small unique element "
+    "(error text, button) works better. Use it anyway?":
+        "Выделение занимает почти весь экран. Лучше выбрать маленький характерный "
+        "элемент (текст ошибки, кнопку). Использовать всё равно?",
+    "State: %s\nDetected: %s\nConfidence: %.2f\nCoordinates: %s":
+        "Состояние: %s\nОбнаружено: %s\nУверенность: %.2f\nКоординаты: %s",
+    "Recorded %s action(s) into %s": "Записано действий: %s в макрос %s",
+    "Bound %s typed field(s) to test data variables":
+        "Привязано полей ввода к тестовым данным: %s",
+    "Starting %s (test)": "Запуск %s (проверка)",
+    "Saved result state %s (confidence %.2f)":
+        "Эталон состояния %s сохранён (уверенность %.2f)",
+    "TEST %s | Detected: %s | Confidence: %.2f | Coordinates: %s":
+        "ТЕСТ %s | Обнаружено: %s | Уверенность: %.2f | Координаты: %s",
+    "STEP: %s | state=%s (%.2f) | next: %s | F10 continue, F9 stop":
+        "ШАГ: %s | состояние=%s (%.2f) | дальше: %s | F10 продолжить, F9 стоп",
+    "Macro '%s' is not defined": "Макрос «%s» не задан",
+    "No test data row; AUTH_VK will use recorded text":
+        "Нет тестовой записи; AUTH_VK использует записанный текст",
+    "Loading test data %s": "Загрузка тестовых данных %s",
+    "Loading next test data": "Загрузка следующей тестовой записи",
+    "No further test data": "Больше тестовых записей нет",
 }
 
 TRANSLATIONS: dict[str, dict[str, str]] = {"ru": RU, "en": {}}

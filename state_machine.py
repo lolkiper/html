@@ -13,6 +13,7 @@ several conditions can inspect the same screen cheaply.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -304,6 +305,10 @@ class AnalysisContext:
         self.ocr_preprocess = ocr_preprocess or Preprocess()
         self.detector = StateDetector(self.states, min_confidence, ambiguity_margin, log=self.log)
         self.variables: dict[str, Any] = {}
+        self.macros: dict[str, Any] = {}
+        self.test_data: Any = None
+        self.step_by_step: bool = False
+        self.step_continue: threading.Event | None = None
         self.frame: Frame | None = None
         self.previous_signature: np.ndarray | None = None
         self.last_match: MatchResult | None = None
@@ -958,6 +963,16 @@ def create_context(
         ocr_preprocess=settings.ocr_preprocess,
     )
     context.variables.update(getattr(project, "variables", {}) or {})
+    context.macros = dict(getattr(project, "macros", {}) or {})
+    test_data = getattr(project, "test_data", None)
+    if test_data is not None and hasattr(test_data, "reset"):
+        test_data.reset()
+    context.test_data = test_data
+    pipeline = getattr(project, "pipeline", None)
+    context.step_by_step = bool(getattr(pipeline, "step_by_step", False))
+    if context.step_by_step:
+        context.step_continue = threading.Event()
+        context.step_continue.set()
     return context
 
 

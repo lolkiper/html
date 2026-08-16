@@ -32,6 +32,8 @@ def test_new_project_saves_states_workflow_and_settings(tmp_path):
     assert set(reloaded.states) == set(project.states)
     assert reloaded.settings.min_confidence == 0.9
     assert reloaded.workflow.to_dict() == project.workflow.to_dict()
+    assert {macro["name"] for macro in reloaded.to_dict()["macros"]} == {"AUTH_VK", "MACRO_2", "RESET"}
+    assert reloaded.pipeline.auth_macro == "AUTH_VK"
     assert not reloaded.dirty
 
 
@@ -197,4 +199,6 @@ def test_project_json_is_human_readable(tmp_path):
     assert data["format"] == 1
     assert {state["name"] for state in data["states"]} == set(project.states)
     assert "nodes" in data["workflow"]
+    assert {macro["name"] for macro in data["macros"]} == set(project.macros)
+    assert data["pipeline"]["auth_macro"] == "AUTH_VK"
     assert project.describe().startswith(project.name)

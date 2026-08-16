@@ -27,7 +27,9 @@ from actions import (
     verify_expected,
 )
 from conditions import Always, ReferenceVisible, StateIs
+from logger import Secret
 from ocr import OcrService
+from pipeline import LoadTestData, NextTestData, SignalFail
 from state_machine import ReferenceSpec, VisualState
 from vision import PixelRect, Roi
 
@@ -173,6 +175,18 @@ def test_text_can_come_from_a_variable(context):
     assert TypeText(variable="unset").execute(context).success is False
 
 
+def test_secret_variable_is_typed_but_never_logged(context, log):
+    context.refresh()
+    context.variables["password"] = Secret("hunter2-secret")
+    context.log.register_secret("hunter2-secret")
+    action = TypeText(variable="password", sensitive=True)
+    assert action.execute(context).success
+    assert context.keyboard.backend.events[-1].length == len("hunter2-secret")
+    joined = "\n".join(log.lines())
+    assert "hunter2-secret" not in joined
+    assert "TYPE TEXT from variable 'password'" == action.describe()
+
+
 def test_wait_and_wait_until(context):
     context.refresh()
     assert Wait(seconds=0.01).execute(context).success
@@ -256,6 +270,9 @@ def test_every_action_survives_serialisation():
         Stop(reason="finished"),
         SetVariable(name="n", value=5, mode="increment"),
         LogMessage(message="hello"),
+        SignalFail(reason="still unknown"),
+        LoadTestData(),
+        NextTestData(),
     ]
     for action in samples:
         restored = action_from_dict(action.to_dict())

@@ -43,7 +43,7 @@ def test_window_builds_with_project_content(app):
     assert app.title() == "LDPlayer Visual UI Tester"
     assert set(app._states_tree.get_children()) == set(app.project.state_names())
     assert app._canvas._hits, "the diagram should contain clickable boxes"
-    assert "IF STATE STATE_A detected" in outline_text(app.project.workflow)
+    assert "IF STATE AUTH_ERROR detected" in outline_text(app.project.workflow)
 
 
 def test_log_records_reach_the_view(app):
@@ -68,7 +68,7 @@ def test_selecting_a_node_shows_its_details(app):
     if_node = [node for node in app.project.workflow.walk() if node.type is NodeType.IF][0]
     app._on_node_selected(if_node.id, "")
     details = app._details.get("1.0", "end")
-    assert "IF" in details and "STATE_A" in details
+    assert "IF" in details and "AUTH_ERROR" in details
 
 
 def test_new_step_is_inserted_after_the_selected_node(app):
@@ -93,7 +93,11 @@ def test_new_step_is_inserted_into_the_selected_branch(app):
 
 
 def test_nodes_can_be_moved_disabled_and_deleted(app):
+    from workflow import make_node
+
     workflow = app.project.workflow
+    app._selection = (workflow.nodes[0].id, "")
+    app._insert_node(make_node(NodeType.WAIT, seconds=1.0))
     first, second = workflow.nodes[0].id, workflow.nodes[1].id
     app._selection = (first, "")
     app.move_node(1)
@@ -108,16 +112,16 @@ def test_nodes_can_be_moved_disabled_and_deleted(app):
 def test_state_selection_and_deletion(app, monkeypatch):
     import gui
 
-    app._states_tree.selection_set("STATE_B")
+    app._states_tree.selection_set("AUTH_ERROR")
     app._on_state_selected(None)
-    assert app._selected_state == "STATE_B"
-    assert "STATE_B" in app._details.get("1.0", "end")
+    assert app._selected_state == "AUTH_ERROR"
+    assert "AUTH_ERROR" in app._details.get("1.0", "end")
     app.duplicate_state()
-    assert "STATE_B_copy" in app.project.states
+    assert "AUTH_ERROR_copy" in app.project.states
     monkeypatch.setattr(gui.messagebox, "askyesno", lambda *args, **kwargs: True)
-    app._selected_state = "STATE_B_copy"
+    app._selected_state = "AUTH_ERROR_copy"
     app.delete_state()
-    assert "STATE_B_copy" not in app.project.states
+    assert "AUTH_ERROR_copy" not in app.project.states
 
 
 def test_validation_panel_reports_problems(app):
@@ -224,7 +228,7 @@ def test_the_interface_follows_the_project_language(log):
     try:
         assert get_language() == "ru"
         assert "СОСТОЯНИЕ" in outline_text(app.project.workflow)
-        assert app._record_macro_button.cget("text") == "+ ЗАПИСАТЬ МАКРОС"
+        assert app._record_macro_button.cget("text") == "+ ЗАПИСАТЬ МАКРОС  (AUTH_VK)"
         assert app._title_label.cget("text") == "🚀  LDPLAYER VISUAL UI TESTER"
     finally:
         app.hotkeys.stop()
@@ -290,7 +294,7 @@ def test_scenario_buttons_wrap_and_stay_reachable(app):
     import gui
 
     assert app._record_macro_button.winfo_ismapped()
-    assert app._record_macro_button.cget("text") == "+ " + tr("RECORD MACRO")
+    assert app._record_macro_button.cget("text") == "+ " + tr("RECORD MACRO") + "  (AUTH_VK)"
     assert app._record_macro_button.cget("style") == "Success.TButton"
     assert app._title_label.cget("fg").lower() == gui.PALETTE["title"]
     assert gui.PALETTE["bg"] == "#0d0d0d"

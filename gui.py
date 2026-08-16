@@ -48,7 +48,16 @@ from actions import (
 from conditions import CONDITION_TYPES, Condition, condition_from_dict, describe_condition
 from keyboard import HotkeyManager, install_safety_hotkeys
 from logger import EventLog, LogLevel, LogRecord, get_logger
-from ocr import Preprocess
+from pipeline import (
+    AUTH_ERROR,
+    AUTH_MACRO,
+    AUTH_SUCCESS,
+    MACRO2_ERROR,
+    MACRO2_SUCCESS,
+    RESET_MACRO,
+    SECOND_MACRO,
+    bind_typed_text_to_test_data,
+)
 from project import Project, ProjectError, example_project
 from safety import RunState, SafetyController
 from screen_capture import CaptureError, WindowCapture, create_backend, looks_blank
@@ -108,6 +117,7 @@ NODE_COLORS = {
     NodeType.LOOP: "#143d3d",
     NodeType.STOP: "#3d1818",
     NodeType.STATE: "#1a2848",
+    NodeType.MACRO: "#1e4d2e",
 }
 
 UI_FONT = "Segoe UI" if os.name == "nt" else "Noto Sans"
@@ -1761,6 +1771,7 @@ class App(tk.Tk):
         self.window: ldplayer.LDPlayerWindow | None = None
         self.instances: list[ldplayer.LDPlayerInstance] = []
         self.dry_run = tk.BooleanVar(value=dry_run)
+        self.step_by_step = tk.BooleanVar(value=self.project.pipeline.step_by_step)
         self.engine_mode = tk.StringVar(value=self.project.settings.engine_mode)
         self.autoscroll = tk.BooleanVar(value=True)
         self.log_level = tk.StringVar(value="INFO")
@@ -1784,9 +1795,11 @@ class App(tk.Tk):
             self.safety, log=self.log, on_change=lambda state: self._queue.put(("run_state", state))
         )
         self.hotkeys.bind("f8", self._on_hotkey_start_pause)
+        self.hotkeys.bind("f10", self._on_hotkey_step)
         self.hotkeys.start()
         self.bind_all("<F8>", lambda _event: self._on_hotkey_start_pause())
         self.bind_all("<F9>", lambda _event: self.stop_engine())
+        self.bind_all("<F10>", lambda _event: self._on_hotkey_step())
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._tick: str | None = self.after(80, self._drain_queue)
         self.refresh_instances()
@@ -1830,6 +1843,8 @@ class App(tk.Tk):
                      values=("workflow", "states")).pack(side="left", padx=6)
         ttk.Checkbutton(engine_bar, text=tr("Dry run (analyse only, no input)"),
                         variable=self.dry_run, style="Toolbar.TCheckbutton").pack(side="left", padx=6)
+        ttk.Checkbutton(engine_bar, text=tr("STEP BY STEP (F10)"),
+                        variable=self.step_by_step, style="Toolbar.TCheckbutton").pack(side="left", padx=6)
         ttk.Label(engine_bar, text=tr("Language:"), style="Toolbar.TLabel").pack(
             side="left", padx=(14, 4)
         )
@@ -1843,7 +1858,7 @@ class App(tk.Tk):
             lambda _event: self.change_language(language_code(self._language_box.get())),
         )
         self._language_box.pack(side="left")
-        ttk.Label(engine_bar, text=tr('F8 start/pause    F9 emergency stop'),
+        ttk.Label(engine_bar, text=tr('F8 start/pause    F9 stop    F10 step'),
                   style="MutedToolbar.TLabel").pack(side="left", padx=14)
         ttk.Button(engine_bar, text=tr('■ STOP (F9)'), style="Danger.TButton",
                    command=self.stop_engine).pack(side="right")
@@ -1863,6 +1878,67 @@ class App(tk.Tk):
         self._build_status_bar()
         self.after_idle(self._place_sashes)
 
+    def _build_pipeline_tab(self, parent: tk.Misc) -> ttk.Frame:
+        tab = ttk.Frame(parent, padding=8)
+        ttk.Label(tab, text=tr("MACROS"), style="Heading.TLabel").pack(anchor="w")
+        for name in (AUTH_MACRO, SECOND_MACRO, RESET_MACRO):
+            row = ttk.Frame(tab)
+            row.pack(fill="x", pady=3)
+            ttk.Label(row, text=name, width=12).pack(side="left")
+            ttk.Button(row, text=tr("Record"), style="Success.TButton",
+                       command=lambda n=name: self.record_named_macro(n)).pack(side="left", padx=2)
+            ttk.Button(row, text=tr("Edit"), command=lambda n=name: self.edit_named_macro(n)).pack(
+                side="left", padx=2
+            )
+            ttk.Button(row, text=tr("Test"), command=lambda n=name: self.test_named_macro(n)).pack(
+                side="left", padx=2
+            )
+
+        ttk.Label(tab, text=tr("STATES"), style="Heading.TLabel").pack(anchor="w", pady=(12, 4))
+        for name, capture_label in (
+            (AUTH_ERROR, tr("CAPTURE ERROR STATE")),
+            (AUTH_SUCCESS, tr("CAPTURE SUCCESS STATE")),
+            (MACRO2_ERROR, tr("CAPTURE MACRO 2 ERROR STATE")),
+            (MACRO2_SUCCESS, tr("CAPTURE MACRO 2 SUCCESS STATE")),
+        ):
+            block = ttk.Frame(tab)
+            block.pack(fill="x", pady=4)
+            ttk.Label(block, text=name, style="Heading.TLabel").pack(anchor="w")
+            buttons = ttk.Frame(block)
+            buttons.pack(fill="x")
+            ttk.Button(
+                buttons, text=tr("Capture"), style="Success.TButton",
+                command=lambda n=name: self.capture_result_state(n),
+            ).pack(side="left", padx=(0, 4))
+            ttk.Button(
+                buttons, text=tr("Test detection"),
+                command=lambda n=name: self.test_state_detection(n),
+            ).pack(side="left", padx=2)
+            ttk.Button(buttons, text=tr("Edit"), command=lambda n=name: self.edit_named_state(n)).pack(
+                side="left", padx=2
+            )
+
+        ttk.Label(tab, text=tr("TEST DATA"), style="Heading.TLabel").pack(anchor="w", pady=(12, 4))
+        ttk.Label(
+            tab,
+            text=tr("login / password — AUTH_VK types these; passwords are not logged"),
+            style="Muted.TLabel", wraplength=280,
+        ).pack(anchor="w")
+        columns = tuple(self.project.test_data.columns)
+        self._test_data_tree = ttk.Treeview(tab, columns=columns, show="headings", height=5)
+        for column in columns:
+            self._test_data_tree.heading(column, text=column)
+            self._test_data_tree.column(column, width=110)
+        self._test_data_tree.pack(fill="x", pady=4)
+        data_buttons = ttk.Frame(tab)
+        data_buttons.pack(fill="x")
+        ttk.Button(data_buttons, text=tr("+ Add row"), style="Success.TButton",
+                   command=self.add_test_row).pack(side="left")
+        ttk.Button(data_buttons, text=tr("Delete"), style="Danger.TButton",
+                   command=self.delete_test_row).pack(side="left", padx=4)
+        self.refresh_test_data()
+        return tab
+
     def _build_left_panel(self, parent: tk.Misc) -> ttk.Frame:
         frame = ttk.Frame(parent, width=330)
         notebook = ttk.Notebook(frame)
@@ -1870,6 +1946,7 @@ class App(tk.Tk):
         self._left_notebook = notebook
 
         states_tab = ttk.Frame(notebook, padding=8)
+        notebook.add(self._build_pipeline_tab(notebook), text=tr("Pipeline"))
         notebook.add(states_tab, text=tr('States'))
         columns = ("confidence", "references", "actions")
         self._states_tree = ttk.Treeview(states_tab, columns=columns, show="tree headings", height=12)
@@ -1918,14 +1995,27 @@ class App(tk.Tk):
         ttk.Label(header, text=tr('  (select a box or a branch, then add a step)'),
                   style="Muted.TLabel").pack(side="left")
         ttk.Label(frame, text=tr("MACRO"), style="Heading.TLabel").pack(anchor="w", pady=(6, 4))
-        # Full-width green button, never clipped by the wrapping toolbar.
         self._record_macro_button = ttk.Button(
             frame,
-            text="+ " + tr("RECORD MACRO"),
+            text="+ " + tr("RECORD MACRO") + f"  ({AUTH_MACRO})",
             style="Success.TButton",
-            command=self.record_macro_node,
+            command=lambda: self.record_named_macro(AUTH_MACRO),
         )
-        self._record_macro_button.pack(fill="x", pady=(0, 8))
+        self._record_macro_button.pack(fill="x", pady=(0, 4))
+        extra = ttk.Frame(frame)
+        extra.pack(fill="x", pady=(0, 8))
+        ttk.Button(
+            extra, text=tr("RECORD MACRO 2"), style="Success.TButton",
+            command=lambda: self.record_named_macro(SECOND_MACRO),
+        ).pack(side="left")
+        ttk.Button(
+            extra, text=tr("CAPTURE ERROR STATE"), style="Danger.TButton",
+            command=lambda: self.capture_result_state(AUTH_ERROR),
+        ).pack(side="left", padx=4)
+        ttk.Button(
+            extra, text=tr("CAPTURE SUCCESS STATE"), style="Success.TButton",
+            command=lambda: self.capture_result_state(AUTH_SUCCESS),
+        ).pack(side="left")
         buttons = FlowFrame(frame)
         buttons.pack(fill="x", pady=(0, 6))
         for label, command, style in [
@@ -2133,8 +2223,10 @@ class App(tk.Tk):
         self.project.settings.language = get_language()
         self.safety.settings = self.project.settings.safety
         self.engine_mode.set(self.project.settings.engine_mode)
+        self.step_by_step.set(self.project.pipeline.step_by_step)
         self.refresh_states()
         self.refresh_workflow()
+        self.refresh_test_data()
         self.log.info("New project created")
 
     def open_project(self) -> None:
@@ -2150,11 +2242,13 @@ class App(tk.Tk):
             return
         self.safety.settings = self.project.settings.safety
         self.engine_mode.set(self.project.settings.engine_mode)
+        self.step_by_step.set(self.project.pipeline.step_by_step)
         if self.project.settings.language != get_language():
             set_language(self.project.settings.language)
             self._rebuild_ui()
         self.refresh_states()
         self.refresh_workflow()
+        self.refresh_test_data()
         self.validate_project()
 
     def save_project(self) -> None:
@@ -2726,12 +2820,200 @@ class App(tk.Tk):
         self._insert_node(node)
 
     def record_macro_node(self) -> None:
-        """Record a combination in LDPlayer and insert it as scenario steps."""
+        self.record_named_macro(AUTH_MACRO)
+
+    def record_named_macro(self, name: str) -> None:
+        """Record clicks in LDPlayer and store them as a named macro, not STATE_A."""
         actions = RecorderDialog.ask(self, self)
         if not actions:
             return
-        for action in actions:
-            self._insert_node(make_node(NodeType.ACTION, action=action))
+        macro = self.project.ensure_macro(name)
+        macro.actions = list(actions)
+        bound = bind_typed_text_to_test_data(macro, self.project.test_data)
+        self.project.mark_dirty()
+        self.refresh_workflow()
+        self.log.info("Recorded %s action(s) into %s", len(actions), name)
+        if bound:
+            self.log.info("Bound %s typed field(s) to test data variables", bound)
+
+    def edit_named_macro(self, name: str) -> None:
+        macro = self.project.ensure_macro(name)
+        if not macro.actions:
+            messagebox.showinfo(name, tr("This macro has no steps. Press Record first."))
+            return
+        lines = [f"{index + 1}. {action.describe()}" for index, action in enumerate(macro.actions)]
+        messagebox.showinfo(name, "\n".join(lines) if lines else tr("(empty)"))
+
+    def test_named_macro(self, name: str) -> None:
+        """Play one macro without the rest of the workflow and without clicking if dry-run."""
+        macro = self.project.ensure_macro(name)
+        if not macro.actions:
+            messagebox.showinfo(name, tr("This macro has no steps. Press Record first."))
+            return
+        if self.window is None:
+            messagebox.showinfo(tr("No window"), tr("Select an LDPlayer instance first."))
+            return
+        context = self._build_context(dry_run=self.dry_run.get())
+        if context is None:
+            return
+        self.log.info("Starting %s (test)", name)
+        try:
+            for action in macro.actions:
+                self.log.info("Action: %s", action.describe())
+                result = action.execute(context)
+                if not result.success:
+                    self.log.warning("%s: %s", name, result.detail)
+                    break
+            self.log.info("%s finished", name)
+        finally:
+            context.release()
+
+    def capture_result_state(self, name: str) -> None:
+        """CAPTURE ERROR/SUCCESS: small reference crop, stored in the project only."""
+        if self.project.path is None:
+            messagebox.showinfo(
+                tr("Save the project"),
+                tr("Save the project before capturing a result state."),
+            )
+            return
+        state = self.project.ensure_result_state(name)
+        if not pillow_available():
+            messagebox.showinfo(
+                tr("Pillow required"),
+                tr("Selecting a region on screen needs Pillow (pip install Pillow)."),
+            )
+            return
+        frame = self.grab_preview_frame()
+        if frame is None:
+            return
+        selector = RegionSelector(self, frame, tr("Select the region to remember"))
+        self.wait_window(selector)
+        if selector.result is None:
+            return
+        area = selector.result.width * selector.result.height
+        frame_area = max(1, frame.shape[0] * frame.shape[1])
+        if area / frame_area > 0.45:
+            if not messagebox.askyesno(
+                tr("Region too large"),
+                tr("The selection covers most of the screen. A small unique element "
+                   "(error text, button) works better. Use it anyway?"),
+            ):
+                return
+        values = FormDialog.ask(
+            self, name,
+            [Field("confidence", tr("Confidence"), "float", default=state.confidence or 0.85)],
+        )
+        if values is None:
+            return
+        ref_name = f"{name.lower()}_ref"
+        patch = crop_copy(frame, selector.result)
+        try:
+            self.project.add_reference_image(
+                patch, ref_name, source_size=(frame.shape[1], frame.shape[0])
+            )
+        except ProjectError as exc:
+            messagebox.showerror(tr("Reference image"), str(exc))
+            return
+        from state_machine import ReferenceSpec
+        from vision import Roi
+        state.confidence = float(values["confidence"] or 0.85)
+        state.references = [
+            ReferenceSpec(
+                image=ref_name,
+                confidence=state.confidence,
+                roi=Roi.from_pixels(selector.result, frame.shape[1], frame.shape[0]),
+                source_size=(frame.shape[1], frame.shape[0]),
+            )
+        ]
+        self.project.add_state(state)
+        self.project.mark_dirty()
+        self.refresh_states()
+        self.refresh_workflow()
+        self.log.success("Saved result state %s (confidence %.2f)", name, state.confidence)
+
+    def test_state_detection(self, name: str) -> None:
+        """Analyze the current screen only — no clicks."""
+        if self.window is None:
+            messagebox.showinfo(tr("No window"), tr("Select an LDPlayer instance first."))
+            return
+        context = self._build_context(dry_run=True)
+        if context is None:
+            return
+        try:
+            context.refresh()
+            outcome = context.detect()
+            score = float(outcome.scores.get(name, 0.0))
+            match = outcome.matches.get(name)
+            detected = name == outcome.state
+            where = "-"
+            if match is not None and match.rect is not None:
+                where = f"{match.rect.x}/{match.rect.y}"
+            self.log.info(
+                "TEST %s | Detected: %s | Confidence: %.2f | Coordinates: %s",
+                name, "YES" if detected else "NO", score, where,
+            )
+            messagebox.showinfo(
+                tr("Test detection"),
+                tr("State: %s\nDetected: %s\nConfidence: %.2f\nCoordinates: %s")
+                % (name, tr("YES") if detected else tr("NO"), score, where),
+            )
+        except CaptureError as exc:
+            messagebox.showerror(tr("Capture failed"), str(exc))
+        finally:
+            context.release()
+
+    def edit_named_state(self, name: str) -> None:
+        self.project.ensure_result_state(name)
+        self._selected_state = name
+        self.edit_state()
+
+    def refresh_test_data(self) -> None:
+        tree = getattr(self, "_test_data_tree", None)
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        data = self.project.test_data
+        for index, row in enumerate(data.rows):
+            values = []
+            for column in data.columns:
+                value = row.get(column, "")
+                if data.is_sensitive(column) and value:
+                    values.append("***")
+                else:
+                    values.append(value)
+            tree.insert("", "end", iid=str(index), values=values)
+
+    def add_test_row(self) -> None:
+        data = self.project.test_data
+        fields = [
+            Field(column, column, "secret" if data.is_sensitive(column) else "str")
+            for column in data.columns
+        ]
+        values = FormDialog.ask(self, tr("Test data row"), fields)
+        if values is None:
+            return
+        data.rows.append({column: str(values.get(column) or "") for column in data.columns})
+        self.project.mark_dirty()
+        self.refresh_test_data()
+        self.refresh_workflow()
+
+    def delete_test_row(self) -> None:
+        tree = getattr(self, "_test_data_tree", None)
+        if tree is None:
+            return
+        selection = tree.selection()
+        if not selection:
+            return
+        index = int(selection[0])
+        if 0 <= index < len(self.project.test_data.rows):
+            self.project.test_data.rows.pop(index)
+            self.project.mark_dirty()
+            self.refresh_test_data()
+
+    def _on_hotkey_step(self) -> None:
+        context = self._context
+        if context is not None and getattr(context, "step_continue", None) is not None:
+            context.step_continue.set()
 
     def store_reference_patch(
         self, patch: np.ndarray, frame_size: tuple[int, int], suggested_name: str
@@ -2767,6 +3049,7 @@ class App(tk.Tk):
         self._canvas.selection = selection
         self.refresh_states()
         self.refresh_workflow()
+        self.refresh_test_data()
         for record in self.log.records():
             self._append_log(record)
         self._update_status()
@@ -2915,6 +3198,7 @@ class App(tk.Tk):
                 % "\n".join(problems[:6]),
             ):
                 return
+        self.project.pipeline.step_by_step = bool(self.step_by_step.get())
         context = self._build_context()
         if context is None:
             return

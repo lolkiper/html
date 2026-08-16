@@ -100,28 +100,49 @@ CPython on Windows, so the GUI needs no extra install.
 3. Pick the instance in the **LDPlayer** list and press **Select**.  If discovery
    finds nothing (for example a heavily customised window title), use
    **Screen region...** and give the rectangle by hand.
-4. Create the screens you want to recognise: **ADD STATE**, then
-   **From current screen...** and drag a rectangle around something
-   characteristic (a button, a banner, an error icon).  That crop is stored as
-   the reference image of the state, together with the confidence threshold.
-5. Use **Detection test → Analyze the current screen** to see the confidence of
-   every state against the live screen.  Tune the thresholds until the right
-   state wins clearly.
-6. Build the scenario in the centre panel with **ADD CONDITION**, **ADD ACTION**,
-   **ADD VERIFY**, **ADD ELSE**, **ADD WAIT**, **ADD RETRY**, ...
-7. Press **START (F8)**.  **F9** stops everything immediately.
+4. **Save** the project (reference images can only be stored after that).
+5. Record **AUTH_VK** (green **+ RECORD MACRO**): perform the VK login yourself,
+   stop the recorder, save as `AUTH_VK`. The program does not invent clicks.
+6. Manually open the failed-login screen → **CAPTURE ERROR STATE** → crop a
+   *small* unique element (error text, button) → name `AUTH_ERROR`.
+7. Manually open the screen after a successful login → **CAPTURE SUCCESS STATE**
+   → crop a small unique element → name `AUTH_SUCCESS`.
+8. Record **MACRO_2** the same way for the steps after a successful login.
+   Optionally capture **MACRO_2** error/success states the same way.
+9. Add test-data rows (`login` / `password`) if AUTH_VK should type them.
+   Passwords are never written to the log.
+10. Press **START (F8)**. After AUTH_VK the engine **waits and analyses** the
+    screen. `AUTH_ERROR` fails the current row, resets, loads the next row and
+    runs AUTH_VK again — MACRO_2 is not started. `AUTH_SUCCESS` starts MACRO_2,
+    then verifies. Unknown results retry; after the limit the run stops.
+    **F9** is emergency stop. **STEP BY STEP** + **F10** advances one node.
 
 Tip: switch on **Dry run** first.  The engine then analyses, decides and logs
-exactly what it would do, without moving the mouse.
+exactly what it would do, without moving the mouse. Use **Test detection** on a
+state to analyse the current screen without clicking.
+
+```
+START → LOAD TEST DATA → AUTH_VK → WAIT → ANALYZE
+  AUTH_ERROR  → FAILED → RESET → NEXT DATA → AUTH_VK
+  AUTH_SUCCESS → MACRO_2 → VERIFY → DONE / HANDLER
+  UNKNOWN → WAIT → RECHECK → RETRY → UNKNOWN_FINAL → STOP
+```
+
+Finishing AUTH_VK is not success. Only a visual match of `AUTH_SUCCESS` is.
+
+Do not capture the whole screen as a reference. A small unique control works
+better. Automatic analysis frames stay in RAM; only Capture error/success
+images are stored in the project.
 
 ---
 
 ## Recording a macro
 
-**+ RECORD MACRO** is the full-width green button under the yellow **MACRO**
-heading in the centre panel. **Record...** in the state editor opens the same
-recorder: press *Start recording*, perform the combination in LDPlayer,
-press **F10**, then *Use the recording*.
+**+ RECORD MACRO (AUTH_VK)** is the full-width green button under the yellow
+**MACRO** heading. **RECORD MACRO 2** records the second stage. The Pipeline
+tab has Record / Edit / Test for `AUTH_VK`, `MACRO_2` and optional `RESET`.
+Press *Start recording*, perform the combination in LDPlayer, press **F10**
+(while recording this stops the recorder), then *Use the recording*.
 
 Raw input is condensed into meaningful actions:
 
@@ -220,30 +241,21 @@ whenever nothing is recognised (for example "press Back and analyse again").
 
 ## Scenarios: conditions, actions, verification
 
-The scenario is a tree, displayed and edited as a diagram:
+The default project is a sequential-macro tree:
 
 ```
 START
 ↓
-ANALYZE SCREEN
-↓
-IF STATE STATE_A detected
-├── YES
-│   ↓
-│   LEFT CLICK -> element of state 'STATE_A'
-│   ↓
-│   VERIFY state STATE_C (timeout 6s)
-├── ELSE IF STATE STATE_B detected
-│   ↓
-│   LEFT CLICK -> element of state 'STATE_B'
-└── ELSE
-    ↓
-    WAIT 1s
-    ↓
-    RETRY x3 (delay 1s)
-    └── BODY
-        ↓
-        ANALYZE (wait for STATE_A, timeout 8s)
+LOOP WHILE there is another test row
+├── LOAD TEST DATA
+├── AUTH_VK
+├── WAIT FOR AUTH RESULT
+├── ANALYZE SCREEN
+└── IF STATE AUTH_ERROR detected
+    ├── YES → FAILED → RESET → NEXT TEST DATA → (loop)
+    ├── ELSE IF STATE AUTH_SUCCESS detected
+    │   └── MACRO_2 → ANALYZE → IF MACRO2_ERROR / MACRO2_SUCCESS / RETRY
+    └── ELSE → RETRY → UNKNOWN_FINAL → STOP
 ```
 
 Supported control flow: `IF`, `ELSE IF`, `ELSE`, `AND`, `OR`, `NOT`, `WAIT`,

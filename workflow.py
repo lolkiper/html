@@ -77,6 +77,7 @@ class NodeType(str, Enum):
     LOOP = "LOOP"
     STOP = "STOP"
     STATE = "STATE"
+    MACRO = "MACRO"
 
 
 class NodeStatus(str, Enum):
@@ -224,6 +225,8 @@ class WorkflowNode:
             return tr("STOP (%s)") % self.reason if self.reason else tr("STOP")
         if self.type is NodeType.STATE:
             return tr("STATE %s") % (self.state or "?")
+        if self.type is NodeType.MACRO:
+            return self.title or self.state or tr("MACRO")
         return self.type.value
 
     # -------------------------------------------------------- serialisation
@@ -372,7 +375,7 @@ class Workflow:
         names: set[str] = set()
         conditions: list[Condition | None] = []
         for node in self.walk():
-            if node.state:
+            if node.state and node.type is not NodeType.MACRO:
                 names.add(node.state)
             conditions.append(node.condition)
             conditions.extend(branch.condition for branch in node.elif_branches)
@@ -533,6 +536,9 @@ class WorkflowRunner:
             self.ctx.safety.start()
         deadline = time.monotonic() + settings.max_duration if settings.max_duration else None
         try:
+            data = getattr(self.ctx, "test_data", None)
+            if data is not None and hasattr(data, "reset"):
+                data.reset()
             while True:
                 self.ctx.safety.raise_if_stopped()
                 self.ctx.safety.wait_while_paused()
@@ -591,6 +597,7 @@ class WorkflowRunner:
 
     def _run_node(self, node: WorkflowNode) -> NodeOutcome:
         self._enter(node)
+        self._wait_step(node)
         handler = {
             NodeType.ANALYZE: self._node_analyze,
             NodeType.IF: self._node_if,
@@ -601,6 +608,7 @@ class WorkflowRunner:
             NodeType.LOOP: self._node_loop,
             NodeType.STOP: self._node_stop,
             NodeType.STATE: self._node_state,
+            NodeType.MACRO: self._node_macro,
         }.get(node.type)
         if handler is None:  # pragma: no cover - defensive
             return NodeOutcome(NodeStatus.SKIPPED, f"unsupported node {node.type}")
@@ -612,6 +620,52 @@ class WorkflowRunner:
             return NodeOutcome(NodeStatus.FAILED, str(exc))
 
     # ---------------------------------------------------------------- nodes
+    def _wait_step(self, node: WorkflowNode) -> None:
+        """In STEP BY STEP mode, pause until F10 (F9 still aborts)."""
+        if not getattr(self.ctx, "step_by_step", False):
+            return
+        gate = getattr(self.ctx, "step_continue", None)
+        if gate is None:
+            return
+        detected = "-"
+        confidence = 0.0
+        if self.ctx.frame is not None:
+            outcome = self.ctx.detect()
+            detected = outcome.state
+            confidence = outcome.confidence
+        self.log.info(
+            "STEP: %s | state=%s (%.2f) | next: %s | F10 continue, F9 stop",
+            self.engine_state.value, detected, confidence, node.describe(),
+        )
+        gate.clear()
+        while not gate.wait(timeout=0.2):
+            self.ctx.safety.raise_if_stopped()
+            self.ctx.safety.wait_while_paused()
+
+    def _node_macro(self, node: WorkflowNode) -> NodeOutcome:
+        name = node.state or node.title
+        macros = getattr(self.ctx, "macros", {}) or {}
+        macro = macros.get(name)
+        if macro is None:
+            self.log.warning("Macro '%s' is not defined", name)
+            return NodeOutcome(NodeStatus.FAILED, f"unknown macro {name}")
+        actions = list(macro.actions)
+        if not actions:
+            return NodeOutcome(NodeStatus.SUCCESS, f"{name} empty")
+        detail = ""
+        for action in actions:
+            self.ctx.safety.raise_if_stopped()
+            self.ctx.safety.wait_while_paused()
+            self.log.info("Action: %s", action.describe())
+            result = action.execute(self.ctx)
+            if not result.success:
+                detail = result.detail or f"{name} step failed"
+                self.log.warning("%s: %s", name, detail)
+                if node.continue_on_failure:
+                    break
+                return NodeOutcome(NodeStatus.FAILED, detail)
+        return NodeOutcome(NodeStatus.SUCCESS, detail or f"{name} finished")
+
     def _node_analyze(self, node: WorkflowNode) -> NodeOutcome:
         self._set_engine_state(EngineState.ANALYZING)
         self.log.info("Analyzing screen")

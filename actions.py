@@ -466,15 +466,23 @@ class TypeText(Action):
     variable: str = ""  # read the value from a variable instead of the project file
 
     def execute(self, ctx: "AnalysisContext") -> ActionResult:
-        value = str(ctx.variables.get(self.variable, "")) if self.variable else self.text
-        if isinstance(value, Secret):
-            value = value.reveal()
+        if self.variable:
+            raw = ctx.variables.get(self.variable, "")
+            if isinstance(raw, Secret):
+                value = raw.reveal()
+                sensitive = True
+            else:
+                value = str(raw or "")
+                sensitive = self.sensitive
+        else:
+            value = self.text
+            sensitive = self.sensitive
         if not value:
             return ActionResult(False, "nothing to type")
         if self.clear_first:
             ctx.keyboard.clear_field()
-        done = ctx.keyboard.type_text(value, interval=self.interval, sensitive=self.sensitive)
-        detail = "typed " + (mask_text(value) if self.sensitive else f"{len(value)} chars")
+        done = ctx.keyboard.type_text(value, interval=self.interval, sensitive=sensitive)
+        detail = "typed " + (mask_text(value) if sensitive else f"{len(value)} chars")
         return ActionResult(done, detail)
 
     def describe(self) -> str:

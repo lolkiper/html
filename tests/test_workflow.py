@@ -327,10 +327,12 @@ def test_node_descriptions_cover_every_type():
         make_node(NodeType.LOOP, condition=Always(True)),
         make_node(NodeType.STOP, reason="x"),
         make_node(NodeType.STATE, state="S"),
+        make_node(NodeType.MACRO, state="AUTH_VK"),
     ]
     labels = [node.describe() for node in nodes]
     assert all(labels)
     assert labels[0] == "ANALYZE SCREEN"
+    assert labels[-1] == "AUTH_VK"
     titled = make_node(NodeType.WAIT, title="Custom label")
     assert titled.describe() == "Custom label"
 
