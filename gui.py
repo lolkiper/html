@@ -1468,6 +1468,7 @@ class App(tk.Tk):
         self._queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._engine_thread: threading.Thread | None = None
         self._context: AnalysisContext | None = None
+        self._runner: Any = None
         self._ocr_service: Any = None
         self._closing = False
         self._selected_state: str = ""
@@ -1676,6 +1677,12 @@ class App(tk.Tk):
         widget.configure(state="disabled")
 
     def _update_status(self) -> None:
+        # Read the live counters straight from the running engine, so the bar
+        # moves during a run instead of only at the end.
+        if self._context is not None:
+            self._status["frames"] = self._context.frames_analyzed
+        if self._runner is not None:
+            self._status["cycles"] = self._runner.report.cycles
         text = (
             f"Engine: {self._status['engine']}   |   Run: {self.safety.state}   |   "
             f"State: {self._status['state']} ({self._status['confidence']:.2f})   |   "
@@ -1694,8 +1701,24 @@ class App(tk.Tk):
         self._queue.put(("log", record))
 
     def _drain_queue(self) -> None:
+        """Apply queued engine events, then schedule the next tick.
+
+        A failing event handler must never break the chain: without the
+        ``finally`` the whole GUI would stop updating while the engine keeps
+        running in its worker thread.
+        """
         if self._closing:
             return
+        try:
+            self._process_events()
+            self._update_status()
+        except Exception as exc:  # pragma: no cover - defensive
+            self.log.error("GUI update failed: %s", exc)
+        finally:
+            if not self._closing:
+                self.after(80, self._drain_queue)
+
+    def _process_events(self) -> None:
         try:
             while True:
                 kind, payload = self._queue.get_nowait()
@@ -1723,8 +1746,6 @@ class App(tk.Tk):
                     self._on_engine_finished(payload)
         except queue.Empty:
             pass
-        self._update_status()
-        self.after(80, self._drain_queue)
 
     def _append_log(self, record: LogRecord) -> None:
         try:
@@ -2450,6 +2471,7 @@ class App(tk.Tk):
                 on_step=lambda record: self._queue.put(("step", record)),
                 on_node=lambda node: self._queue.put(("node", node.id)),
             )
+        self._runner = runner
         self._engine_thread = threading.Thread(
             target=self._run_engine, args=(context, runner), name="engine", daemon=True
         )

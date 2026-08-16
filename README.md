@@ -171,12 +171,12 @@ ANALYZE SCREEN
 IF STATE STATE_A detected
 ├── YES
 │   ↓
-│   LEFT CLICK -> state 'STATE_A' element
+│   LEFT CLICK -> element of state 'STATE_A'
 │   ↓
 │   VERIFY state STATE_C (timeout 6s)
 ├── ELSE IF STATE STATE_B detected
 │   ↓
-│   LEFT CLICK -> state 'STATE_B' element
+│   LEFT CLICK -> element of state 'STATE_B'
 └── ELSE
     ↓
     WAIT 1s
@@ -211,7 +211,7 @@ state, compares it with the expectation and records the result:
 
 ```
 [19:30:01] State detected: SCREEN_A, confidence=0.94
-[19:30:01] Click at window (179,250) [state 'SCREEN_A' element, confidence=0.94]
+[19:30:01] Click at window (179,250) [element of state 'SCREEN_A', confidence=0.94]
 [19:30:02] Verification started
 [19:30:02] State detected: SCREEN_B
 [19:30:02] Verification: SUCCESS

@@ -175,3 +175,28 @@ def test_emergency_stop_button_stops_the_controller(app):
     app.safety.start()
     app.stop_engine()
     assert app.safety.is_stopped
+
+
+def test_gui_updates_keep_running_after_a_failing_event(app):
+    """A broken event must not stop the update chain (the engine keeps going)."""
+    app._queue.put(("engine_state", None))  # malformed on purpose
+    app._drain_queue()
+    app.log.info("still alive")
+    app._drain_queue()
+    assert "still alive" in app._log_view.get("1.0", "end")
+    assert any("GUI update failed" in line for line in app.log.lines())
+
+
+def test_status_bar_follows_the_live_counters(app, context):
+    class FakeReport:
+        cycles = 7
+
+    class FakeRunner:
+        report = FakeReport()
+
+    context.frames_analyzed = 42
+    app._context = context
+    app._runner = FakeRunner()
+    app._update_status()
+    text = app._status_label.cget("text")
+    assert "Frames: 42" in text and "Cycles: 7" in text

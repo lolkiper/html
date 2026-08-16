@@ -91,7 +91,7 @@ class Target:
         elif mode is TargetMode.STATE:
             state_name = self.state or ctx.detect().state
             match = ctx.state_match(state_name)
-            source = f"state '{state_name}' element"
+            source = f"element of state '{state_name}'"
         if match is None or match.rect is None or not match.found:
             return None
         if self.anchor == "topleft":
@@ -152,7 +152,7 @@ class Target:
         if mode is TargetMode.TEXT:
             return f"text '{self.text}'"
         if mode is TargetMode.STATE:
-            return f"state '{self.state or 'current'}' element"
+            return f"element of state '{self.state or 'current'}'"
         return "current pointer"
 
 
