@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from i18n import tr
 from logger import EventLog, get_logger
 from safety import EmergencyStop, SafetyController, SafetyViolation
 
@@ -257,7 +258,9 @@ class Mouse:
         suffix = f", confidence={confidence:.2f}" if isinstance(confidence, (int, float)) else ""
         self.log.info(
             "%s at window (%s,%s) [%s%s]",
-            {1: "Click", 2: "Double click", 3: "Triple click"}.get(clicks, f"{clicks}x click"),
+            {1: tr("Click"), 2: tr("Double click"), 3: tr("Triple click")}.get(
+                clicks, tr("%sx click") % clicks
+            ),
             decision.client[0], decision.client[1], source, suffix,
         )
         return True

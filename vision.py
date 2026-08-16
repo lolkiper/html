@@ -19,6 +19,8 @@ from typing import Any, Iterable, Sequence
 import cv2
 import numpy as np
 
+from i18n import tr
+
 DEFAULT_THRESHOLD = 0.85
 #: Scale factors tried around the expected template scale.
 DEFAULT_SCALE_STEPS = (1.0, 0.95, 1.05, 0.9, 1.1)
@@ -143,8 +145,8 @@ class Roi:
 
     def describe(self) -> str:
         if self.is_full():
-            return "full screen"
-        return f"ROI {self.width:.2f}x{self.height:.2f} at ({self.x:.2f},{self.y:.2f})"
+            return tr("full screen")
+        return tr("ROI %.2fx%.2f at (%.2f,%.2f)") % (self.width, self.height, self.x, self.y)
 
 
 @dataclass

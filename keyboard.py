@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Protocol, Sequence
 
+from i18n import tr
 from logger import EventLog, Secret, get_logger, mask_text
 from safety import SafetyController
 
@@ -227,7 +228,7 @@ class Keyboard:
         self.backend.type_text(raw, interval=interval)
         self.safety.note_action("type")
         self.log.info(
-            "Typed text (%s)", mask_text(raw) if sensitive else f"{len(raw)} chars"
+            "Typed text (%s)", mask_text(raw) if sensitive else tr("%s chars") % len(raw)
         )
         return True
 

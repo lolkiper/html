@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Sequence
 
+from i18n import tr
 from vision import MatchResult, Roi, color_distance, find_color, image_difference, pixel_color
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -123,7 +124,7 @@ class Always(Condition):
         return ConditionResult(self.value, 1.0, "always" if self.value else "never")
 
     def describe(self) -> str:
-        return "ALWAYS" if self.value else "NEVER"
+        return tr("ALWAYS") if self.value else tr("NEVER")
 
     def payload(self) -> dict[str, Any]:
         return {"value": self.value}
@@ -158,7 +159,7 @@ class StateIs(Condition):
         return ConditionResult(matches, confidence, detail, outcome.matches.get(self.state))
 
     def describe(self) -> str:
-        return f"STATE {self.state or '?'} detected"
+        return tr("STATE %s detected") % (self.state or "?")
 
     def payload(self) -> dict[str, Any]:
         return {"state": self.state, "min_confidence": self.min_confidence}
@@ -192,7 +193,7 @@ class ReferenceVisible(Condition):
         return ConditionResult(match.found, match.confidence, detail, match)
 
     def describe(self) -> str:
-        return f"IMAGE '{self.reference}' visible (>= {self.threshold:.2f})"
+        return tr("IMAGE '%s' visible (>= %.2f)") % (self.reference, self.threshold)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -240,7 +241,7 @@ class TextVisible(Condition):
         return ConditionResult(match.found, match.confidence, detail, match)
 
     def describe(self) -> str:
-        return f"TEXT '{self.text}' visible"
+        return tr("TEXT '%s' visible") % self.text
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -292,7 +293,7 @@ class NumberCompare(Condition):
         return ConditionResult(result, match.confidence, detail, match)
 
     def describe(self) -> str:
-        return f"NUMBER {self.operator} {self.value:g}"
+        return tr("NUMBER %s %g") % (self.operator, self.value)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -339,7 +340,7 @@ class ColorAt(Condition):
         return ConditionResult(value, confidence, detail)
 
     def describe(self) -> str:
-        return f"COLOR at ({self.x:.2f},{self.y:.2f}) == {tuple(self.color)}"
+        return tr("COLOR at (%.2f,%.2f) == %s") % (self.x, self.y, tuple(self.color))
 
     def payload(self) -> dict[str, Any]:
         return {"x": self.x, "y": self.y, "color": list(self.color), "tolerance": self.tolerance}
@@ -377,7 +378,7 @@ class ColorPresent(Condition):
         return ConditionResult(match.found, match.confidence, detail, match)
 
     def describe(self) -> str:
-        return f"COLOR {tuple(self.color)} present"
+        return tr("COLOR %s present") % (tuple(self.color),)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -418,7 +419,7 @@ class ScreenChanged(Condition):
         return ConditionResult(value, min(1.0, difference * 10), f"difference={difference:.4f}")
 
     def describe(self) -> str:
-        return f"SCREEN changed (>= {self.threshold:.3f})"
+        return tr("SCREEN changed (>= %.3f)") % self.threshold
 
     def payload(self) -> dict[str, Any]:
         return {"threshold": self.threshold}
@@ -459,7 +460,7 @@ class VariableCompare(Condition):
         return ConditionResult(result, 1.0, detail)
 
     def describe(self) -> str:
-        return f"VAR {self.name} {self.operator} {self.value}"
+        return tr("VAR %s %s %s") % (self.name, self.operator, self.value)
 
     def payload(self) -> dict[str, Any]:
         return {"name": self.name, "operator": self.operator, "value": self.value}
@@ -486,7 +487,7 @@ class Not(Condition):
 
     def describe(self) -> str:
         inner = self.condition.describe() if self.condition else "?"
-        return f"NOT ({inner})"
+        return tr("NOT (%s)") % inner
 
     def payload(self) -> dict[str, Any]:
         return {"condition": condition_to_dict(self.condition)}
@@ -540,7 +541,7 @@ class AllOf(_Composite):
         return ConditionResult(True, min(confidences), "AND: " + "; ".join(details), best_match)
 
     def describe(self) -> str:
-        return " AND ".join(f"({item.describe()})" for item in self.conditions) or "AND"
+        return tr(" AND ").join(f"({item.describe()})" for item in self.conditions) or tr("AND")
 
 
 @register_condition
@@ -564,13 +565,13 @@ class AnyOf(_Composite):
         return best
 
     def describe(self) -> str:
-        return " OR ".join(f"({item.describe()})" for item in self.conditions) or "OR"
+        return tr(" OR ").join(f"({item.describe()})" for item in self.conditions) or tr("OR")
 
 
 def describe_condition(condition: Condition | None) -> str:
-    return condition.describe() if condition is not None else "always"
+    return condition.describe() if condition is not None else tr("always")
 
 
 def available_conditions() -> list[tuple[str, str]]:
     """``(kind, label)`` pairs for the GUI condition picker."""
-    return [(kind, cls.label) for kind, cls in CONDITION_TYPES.items()]
+    return [(kind, tr(cls.label)) for kind, cls in CONDITION_TYPES.items()]

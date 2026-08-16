@@ -31,6 +31,7 @@ from actions import (
     verify_expected,
 )
 from conditions import Condition, ConditionResult, condition_from_dict, condition_to_dict, evaluate
+from i18n import tr
 from logger import EventLog, get_logger
 from ocr import OcrService, Preprocess
 from safety import EmergencyStop, SafetyController, SafetyViolation
@@ -135,7 +136,7 @@ class ReferenceSpec:
         )
 
     def describe(self) -> str:
-        return f"{self.image} (>= {self.confidence:.2f}, {self.roi.describe()})"
+        return tr("%s (>= %.2f, %s)") % (self.image, self.confidence, self.roi.describe())
 
 
 @dataclass
@@ -171,17 +172,17 @@ class VisualState:
         return bool(self.expected_state) or self.expected_condition is not None
 
     def summary(self) -> str:
-        parts = [f"confidence >= {self.confidence:.2f}"]
+        parts = [tr("confidence >= %.2f") % self.confidence]
         if self.references:
-            parts.append(f"{len(self.references)} reference image(s)")
+            parts.append(tr("%s reference image(s)") % len(self.references))
         if self.condition is not None:
             parts.append(self.condition.describe())
         if self.actions:
-            parts.append(f"{len(self.actions)} action(s)")
+            parts.append(tr("%s action(s)") % len(self.actions))
         if self.expected_state:
-            parts.append(f"expect {self.expected_state}")
+            parts.append(tr("expect %s") % self.expected_state)
         if self.fallback:
-            parts.append(f"fallback {self.fallback}")
+            parts.append(tr("fallback %s") % self.fallback)
         return ", ".join(parts)
 
     # -------------------------------------------------------- serialisation
@@ -259,10 +260,12 @@ class DetectionOutcome:
     def describe(self) -> str:
         if not self.known:
             best = max(self.scores.items(), key=lambda item: item[1], default=("-", 0.0))
-            return f"UNKNOWN (best guess {best[0]} at {best[1]:.2f})"
-        text = f"{self.state}, confidence={self.confidence:.2f}"
+            return tr("UNKNOWN (best guess %s at %.2f)") % (best[0], best[1])
+        text = tr("%s, confidence=%.2f") % (self.state, self.confidence)
         if self.ambiguous:
-            text += f" (ambiguous with {self.runner_up} at {self.runner_up_confidence:.2f})"
+            text += tr(" (ambiguous with %s at %.2f)") % (
+                self.runner_up, self.runner_up_confidence
+            )
         return text
 
 
@@ -637,10 +640,11 @@ class RunReport:
         return (self.ended_at or time.time()) - self.started_at
 
     def summary(self) -> str:
-        return (
-            f"{self.cycles} cycle(s) in {self.duration:.1f}s, "
-            f"{self.successes} success, {self.failures} failed, {self.retries} retries, "
-            f"{self.unknown} unknown"
+        return tr(
+            "%s cycle(s) in %.1fs, %s success, %s failed, %s retries, %s unknown"
+        ) % (
+            self.cycles, self.duration, self.successes, self.failures,
+            self.retries, self.unknown,
         )
 
 

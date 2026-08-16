@@ -26,8 +26,10 @@ from workflow import NodeType, outline_text  # noqa: E402
 def app(log, references):
     import gui
 
+    project = example_project()
+    project.settings.language = "en"          # the assertions below use English
     try:
-        instance = gui.App(project=example_project(), log=log, dry_run=True)
+        instance = gui.App(project=project, log=log, dry_run=True)
     except tkinter.TclError as exc:  # pragma: no cover - broken display
         pytest.skip(f"Tk is unavailable: {exc}")
     instance.update_idletasks()
@@ -210,3 +212,71 @@ def test_details_panel_follows_the_running_step(app):
     assert "RUNNING" in details
     assert node.describe() in details
     assert app._canvas._active_node == node.id
+
+
+def test_the_interface_follows_the_project_language(log):
+    import gui
+    from i18n import get_language
+
+    project = example_project()
+    project.settings.language = "ru"
+    app = gui.App(project=project, log=log, dry_run=True)
+    try:
+        assert get_language() == "ru"
+        assert "СОСТОЯНИЕ" in outline_text(app.project.workflow)
+    finally:
+        app.hotkeys.stop()
+        app.log.remove_listener(app._queue_log_record)
+        app.destroy()
+
+
+def test_switching_the_language_rebuilds_the_window(app):
+    from i18n import get_language
+
+    assert get_language() == "en"
+    app.change_language("ru")
+    app.update_idletasks()
+    assert get_language() == "ru"
+    assert app.project.settings.language == "ru"
+    assert "АНАЛИЗ ЭКРАНА" in outline_text(app.project.workflow)
+    # the rebuilt window keeps working
+    app.log.info("после переключения")
+    app._drain_queue()
+    assert "после переключения" in app._log_view.get("1.0", "end")
+    assert app._states_tree.get_children()
+
+
+def test_recorded_actions_are_inserted_into_the_scenario(app, monkeypatch):
+    """The macro recorder turns real input into steps of the scenario."""
+    import gui
+    from ldplayer import manual_window
+    from recorder import RawEvent, ScriptedListener
+    from workflow import NodeType
+
+    app.window = manual_window(0, 0, 320, 480, title="fake", log=app.log)
+    events = [
+        RawEvent(kind="down", x=160, y=240, at=1.0),
+        RawEvent(kind="up", x=160, y=240, at=1.05),
+        RawEvent(kind="key_down", key="enter", at=1.4),
+    ]
+
+    def scripted(recorder, log=None):
+        return ScriptedListener(recorder, events)
+
+    monkeypatch.setattr(gui, "create_listener", scripted)
+    before = len(app.project.workflow.nodes)
+
+    dialog = gui.RecorderDialog(app, app)
+    dialog._start()                 # the scripted listener feeds the events at once
+    dialog._stop()
+    # the 0.4s gap between the click and the key became a pause
+    assert [step.kind for step in dialog.recorder.steps] == ["click", "wait", "key"]
+    dialog._accept()
+    actions = dialog.result
+    assert [type(action).__name__ for action in actions] == ["LeftClick", "Wait", "PressKey"]
+
+    app._selection = (app.project.workflow.nodes[0].id, "")
+    for action in actions:
+        app._insert_node(gui.make_node(NodeType.ACTION, action=action))
+    assert len(app.project.workflow.nodes) == before + 3
+    assert app.project.workflow.nodes[1].action.target.mode.value == "window"

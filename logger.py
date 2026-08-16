@@ -18,6 +18,8 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+from i18n import tr as translate
+
 REDACTED = "***"
 IMAGE_PLACEHOLDER = "<image omitted>"
 
@@ -179,6 +181,10 @@ class EventLog:
         category: str = "engine",
     ) -> LogRecord | None:
         level = LogLevel.parse(level)
+        # Engine messages are format templates, so translating them here - before
+        # the values are inserted - localises the whole log with one hook.
+        if isinstance(message, str):
+            message = translate(message)
         text = self.sanitize(message)
         if args:
             safe_args = tuple(self.sanitize_value(arg) for arg in args)

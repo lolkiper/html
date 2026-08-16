@@ -47,6 +47,7 @@ from conditions import (
     describe_condition,
     evaluate,
 )
+from i18n import tr
 from logger import EventLog, get_logger
 from safety import EmergencyStop, SafetyViolation
 from screen_capture import CaptureError
@@ -195,30 +196,34 @@ class WorkflowNode:
             return self.title
         if self.type is NodeType.ANALYZE:
             if self.state:
-                return f"ANALYZE (wait for {self.state}, timeout {self.timeout:g}s)"
-            return "ANALYZE SCREEN"
+                return tr("ANALYZE (wait for %s, timeout %gs)") % (self.state, self.timeout)
+            return tr("ANALYZE SCREEN")
         if self.type is NodeType.IF:
-            return f"IF {describe_condition(self.condition)}"
+            return tr("IF %s") % describe_condition(self.condition)
         if self.type is NodeType.ACTION:
-            return self.action.describe() if self.action else "ACTION (empty)"
+            return self.action.describe() if self.action else tr("ACTION (empty)")
         if self.type is NodeType.VERIFY:
             if self.state:
-                return f"VERIFY state {self.state} (timeout {self.timeout:g}s)"
-            return f"VERIFY {describe_condition(self.condition)}"
+                return tr("VERIFY state %s (timeout %gs)") % (self.state, self.timeout)
+            return tr("VERIFY %s") % describe_condition(self.condition)
         if self.type is NodeType.WAIT:
             if self.condition is not None:
-                return f"WAIT UNTIL {describe_condition(self.condition)} (timeout {self.timeout:g}s)"
-            return f"WAIT {self.seconds:g}s"
+                return tr("WAIT UNTIL %s (timeout %gs)") % (
+                    describe_condition(self.condition), self.timeout
+                )
+            return tr("WAIT %gs") % self.seconds
         if self.type is NodeType.RETRY:
-            return f"RETRY x{self.attempts} (delay {self.delay:g}s)"
+            return tr("RETRY x%s (delay %gs)") % (self.attempts, self.delay)
         if self.type is NodeType.LOOP:
             if self.condition is not None:
-                return f"LOOP WHILE {describe_condition(self.condition)} (max {self.max_iterations})"
-            return f"LOOP x{self.count}"
+                return tr("LOOP WHILE %s (max %s)") % (
+                    describe_condition(self.condition), self.max_iterations
+                )
+            return tr("LOOP x%s") % self.count
         if self.type is NodeType.STOP:
-            return f"STOP{f' ({self.reason})' if self.reason else ''}"
+            return tr("STOP (%s)") % self.reason if self.reason else tr("STOP")
         if self.type is NodeType.STATE:
-            return f"STATE {self.state or '?'}"
+            return tr("STATE %s") % (self.state or "?")
         return self.type.value
 
     # -------------------------------------------------------- serialisation
@@ -433,7 +438,7 @@ def outline_rows(workflow: Workflow, expand: Iterable[str] = ()) -> list[Outline
     ``expand`` lists node ids whose unused branches should be shown as empty
     slots (the editor passes the current selection).
     """
-    rows: list[OutlineRow] = [OutlineRow("", 0, "START", "marker")]
+    rows: list[OutlineRow] = [OutlineRow("", 0, tr("START"), "marker")]
     expanded = set(expand)
 
     def render(nodes: Sequence[WorkflowNode], depth: int, prefix: str) -> None:
@@ -442,15 +447,15 @@ def outline_rows(workflow: Workflow, expand: Iterable[str] = ()) -> list[Outline
                 rows.append(OutlineRow("", depth, "↓", "marker", prefix))
             label = node.describe()
             if not node.enabled:
-                label = f"{label}  [disabled]"
+                label = f"{label}{tr('  [disabled]')}"
             rows.append(OutlineRow(node.id, depth, label, "node", prefix))
             branches = node.branches(include_empty=node.id in expanded)
             for branch_index, branch in enumerate(branches):
                 last = branch_index == len(branches) - 1
                 connector = "└── " if last else "├── "
-                label = branch.label
+                label = tr(branch.label)
                 if branch.condition is not None and branch.label.startswith("ELSE IF"):
-                    label = f"ELSE IF {describe_condition(branch.condition)}"
+                    label = tr("ELSE IF %s") % describe_condition(branch.condition)
                 rows.append(
                     OutlineRow(node.id, depth + 1, label, "branch", prefix + connector, branch.label)
                 )
@@ -458,10 +463,12 @@ def outline_rows(workflow: Workflow, expand: Iterable[str] = ()) -> list[Outline
                 if branch.nodes:
                     render(branch.nodes, depth + 1, child_prefix)
                 else:
-                    rows.append(OutlineRow(node.id, depth + 2, "(empty)", "marker", child_prefix))
+                    rows.append(
+                        OutlineRow(node.id, depth + 2, tr("(empty)"), "marker", child_prefix)
+                    )
 
     render(workflow.nodes, 0, "")
-    rows.append(OutlineRow("", 0, "END", "marker"))
+    rows.append(OutlineRow("", 0, tr("END"), "marker"))
     return rows
 
 
@@ -632,14 +639,17 @@ class WorkflowRunner:
     def _node_if(self, node: WorkflowNode) -> NodeOutcome:
         self.ctx.ensure_frame()
         result = evaluate(node.condition, self.ctx)
-        self.log.info("IF %s -> %s", describe_condition(node.condition), "YES" if result.value else "NO")
+        self.log.info(
+            "IF %s -> %s", describe_condition(node.condition),
+            tr("YES") if result.value else tr("NO"),
+        )
         if result.value:
             return self._run_sequence(node.then_nodes)
         for branch in node.elif_branches:
             branch_result = evaluate(branch.condition, self.ctx)
             self.log.info(
                 "ELSE IF %s -> %s", describe_condition(branch.condition),
-                "YES" if branch_result.value else "NO",
+                tr("YES") if branch_result.value else tr("NO"),
             )
             if branch_result.value:
                 return self._run_sequence(branch.nodes)
@@ -827,7 +837,7 @@ def example_workflow(
         target=Target(mode=TargetMode.STATE, state=state_a), require_confidence=0.85
     )
     workflow = Workflow(
-        name="Example scenario",
+        name=tr("Example scenario"),
         nodes=[
             make_node(NodeType.ANALYZE),
             make_node(

@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 import ldplayer
+from i18n import DEFAULT_LANGUAGE, available_languages, set_language, tr
 from keyboard import install_safety_hotkeys
 from logger import EventLog, LogLevel, LogRecord, get_logger, set_logger
 from project import Project, ProjectError, example_project
@@ -54,6 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-level", default="INFO",
                         choices=("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"))
     parser.add_argument("--no-gui", action="store_true", help="never open the GUI")
+    parser.add_argument(
+        "--lang", choices=[code for code, _label in available_languages()],
+        help="interface language (default: the project setting, otherwise ru)",
+    )
     return parser
 
 
@@ -97,11 +102,11 @@ def select_window(args: argparse.Namespace, project: Project, log: EventLog):
 def list_instances(log: EventLog) -> int:
     instances = ldplayer.enumerate_windows()
     if not instances:
-        print("No LDPlayer window found.")
+        print(tr("No LDPlayer window found."))
         if not sys.platform.startswith("win"):
-            print("Window discovery requires Windows; use --region on other systems.")
+            print(tr("Window discovery requires Windows; use --region on other systems."))
         return 1
-    print(f"{len(instances)} LDPlayer window(s):")
+    print(tr("%s LDPlayer window(s):") % len(instances))
     for index, instance in enumerate(instances):
         print(f"  [{index}] {instance.label}")
     return 0
@@ -140,13 +145,13 @@ def run_headless(args: argparse.Namespace, project: Project, log: EventLog) -> i
         context.release()
         hotkeys.stop()
     print()
-    print(f"Result: {report.summary()}")
+    print(tr("Result: %s") % report.summary())
     if report.stop_reason:
-        print(f"Stopped because: {report.stop_reason}")
+        print(tr("Stopped because: %s") % report.stop_reason)
     if project.path is not None:
         leftovers = audit_no_frame_artifacts(project.path)
         if leftovers:  # pragma: no cover - would indicate a policy violation
-            print("WARNING, unexpected image artefacts found:")
+            print(tr("WARNING, unexpected image artefacts found:"))
             for item in leftovers:
                 print(f"  {item}")
     return 0 if report.failures == 0 else 1
@@ -167,21 +172,22 @@ def analyze_once(args: argparse.Namespace, project: Project, log: EventLog) -> i
         window_size = window.client_size
         context.release()
     print()
-    print(f"Window: {window.title} {window_size[0]}x{window_size[1]}")
-    print(f"Detected state: {outcome.describe()}")
+    print(tr("Window: %s %sx%s") % (window.title, window_size[0], window_size[1]))
+    print(tr("Detected state: %s") % outcome.describe())
     if outcome.scores:
-        print("Scores:")
+        print(tr("Scores:"))
         for name, confidence in sorted(outcome.scores.items(), key=lambda item: -item[1]):
             match = outcome.matches.get(name)
             where = f" at {match.rect}" if match is not None and match.rect else ""
             print(f"  {name:<24} {confidence:.3f}{where}")
     else:
-        print("No state defines a detection rule yet.")
+        print(tr("No state defines a detection rule yet."))
     return 0 if outcome.known else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    set_language(args.lang or DEFAULT_LANGUAGE)
     log = configure_logging(args.log_level, args.log_file)
     headless = args.run or args.analyze or args.list_instances or args.print_workflow or args.no_gui
     if headless:
@@ -197,13 +203,17 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(str(exc))
     if args.mode:
         project.settings.engine_mode = args.mode
+    if args.lang:
+        project.settings.language = args.lang
+    else:
+        set_language(project.settings.language)
 
     if args.print_workflow:
-        print(f"Project: {project.describe()}")
+        print(tr("Project: %s") % project.describe())
         print()
         print(outline_text(project.workflow))
         print()
-        print("States:")
+        print(tr("States:"))
         for name in project.state_names():
             print(f"  {name:<24} {project.states[name].summary()}")
         return 0
@@ -213,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.run:
         return run_headless(args, project, log)
     if args.no_gui:
-        print("Nothing to do. Use --run, --analyze, --print-workflow or --list-instances.")
+        print(tr("Nothing to do. Use --run, --analyze, --print-workflow or --list-instances."))
         return 0
 
     try:

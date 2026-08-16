@@ -15,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from i18n import set_language  # noqa: E402
 from ldplayer import LDPlayerWindow, StaticWindowBackend, WindowRect  # noqa: E402
 from logger import EventLog, LogLevel  # noqa: E402
 from mouse import Mouse, RecordingPointer  # noqa: E402
@@ -117,6 +118,14 @@ class ScriptedOcrEngine:
         self.calls += 1
         key = self.emulator.screen if self.emulator else "*"
         return list(self.lines.get(key, self.lines.get("*", [])))
+
+
+@pytest.fixture(autouse=True)
+def english_interface():
+    """Assertions in the suite are written against the untranslated strings."""
+    set_language("en")
+    yield
+    set_language("en")
 
 
 @pytest.fixture

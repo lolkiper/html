@@ -9,3 +9,4 @@ Pillow>=10.2                # decoding reference images, preview in the editor
 pyautogui>=0.9.54           # mouse and keyboard input
 mss>=9.0                    # capture fallback / screen-region capture
 pyperclip>=1.8              # typing non-ASCII text through the clipboard
+pynput>=1.7                 # recording real clicks and keystrokes (macro recorder)

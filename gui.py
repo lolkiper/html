@@ -28,6 +28,15 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 import ldplayer
+from i18n import (
+    available_languages,
+    get_language,
+    language_code,
+    language_label,
+    set_language,
+    tr,
+)
+from recorder import ActionRecorder, RecorderSettings, create_listener
 from actions import (
     ACTION_TYPES,
     Action,
@@ -196,8 +205,8 @@ class FormDialog(tk.Toplevel):
         body.columnconfigure(1, weight=1)
         buttons = ttk.Frame(self, padding=(12, 0, 12, 12))
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side="right")
-        ttk.Button(buttons, text="OK", style="Accent.TButton", command=self._accept).pack(
+        ttk.Button(buttons, text=tr('Cancel'), command=self._cancel).pack(side="right")
+        ttk.Button(buttons, text=tr('OK'), style="Accent.TButton", command=self._accept).pack(
             side="right", padx=(0, 8)
         )
         self.bind("<Return>", lambda _event: self._accept())
@@ -237,7 +246,7 @@ class FormDialog(tk.Toplevel):
                     self._roi[key] = new_roi
                     label.configure(text=new_roi.describe())
 
-            ttk.Button(frame, text="Region...", command=edit_roi).pack(side="right")
+            ttk.Button(frame, text=tr('Region...'), command=edit_roi).pack(side="right")
             return frame
         variable = tk.StringVar(value="" if value is None else str(value))
         self._vars[spec.key] = variable
@@ -270,7 +279,7 @@ class FormDialog(tk.Toplevel):
         try:
             self.result = self._collect()
         except ValueError as exc:
-            messagebox.showerror("Invalid value", str(exc), parent=self)
+            messagebox.showerror(tr('Invalid value'), str(exc), parent=self)
             return
         self.destroy()
 
@@ -307,15 +316,15 @@ class RegionSelector(tk.Toplevel):
         self.canvas.pack(padx=8, pady=8)
         self.canvas.create_image(0, 0, anchor="nw", image=self._photo)
         ttk.Label(
-            self, text="Drag to select. The frame is only shown, never saved.",
+            self, text=tr('Drag to select. The frame is only shown, never saved.'),
             style="Muted.TLabel",
         ).pack(pady=(0, 4))
         buttons = ttk.Frame(self, padding=(8, 0, 8, 8))
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side="right")
-        ttk.Button(buttons, text="Use selection", style="Accent.TButton",
+        ttk.Button(buttons, text=tr('Cancel'), command=self._cancel).pack(side="right")
+        ttk.Button(buttons, text=tr('Use selection'), style="Accent.TButton",
                    command=self._accept).pack(side="right", padx=(0, 8))
-        ttk.Button(buttons, text="Whole screen", command=self._select_all).pack(side="left")
+        ttk.Button(buttons, text=tr('Whole screen'), command=self._select_all).pack(side="left")
         self._start: tuple[int, int] | None = None
         self._rectangle = None
         self.canvas.bind("<ButtonPress-1>", self._on_press)
@@ -357,7 +366,7 @@ class RegionSelector(tk.Toplevel):
     def _accept(self) -> None:
         selection = self._selection()
         if selection is None:
-            messagebox.showinfo("No selection", "Drag a rectangle first.", parent=self)
+            messagebox.showinfo(tr('No selection'), tr('Drag a rectangle first.'), parent=self)
             return
         self.result = selection
         self.destroy()
@@ -392,9 +401,8 @@ def to_photo_image(image: np.ndarray, max_size: tuple[int, int] = (400, 400)):
 def ask_roi(parent: tk.Misc, roi: Roi, app: "App | None") -> Roi | None:
     """Edit a region either numerically or by dragging on the current frame."""
     if app is not None and pillow_available() and messagebox.askyesno(
-        "Select region",
-        "Select the region on the current LDPlayer screen?\n"
-        "Choose No to type the values manually.",
+        tr('Select region'),
+        tr('Select the region on the current LDPlayer screen?\nChoose No to type the values manually.'),
         parent=parent,
     ):
         frame = app.grab_preview_frame()
@@ -409,10 +417,10 @@ def ask_roi(parent: tk.Misc, roi: Roi, app: "App | None") -> Roi | None:
         parent,
         "Region of interest (0..1)",
         [
-            Field("x", "X", "float", default=roi.x),
-            Field("y", "Y", "float", default=roi.y),
-            Field("width", "Width", "float", default=roi.width),
-            Field("height", "Height", "float", default=roi.height),
+            Field("x", tr('X'), "float", default=roi.x),
+            Field("y", tr('Y'), "float", default=roi.y),
+            Field("width", tr('Width'), "float", default=roi.width),
+            Field("height", tr('Height'), "float", default=roi.height),
         ],
     )
     if values is None:
@@ -429,54 +437,54 @@ def ask_roi(parent: tk.Misc, roi: Roi, app: "App | None") -> Roi | None:
 def condition_fields(kind: str, app: "App") -> list[Field]:
     states = app.project.state_names()
     references = app.project.reference_names()
-    common_roi = Field("roi", "Region", "roi", default=Roi.full())
+    common_roi = Field("roi", tr('Region'), "roi", default=Roi.full())
     return {
-        "always": [Field("value", "Value is true", "bool", default=True)],
+        "always": [Field("value", tr('Value is true'), "bool", default=True)],
         "state_is": [
-            Field("state", "State", "choice", states),
-            Field("min_confidence", "Minimum confidence", "float", hint="empty = state default"),
+            Field("state", tr('State'), "choice", states),
+            Field("min_confidence", tr('Minimum confidence'), "float", hint="empty = state default"),
         ],
         "reference_visible": [
-            Field("reference", "Reference image", "choice", references),
-            Field("threshold", "Confidence", "float", default=0.85),
+            Field("reference", tr('Reference image'), "choice", references),
+            Field("threshold", tr('Confidence'), "float", default=0.85),
             common_roi,
-            Field("grayscale", "Grayscale", "bool", default=True),
-            Field("match_mode", "Match mode", "choice", ("template", "feature", "histogram"),
+            Field("grayscale", tr('Grayscale'), "bool", default=True),
+            Field("match_mode", tr('Match mode'), "choice", ("template", "feature", "histogram"),
                   default="template"),
         ],
         "text_visible": [
-            Field("text", "Text", "str"),
+            Field("text", tr('Text'), "str"),
             common_roi,
-            Field("min_confidence", "OCR confidence", "float", default=0.6),
-            Field("regex", "Regular expression", "bool", default=False),
-            Field("ignore_case", "Ignore case", "bool", default=True),
-            Field("whole_line", "Whole line", "bool", default=False),
+            Field("min_confidence", tr('OCR confidence'), "float", default=0.6),
+            Field("regex", tr('Regular expression'), "bool", default=False),
+            Field("ignore_case", tr('Ignore case'), "bool", default=True),
+            Field("whole_line", tr('Whole line'), "bool", default=False),
         ],
         "number_compare": [
-            Field("operator", "Operator", "choice", ("==", "!=", ">", ">=", "<", "<="), default=">="),
-            Field("value", "Value", "float", default=0.0),
+            Field("operator", tr('Operator'), "choice", ("==", "!=", ">", ">=", "<", "<="), default=">="),
+            Field("value", tr('Value'), "float", default=0.0),
             common_roi,
-            Field("index", "Number index", "int", default=0),
-            Field("min_confidence", "OCR confidence", "float", default=0.6),
+            Field("index", tr('Number index'), "int", default=0),
+            Field("min_confidence", tr('OCR confidence'), "float", default=0.6),
         ],
         "color_at": [
-            Field("x", "X (0..1)", "float", default=0.5),
-            Field("y", "Y (0..1)", "float", default=0.5),
-            Field("color", "Colour B,G,R", "str", default="255,255,255"),
-            Field("tolerance", "Tolerance (0..1)", "float", default=0.08),
+            Field("x", tr('X (0..1)'), "float", default=0.5),
+            Field("y", tr('Y (0..1)'), "float", default=0.5),
+            Field("color", tr('Colour B,G,R'), "str", default="255,255,255"),
+            Field("tolerance", tr('Tolerance (0..1)'), "float", default=0.08),
         ],
         "color_present": [
-            Field("color", "Colour B,G,R", "str", default="0,200,0"),
-            Field("tolerance", "Tolerance (0..255)", "int", default=30),
+            Field("color", tr('Colour B,G,R'), "str", default="0,200,0"),
+            Field("tolerance", tr('Tolerance (0..255)'), "int", default=30),
             common_roi,
-            Field("min_coverage", "Minimum coverage", "float", default=0.05),
+            Field("min_coverage", tr('Minimum coverage'), "float", default=0.05),
         ],
-        "screen_changed": [Field("threshold", "Difference threshold", "float", default=0.02)],
+        "screen_changed": [Field("threshold", tr('Difference threshold'), "float", default=0.02)],
         "variable_compare": [
-            Field("name", "Variable", "str"),
-            Field("operator", "Operator", "choice",
+            Field("name", tr('Variable'), "str"),
+            Field("operator", tr('Operator'), "choice",
                   ("==", "!=", ">", ">=", "<", "<=", "contains", "not_contains"), default="=="),
-            Field("value", "Value", "str"),
+            Field("value", tr('Value'), "str"),
         ],
     }.get(kind, [])
 
@@ -498,18 +506,18 @@ class ConditionEditor(tk.Toplevel):
 
     def __init__(self, parent: tk.Misc, app: "App", condition: Condition | None = None) -> None:
         super().__init__(parent)
-        self.title("Condition")
+        self.title(tr('Condition'))
         self.configure(background=PALETTE["panel"])
         self.transient(parent)
         self.app = app
         self.result: Condition | None = None
         self._children: list[Condition] = []
-        labels = {kind: cls.label for kind, cls in CONDITION_TYPES.items()}
+        labels = {kind: tr(cls.label) for kind, cls in CONDITION_TYPES.items()}
         self._kinds = list(labels)
         current = condition.kind if condition is not None else "state_is"
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Type").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(body, text=tr('Type')).grid(row=0, column=0, sticky="w", pady=4)
         self._kind = tk.StringVar(value=labels.get(current, current))
         combo = ttk.Combobox(body, textvariable=self._kind, state="readonly",
                              values=[labels[kind] for kind in self._kinds], width=30)
@@ -520,8 +528,8 @@ class ConditionEditor(tk.Toplevel):
         body.columnconfigure(1, weight=1)
         buttons = ttk.Frame(self, padding=(12, 0, 12, 12))
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side="right")
-        ttk.Button(buttons, text="OK", style="Accent.TButton", command=self._accept).pack(
+        ttk.Button(buttons, text=tr('Cancel'), command=self._cancel).pack(side="right")
+        ttk.Button(buttons, text=tr('OK'), style="Accent.TButton", command=self._accept).pack(
             side="right", padx=(0, 8)
         )
         self._labels = labels
@@ -569,7 +577,7 @@ class ConditionEditor(tk.Toplevel):
                         self._form_roi[key] = new_roi
                         label.configure(text=new_roi.describe())
 
-                ttk.Button(frame, text="Region...", command=edit).pack(side="right")
+                ttk.Button(frame, text=tr('Region...'), command=edit).pack(side="right")
                 frame.grid(row=row, column=1, sticky="ew", pady=3)
                 continue
             if spec.key == "color" and isinstance(value, list):
@@ -610,7 +618,7 @@ class ConditionEditor(tk.Toplevel):
 
         def add() -> None:
             if len(self._children) >= limit:
-                messagebox.showinfo("Limit", "NOT takes a single condition.", parent=self)
+                messagebox.showinfo(tr('Limit'), tr('NOT takes a single condition.'), parent=self)
                 return
             child = ConditionEditor.ask(self, self.app)
             if child is not None:
@@ -635,16 +643,16 @@ class ConditionEditor(tk.Toplevel):
 
         row = ttk.Frame(self._holder)
         row.pack(fill="x")
-        ttk.Button(row, text="Add", command=add).pack(side="left")
-        ttk.Button(row, text="Edit", command=edit).pack(side="left", padx=4)
-        ttk.Button(row, text="Remove", command=remove).pack(side="left")
+        ttk.Button(row, text=tr('Add'), command=add).pack(side="left")
+        ttk.Button(row, text=tr('Edit'), command=edit).pack(side="left", padx=4)
+        ttk.Button(row, text=tr('Remove'), command=remove).pack(side="left")
         refresh()
 
     def _accept(self) -> None:
         kind = self._selected_kind()
         if kind == "not":
             if not self._children:
-                messagebox.showerror("Missing condition", "NOT needs one condition.", parent=self)
+                messagebox.showerror(tr('Missing condition'), tr('NOT needs one condition.'), parent=self)
                 return
             payload = {"kind": kind, "condition": self._children[0].to_dict()}
         elif kind in ("all_of", "any_of"):
@@ -665,7 +673,7 @@ class ConditionEditor(tk.Toplevel):
                     else:
                         payload[key] = str(raw)
                 except ValueError:
-                    messagebox.showerror("Invalid value", f"{spec.label} is not a number.", parent=self)
+                    messagebox.showerror(tr('Invalid value'), f"{spec.label} is not a number.", parent=self)
                     return
             for key, roi in self._form_roi.items():
                 payload[key] = roi.to_dict()
@@ -674,7 +682,7 @@ class ConditionEditor(tk.Toplevel):
         try:
             self.result = condition_from_dict(payload)
         except Exception as exc:
-            messagebox.showerror("Invalid condition", str(exc), parent=self)
+            messagebox.showerror(tr('Invalid condition'), str(exc), parent=self)
             return
         self.destroy()
 
@@ -691,74 +699,74 @@ class ConditionEditor(tk.Toplevel):
 
 def target_fields(app: "App") -> list[Field]:
     return [
-        Field("mode", "Target", "choice", tuple(mode.value for mode in TargetMode), default="window"),
-        Field("x", "X (0..1 or px)", "float", default=0.5),
-        Field("y", "Y (0..1 or px)", "float", default=0.5),
-        Field("units", "Units", "choice", ("normalized", "pixels"), default="normalized"),
-        Field("reference", "Reference image", "choice", app.project.reference_names()),
-        Field("text", "Text to find", "str"),
-        Field("state", "State", "choice", app.project.state_names()),
-        Field("roi", "Search region", "roi", default=Roi.full()),
-        Field("threshold", "Confidence", "float", default=0.85),
-        Field("offset_x", "Offset X (px)", "int", default=0),
-        Field("offset_y", "Offset Y (px)", "int", default=0),
-        Field("anchor", "Anchor", "choice", ("center", "topleft"), default="center"),
+        Field("mode", tr('Target'), "choice", tuple(mode.value for mode in TargetMode), default="window"),
+        Field("x", tr('X (0..1 or px)'), "float", default=0.5),
+        Field("y", tr('Y (0..1 or px)'), "float", default=0.5),
+        Field("units", tr('Units'), "choice", ("normalized", "pixels"), default="normalized"),
+        Field("reference", tr('Reference image'), "choice", app.project.reference_names()),
+        Field("text", tr('Text to find'), "str"),
+        Field("state", tr('State'), "choice", app.project.state_names()),
+        Field("roi", tr('Search region'), "roi", default=Roi.full()),
+        Field("threshold", tr('Confidence'), "float", default=0.85),
+        Field("offset_x", tr('Offset X (px)'), "int", default=0),
+        Field("offset_y", tr('Offset Y (px)'), "int", default=0),
+        Field("anchor", tr('Anchor'), "choice", ("center", "topleft"), default="center"),
     ]
 
 
 def action_fields(kind: str, app: "App") -> list[Field]:
     pointer = [
-        Field("cooldown", "Cooldown (s)", "float", hint="empty = default"),
-        Field("require_confidence", "Required confidence", "float", hint="empty = target default"),
+        Field("cooldown", tr('Cooldown (s)'), "float", hint="empty = default"),
+        Field("require_confidence", tr('Required confidence'), "float", hint="empty = target default"),
     ]
     return {
         "move_mouse": pointer,
         "left_click": pointer,
         "double_click": pointer,
         "right_click": pointer,
-        "drag": [*pointer, Field("duration", "Duration (s)", "float", default=0.4)],
+        "drag": [*pointer, Field("duration", tr('Duration (s)'), "float", default=0.4)],
         "press_key": [
-            Field("key", "Key", "str", default="enter"),
-            Field("presses", "Presses", "int", default=1),
-            Field("interval", "Interval (s)", "float", default=0.05),
+            Field("key", tr('Key'), "str", default="enter"),
+            Field("presses", tr('Presses'), "int", default=1),
+            Field("interval", tr('Interval (s)'), "float", default=0.05),
         ],
-        "hotkey": [Field("combination", "Combination", "str", default="ctrl+a")],
+        "hotkey": [Field("combination", tr('Combination'), "str", default="ctrl+a")],
         "type_text": [
-            Field("text", "Text", "str"),
-            Field("sensitive", "Sensitive (never logged)", "bool", default=False),
-            Field("variable", "Read from variable", "str", hint="optional"),
-            Field("interval", "Interval (s)", "float", default=0.02),
-            Field("clear_first", "Clear the field first", "bool", default=False),
+            Field("text", tr('Text'), "str"),
+            Field("sensitive", tr('Sensitive (never logged)'), "bool", default=False),
+            Field("variable", tr('Read from variable'), "str", hint="optional"),
+            Field("interval", tr('Interval (s)'), "float", default=0.02),
+            Field("clear_first", tr('Clear the field first'), "bool", default=False),
         ],
         "wait": [
-            Field("seconds", "Seconds", "float", default=1.0),
-            Field("jitter", "Random extra (s)", "float", default=0.0),
+            Field("seconds", tr('Seconds'), "float", default=1.0),
+            Field("jitter", tr('Random extra (s)'), "float", default=0.0),
         ],
         "wait_until": [
-            Field("timeout", "Timeout (s)", "float", default=10.0),
-            Field("poll", "Check every (s)", "float", default=0.5),
-            Field("expect", "Wait for true", "bool", default=True),
+            Field("timeout", tr('Timeout (s)'), "float", default=10.0),
+            Field("poll", tr('Check every (s)'), "float", default=0.5),
+            Field("expect", tr('Wait for true'), "bool", default=True),
         ],
         "verify": [
-            Field("expected_state", "Expected state", "choice", app.project.state_names()),
-            Field("timeout", "Timeout (s)", "float", default=5.0),
-            Field("poll", "Check every (s)", "float", default=0.4),
+            Field("expected_state", tr('Expected state'), "choice", app.project.state_names()),
+            Field("timeout", tr('Timeout (s)'), "float", default=5.0),
+            Field("poll", tr('Check every (s)'), "float", default=0.4),
         ],
         "repeat": [
-            Field("times", "Times", "int", default=2),
-            Field("delay", "Delay (s)", "float", default=0.2),
-            Field("stop_on_failure", "Stop on failure", "bool", default=True),
+            Field("times", tr('Times'), "int", default=2),
+            Field("delay", tr('Delay (s)'), "float", default=0.2),
+            Field("stop_on_failure", tr('Stop on failure'), "bool", default=True),
         ],
-        "stop": [Field("reason", "Reason", "str", default="workflow requested stop")],
+        "stop": [Field("reason", tr('Reason'), "str", default="workflow requested stop")],
         "set_variable": [
-            Field("name", "Variable", "str", default="counter"),
-            Field("value", "Value", "str", default="0"),
-            Field("mode", "Mode", "choice",
+            Field("name", tr('Variable'), "str", default="counter"),
+            Field("value", tr('Value'), "str", default="0"),
+            Field("mode", tr('Mode'), "choice",
                   ("set", "increment", "from_number", "from_text", "from_state"), default="set"),
         ],
         "log": [
-            Field("message", "Message", "str"),
-            Field("level", "Level", "choice", ("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"),
+            Field("message", tr('Message'), "str"),
+            Field("level", tr('Level'), "choice", ("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"),
                   default="INFO"),
         ],
     }.get(kind, [])
@@ -774,12 +782,12 @@ class ActionEditor(tk.Toplevel):
 
     def __init__(self, parent: tk.Misc, app: "App", action: Action | None = None) -> None:
         super().__init__(parent)
-        self.title("Action")
+        self.title(tr('Action'))
         self.configure(background=PALETTE["panel"])
         self.transient(parent)
         self.app = app
         self.result: Action | None = None
-        self._labels = {kind: cls.label for kind, cls in ACTION_TYPES.items()}
+        self._labels = {kind: tr(cls.label) for kind, cls in ACTION_TYPES.items()}
         self._initial = action
         self._target = Target()
         self._end_target = Target(mode=TargetMode.WINDOW, x=0.5, y=0.2)
@@ -797,7 +805,7 @@ class ActionEditor(tk.Toplevel):
                 self._sub_actions = [action_from_dict(item) for item in payload["actions"]]
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
-        ttk.Label(body, text="Type").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(body, text=tr('Type')).grid(row=0, column=0, sticky="w", pady=4)
         current = action.kind if action is not None else "left_click"
         self._kind = tk.StringVar(value=self._labels.get(current, current))
         combo = ttk.Combobox(body, textvariable=self._kind, state="readonly",
@@ -809,8 +817,8 @@ class ActionEditor(tk.Toplevel):
         body.columnconfigure(1, weight=1)
         buttons = ttk.Frame(self, padding=(12, 0, 12, 12))
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side="right")
-        ttk.Button(buttons, text="OK", style="Accent.TButton", command=self._accept).pack(
+        ttk.Button(buttons, text=tr('Cancel'), command=self._cancel).pack(side="right")
+        ttk.Button(buttons, text=tr('OK'), style="Accent.TButton", command=self._accept).pack(
             side="right", padx=(0, 8)
         )
         self._rebuild()
@@ -870,7 +878,8 @@ class ActionEditor(tk.Toplevel):
 
         def edit() -> None:
             values = FormDialog.ask(
-                self, f"{label} position", target_fields(self.app), target.to_dict(), app=self.app
+                self, tr("%s position") % label, target_fields(self.app),
+                target.to_dict(), app=self.app,
             )
             if values is None:
                 return
@@ -887,7 +896,7 @@ class ActionEditor(tk.Toplevel):
                 self._target = updated
             description.configure(text=updated.describe())
 
-        ttk.Button(frame, text="Edit...", command=edit).pack(side="right")
+        ttk.Button(frame, text=tr('Edit...'), command=edit).pack(side="right")
         frame.grid(row=row, column=1, sticky="ew", pady=3)
         return row + 1
 
@@ -903,12 +912,12 @@ class ActionEditor(tk.Toplevel):
                 self._condition = condition
                 description.configure(text=condition.describe())
 
-        ttk.Button(frame, text="Edit...", command=edit).pack(side="right")
+        ttk.Button(frame, text=tr('Edit...'), command=edit).pack(side="right")
         frame.grid(row=row, column=1, sticky="ew", pady=3)
         return row + 1
 
     def _add_actions_row(self, row: int) -> int:
-        ttk.Label(self._holder, text="Actions").grid(row=row, column=0, sticky="nw", pady=3)
+        ttk.Label(self._holder, text=tr('Actions')).grid(row=row, column=0, sticky="nw", pady=3)
         frame = ttk.Frame(self._holder)
         listbox = tk.Listbox(frame, height=5, background=PALETTE["panel_light"],
                             foreground=PALETTE["text"], borderwidth=0, activestyle="none", width=44)
@@ -933,8 +942,8 @@ class ActionEditor(tk.Toplevel):
 
         controls = ttk.Frame(frame)
         controls.pack(side="top", fill="x", pady=(4, 0))
-        ttk.Button(controls, text="Add", command=add).pack(side="left")
-        ttk.Button(controls, text="Remove", command=remove).pack(side="left", padx=4)
+        ttk.Button(controls, text=tr('Add'), command=add).pack(side="left")
+        ttk.Button(controls, text=tr('Remove'), command=remove).pack(side="left", padx=4)
         refresh()
         frame.grid(row=row, column=1, sticky="ew", pady=3)
         return row + 1
@@ -963,7 +972,7 @@ class ActionEditor(tk.Toplevel):
                 else:
                     payload[key] = str(raw)
             except ValueError:
-                messagebox.showerror("Invalid value", f"{spec.label} is not a number.", parent=self)
+                messagebox.showerror(tr('Invalid value'), f"{spec.label} is not a number.", parent=self)
                 return
         for key in ("cooldown", "require_confidence"):
             if key in payload and payload[key] is None:
@@ -974,7 +983,7 @@ class ActionEditor(tk.Toplevel):
         try:
             self.result = action_from_dict(payload)
         except Exception as exc:
-            messagebox.showerror("Invalid action", str(exc), parent=self)
+            messagebox.showerror(tr('Invalid action'), str(exc), parent=self)
             return
         if isinstance(payload.get("text"), str) and payload.get("sensitive"):
             self.app.log.register_secret(payload["text"])
@@ -991,12 +1000,185 @@ class ActionEditor(tk.Toplevel):
         return dialog.result
 
 
+class RecorderDialog(tk.Toplevel):
+    """Records what the user does in LDPlayer and returns it as actions.
+
+    This is the macro recorder: perform the combination once, and it becomes a
+    list of steps that can be attached to a state or inserted into the scenario.
+    Because every position is stored relative to the window (and optionally
+    anchored to an image of what was clicked), the result keeps working after the
+    emulator is moved or resized.
+    """
+
+    def __init__(self, parent: tk.Misc, app: "App") -> None:
+        super().__init__(parent)
+        self.title(tr("Record actions"))
+        self.configure(background=PALETTE["panel"])
+        self.transient(parent)
+        self.attributes("-topmost", True)
+        self.app = app
+        self.result: list[Action] | None = None
+        self.recorder: ActionRecorder | None = None
+        self.listener: Any = None
+        settings = app.project.settings.recorder
+        self._insert_waits = tk.BooleanVar(value=settings.insert_waits)
+        self._anchor = tk.BooleanVar(value=settings.anchor_clicks_to_images)
+        self._merge_typing = tk.BooleanVar(value=settings.merge_typing)
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text=tr("Record the actions you perform in LDPlayer, then reuse them as a step."),
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(0, 8))
+        for text, variable in (
+            (tr("Insert pauses between actions"), self._insert_waits),
+            (tr("Merge typed characters into one text action"), self._merge_typing),
+            (tr("Anchor clicks to images (resistant to shifts)"), self._anchor),
+        ):
+            ttk.Checkbutton(body, text=text, variable=variable).pack(anchor="w")
+        self._status = ttk.Label(body, text=tr("Ready to record"), style="Heading.TLabel")
+        self._status.pack(anchor="w", pady=(10, 4))
+        ttk.Label(body, text=tr("Recorded steps")).pack(anchor="w")
+        self._steps = tk.Listbox(
+            body, height=10, width=58, background=PALETTE["panel_light"],
+            foreground=PALETTE["text"], borderwidth=0, activestyle="none",
+        )
+        self._steps.pack(fill="both", expand=True, pady=4)
+
+        buttons = ttk.Frame(self, padding=(12, 0, 12, 12))
+        buttons.pack(fill="x")
+        self._start_button = ttk.Button(
+            buttons, text=tr("Start recording"), style="Accent.TButton", command=self._start
+        )
+        self._start_button.pack(side="left")
+        self._stop_button = ttk.Button(
+            buttons, text=tr("Stop"), command=self._stop, state="disabled"
+        )
+        self._stop_button.pack(side="left", padx=6)
+        ttk.Button(buttons, text=tr("Cancel"), command=self._cancel).pack(side="right")
+        self._use_button = ttk.Button(
+            buttons, text=tr("Use the recording"), style="Accent.TButton",
+            command=self._accept, state="disabled",
+        )
+        self._use_button.pack(side="right", padx=6)
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+
+    # ------------------------------------------------------------- recording
+    def _settings(self) -> RecorderSettings:
+        settings = RecorderSettings.from_dict(self.app.project.settings.recorder.to_dict())
+        settings.insert_waits = bool(self._insert_waits.get())
+        settings.merge_typing = bool(self._merge_typing.get())
+        settings.anchor_clicks_to_images = bool(self._anchor.get())
+        return settings
+
+    def _start(self) -> None:
+        if self.app.window is None:
+            messagebox.showinfo(
+                tr("No window"), tr("Select an LDPlayer instance first."), parent=self
+            )
+            return
+        settings = self._settings()
+        if settings.anchor_clicks_to_images and self.app.project.path is None:
+            messagebox.showinfo(
+                tr("Reference image"),
+                tr("Save the project before anchoring clicks to images."),
+                parent=self,
+            )
+            settings.anchor_clicks_to_images = False
+            self._anchor.set(False)
+        self.recorder = ActionRecorder(
+            self.app.window, settings, log=self.app.log,
+            frame_provider=lambda: self.app.capture_frame(quiet=True),
+        )
+        self.listener = create_listener(self.recorder, log=self.app.log)
+        if self.listener is None:
+            messagebox.showerror(
+                tr("Recording is unavailable"),
+                tr("Install the 'pynput' package to record actions (pip install pynput)."),
+                parent=self,
+            )
+            self.recorder = None
+            return
+        self.app.project.settings.recorder = settings
+        # Arm the recorder first, so nothing is missed once the listener runs.
+        self.recorder.start()
+        self.listener.start()
+        self._status.configure(
+            text=tr("Recording... switch to LDPlayer and act. %s to stop.")
+            % settings.stop_key.upper()
+        )
+        self._start_button.configure(state="disabled")
+        self._stop_button.configure(state="normal")
+        self._poll()
+
+    def _poll(self) -> None:
+        if self.recorder is None:
+            return
+        self._refresh_steps()
+        if not self.recorder.recording:      # the stop key was pressed
+            self._stop()
+            return
+        self.after(300, self._poll)
+
+    def _refresh_steps(self) -> None:
+        if self.recorder is None:
+            return
+        self._steps.delete(0, "end")
+        for index, description in enumerate(self.recorder.summary(), start=1):
+            self._steps.insert("end", f"{index:2d}. {description}")
+        self._steps.see("end")
+
+    def _stop(self) -> None:
+        if self.listener is not None:
+            self.listener.stop()
+            self.listener = None
+        if self.recorder is not None:
+            self.recorder.stop()
+            self._refresh_steps()
+            self._status.configure(
+                text=tr("Recording stopped: %s step(s)") % len(self.recorder.steps)
+            )
+            self._use_button.configure(state="normal" if self.recorder.steps else "disabled")
+        self._start_button.configure(state="normal")
+        self._stop_button.configure(state="disabled")
+
+    def _accept(self) -> None:
+        if self.recorder is None or not self.recorder.steps:
+            messagebox.showinfo(
+                tr("Nothing recorded"),
+                tr("Perform at least one action inside the emulator window."),
+                parent=self,
+            )
+            return
+        self.result = self.recorder.to_actions(
+            save_reference=self.app.store_reference_patch, name_prefix="recorded"
+        )
+        self.recorder.release()
+        self.app.log.info("Recorded %s action(s)", len(self.result))
+        self.destroy()
+
+    def _cancel(self) -> None:
+        self._stop()
+        if self.recorder is not None:
+            self.recorder.release()
+        self.result = None
+        self.destroy()
+
+    @classmethod
+    def ask(cls, parent: tk.Misc, app: "App") -> list[Action] | None:
+        dialog = cls(parent, app)
+        parent.wait_window(dialog)
+        return dialog.result
+
+
 class StateEditor(tk.Toplevel):
     """Editor of a visual state: detection, timing, actions, expected result."""
 
     def __init__(self, parent: tk.Misc, app: "App", state: VisualState | None = None) -> None:
         super().__init__(parent)
-        self.title("Visual state")
+        self.title(tr('Visual state'))
         self.configure(background=PALETTE["panel"])
         self.transient(parent)
         self.app = app
@@ -1010,8 +1192,8 @@ class StateEditor(tk.Toplevel):
         self._build_timing_tab(notebook)
         buttons = ttk.Frame(self, padding=(10, 0, 10, 10))
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side="right")
-        ttk.Button(buttons, text="OK", style="Accent.TButton", command=self._accept).pack(
+        ttk.Button(buttons, text=tr('Cancel'), command=self._cancel).pack(side="right")
+        ttk.Button(buttons, text=tr('OK'), style="Accent.TButton", command=self._accept).pack(
             side="right", padx=(0, 8)
         )
         self.grab_set()
@@ -1019,22 +1201,22 @@ class StateEditor(tk.Toplevel):
     # ------------------------------------------------------------------ tabs
     def _build_detection_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook, padding=12)
-        notebook.add(tab, text="Detection")
+        notebook.add(tab, text=tr('Detection'))
         self._name = tk.StringVar(value=self.state.name)
         self._description = tk.StringVar(value=self.state.description)
         self._confidence = tk.StringVar(value=str(self.state.confidence))
         self._match_mode = tk.StringVar(value=self.state.match_mode)
-        ttk.Label(tab, text="Name").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Label(tab, text=tr('Name')).grid(row=0, column=0, sticky="w", pady=3)
         ttk.Entry(tab, textvariable=self._name, width=28).grid(row=0, column=1, sticky="ew", pady=3)
-        ttk.Label(tab, text="Description").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Label(tab, text=tr('Description')).grid(row=1, column=0, sticky="w", pady=3)
         ttk.Entry(tab, textvariable=self._description, width=28).grid(row=1, column=1, sticky="ew", pady=3)
-        ttk.Label(tab, text="Confidence").grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Label(tab, text=tr('Confidence')).grid(row=2, column=0, sticky="w", pady=3)
         ttk.Entry(tab, textvariable=self._confidence, width=10).grid(row=2, column=1, sticky="w", pady=3)
-        ttk.Label(tab, text="Reference images must").grid(row=3, column=0, sticky="w", pady=3)
+        ttk.Label(tab, text=tr('Reference images must')).grid(row=3, column=0, sticky="w", pady=3)
         ttk.Combobox(tab, textvariable=self._match_mode, state="readonly", width=10,
                      values=("any", "all")).grid(row=3, column=1, sticky="w", pady=3)
 
-        ttk.Label(tab, text="Reference images", style="Heading.TLabel").grid(
+        ttk.Label(tab, text=tr('Reference images'), style="Heading.TLabel").grid(
             row=4, column=0, columnspan=2, sticky="w", pady=(12, 4)
         )
         self._references = tk.Listbox(tab, height=5, background=PALETTE["panel_light"],
@@ -1042,15 +1224,15 @@ class StateEditor(tk.Toplevel):
         self._references.grid(row=5, column=0, columnspan=2, sticky="nsew")
         controls = ttk.Frame(tab)
         controls.grid(row=6, column=0, columnspan=2, sticky="w", pady=6)
-        ttk.Button(controls, text="From current screen...", command=self._add_reference_from_screen
+        ttk.Button(controls, text=tr('From current screen...'), command=self._add_reference_from_screen
                    ).pack(side="left")
-        ttk.Button(controls, text="From file...", command=self._add_reference_from_file).pack(
+        ttk.Button(controls, text=tr('From file...'), command=self._add_reference_from_file).pack(
             side="left", padx=4
         )
-        ttk.Button(controls, text="Edit", command=self._edit_reference).pack(side="left")
-        ttk.Button(controls, text="Remove", command=self._remove_reference).pack(side="left", padx=4)
+        ttk.Button(controls, text=tr('Edit'), command=self._edit_reference).pack(side="left")
+        ttk.Button(controls, text=tr('Remove'), command=self._remove_reference).pack(side="left", padx=4)
 
-        ttk.Label(tab, text="Extra condition (AND with the images)").grid(
+        ttk.Label(tab, text=tr('Extra condition (AND with the images)')).grid(
             row=7, column=0, columnspan=2, sticky="w", pady=(12, 4)
         )
         condition_row = ttk.Frame(tab)
@@ -1059,8 +1241,8 @@ class StateEditor(tk.Toplevel):
             condition_row, text=describe_condition(self.state.condition), style="Muted.TLabel"
         )
         self._condition_label.pack(side="left")
-        ttk.Button(condition_row, text="Edit...", command=self._edit_condition).pack(side="right")
-        ttk.Button(condition_row, text="Clear", command=self._clear_condition).pack(
+        ttk.Button(condition_row, text=tr('Edit...'), command=self._edit_condition).pack(side="right")
+        ttk.Button(condition_row, text=tr('Clear'), command=self._clear_condition).pack(
             side="right", padx=4
         )
         tab.columnconfigure(1, weight=1)
@@ -1069,25 +1251,28 @@ class StateEditor(tk.Toplevel):
 
     def _build_actions_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook, padding=12)
-        notebook.add(tab, text="Actions")
-        ttk.Label(tab, text="Actions performed when this state is detected").pack(anchor="w")
+        notebook.add(tab, text=tr('Actions'))
+        ttk.Label(tab, text=tr('Actions performed when this state is detected')).pack(anchor="w")
         self._actions = tk.Listbox(tab, height=8, background=PALETTE["panel_light"],
                                   foreground=PALETTE["text"], borderwidth=0, activestyle="none")
         self._actions.pack(fill="both", expand=True, pady=6)
         controls = ttk.Frame(tab)
         controls.pack(fill="x")
-        ttk.Button(controls, text="Add", command=self._add_action).pack(side="left")
-        ttk.Button(controls, text="Edit", command=self._edit_action).pack(side="left", padx=4)
-        ttk.Button(controls, text="Remove", command=self._remove_action).pack(side="left")
-        ttk.Button(controls, text="Up", command=lambda: self._move_action(-1)).pack(side="right")
-        ttk.Button(controls, text="Down", command=lambda: self._move_action(1)).pack(
+        ttk.Button(controls, text=tr("Add"), command=self._add_action).pack(side="left")
+        ttk.Button(
+            controls, text=tr("Record..."), style="Accent.TButton", command=self._record_actions
+        ).pack(side="left", padx=4)
+        ttk.Button(controls, text=tr("Edit"), command=self._edit_action).pack(side="left", padx=4)
+        ttk.Button(controls, text=tr('Remove'), command=self._remove_action).pack(side="left")
+        ttk.Button(controls, text=tr('Up'), command=lambda: self._move_action(-1)).pack(side="right")
+        ttk.Button(controls, text=tr('Down'), command=lambda: self._move_action(1)).pack(
             side="right", padx=4
         )
         self._refresh_actions()
 
     def _build_timing_tab(self, notebook: ttk.Notebook) -> None:
         tab = ttk.Frame(notebook, padding=12)
-        notebook.add(tab, text="Result and timing")
+        notebook.add(tab, text=tr('Result and timing'))
         states = [""] + self.app.project.state_names()
         self._expected = tk.StringVar(value=self.state.expected_state)
         self._fallback = tk.StringVar(value=self.state.fallback)
@@ -1100,9 +1285,9 @@ class StateEditor(tk.Toplevel):
         self._terminal = tk.BooleanVar(value=self.state.terminal)
         self._enabled = tk.BooleanVar(value=self.state.enabled)
         rows = [
-            ("Expected state after the actions", self._expected, states),
-            ("Fallback (state name or STOP)", self._fallback, states + ["STOP"]),
-            ("Next state to wait for", self._next, states),
+            (tr("Expected state after the actions"), self._expected, states),
+            (tr("Fallback (state name or STOP)"), self._fallback, states + ["STOP"]),
+            (tr("Next state to wait for"), self._next, states),
         ]
         row = 0
         for label, variable, choices in rows:
@@ -1112,30 +1297,30 @@ class StateEditor(tk.Toplevel):
             )
             row += 1
         numbers = [
-            ("State timeout (s)", self._timeout),
-            ("Verification timeout (s)", self._verify_timeout),
-            ("Retry count", self._retry),
-            ("Retry delay (s)", self._retry_delay),
-            ("Cooldown (s)", self._cooldown),
+            (tr("State timeout (s)"), self._timeout),
+            (tr("Verification timeout (s)"), self._verify_timeout),
+            (tr("Retry count"), self._retry),
+            (tr("Retry delay (s)"), self._retry_delay),
+            (tr("Cooldown (s)"), self._cooldown),
         ]
         for label, variable in numbers:
             ttk.Label(tab, text=label).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Entry(tab, textvariable=variable, width=10).grid(row=row, column=1, sticky="w", pady=3)
             row += 1
-        ttk.Checkbutton(tab, text="Terminal state (a successful run ends here)",
+        ttk.Checkbutton(tab, text=tr('Terminal state (a successful run ends here)'),
                         variable=self._terminal).grid(row=row, column=0, columnspan=2, sticky="w", pady=3)
         row += 1
-        ttk.Checkbutton(tab, text="Enabled", variable=self._enabled).grid(
+        ttk.Checkbutton(tab, text=tr('Enabled'), variable=self._enabled).grid(
             row=row, column=0, columnspan=2, sticky="w", pady=3
         )
-        ttk.Label(tab, text="Expected result condition").grid(row=row + 1, column=0, sticky="w", pady=(12, 3))
+        ttk.Label(tab, text=tr('Expected result condition')).grid(row=row + 1, column=0, sticky="w", pady=(12, 3))
         holder = ttk.Frame(tab)
         holder.grid(row=row + 1, column=1, sticky="ew")
         self._expected_condition_label = ttk.Label(
             holder, text=describe_condition(self.state.expected_condition), style="Muted.TLabel"
         )
         self._expected_condition_label.pack(side="left")
-        ttk.Button(holder, text="Edit...", command=self._edit_expected_condition).pack(side="right")
+        ttk.Button(holder, text=tr('Edit...'), command=self._edit_expected_condition).pack(side="right")
         tab.columnconfigure(1, weight=1)
 
     # ------------------------------------------------------------ references
@@ -1147,9 +1332,8 @@ class StateEditor(tk.Toplevel):
     def _add_reference_from_screen(self) -> None:
         if not pillow_available():
             messagebox.showinfo(
-                "Pillow required",
-                "Selecting a region on screen needs Pillow (pip install Pillow).\n"
-                "You can still add a reference image from a file.",
+                tr('Pillow required'),
+                tr('Selecting a region on screen needs Pillow (pip install Pillow).\nYou can still add a reference image from a file.'),
                 parent=self,
             )
             return
@@ -1169,7 +1353,7 @@ class StateEditor(tk.Toplevel):
                 patch, name, source_size=(frame.shape[1], frame.shape[0])
             )
         except ProjectError as exc:
-            messagebox.showerror("Reference image", str(exc), parent=self)
+            messagebox.showerror(tr('Reference image'), str(exc), parent=self)
             return
         self.state.references.append(
             ReferenceSpec(
@@ -1183,7 +1367,7 @@ class StateEditor(tk.Toplevel):
 
     def _add_reference_from_file(self) -> None:
         path = filedialog.askopenfilename(
-            parent=self, title="Reference image",
+            parent=self, title=tr('Reference image'),
             filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp"), ("All files", "*.*")],
         )
         if not path:
@@ -1194,7 +1378,7 @@ class StateEditor(tk.Toplevel):
         try:
             self.app.project.add_reference_image(path, name)
         except ProjectError as exc:
-            messagebox.showerror("Reference image", str(exc), parent=self)
+            messagebox.showerror(tr('Reference image'), str(exc), parent=self)
             return
         self.state.references.append(
             ReferenceSpec(image=name, confidence=float(self._confidence.get() or 0.85))
@@ -1209,13 +1393,13 @@ class StateEditor(tk.Toplevel):
         values = FormDialog.ask(
             self, "Reference image",
             [
-                Field("image", "Image", "choice", self.app.project.reference_names(), spec.image),
-                Field("confidence", "Confidence", "float", default=spec.confidence),
-                Field("roi", "Search region", "roi", default=spec.roi),
-                Field("grayscale", "Grayscale", "bool", default=spec.grayscale),
-                Field("match_mode", "Match mode", "choice", ("template", "feature", "histogram"),
+                Field("image", tr('Image'), "choice", self.app.project.reference_names(), spec.image),
+                Field("confidence", tr('Confidence'), "float", default=spec.confidence),
+                Field("roi", tr('Search region'), "roi", default=spec.roi),
+                Field("grayscale", tr('Grayscale'), "bool", default=spec.grayscale),
+                Field("match_mode", tr('Match mode'), "choice", ("template", "feature", "histogram"),
                       spec.match_mode),
-                Field("multi_scale", "Allow scale changes", "bool", default=spec.multi_scale),
+                Field("multi_scale", tr('Allow scale changes'), "bool", default=spec.multi_scale),
             ],
             app=self.app,
         )
@@ -1252,6 +1436,14 @@ class StateEditor(tk.Toplevel):
         if action is not None:
             self.state.actions.append(action)
             self._refresh_actions()
+
+    def _record_actions(self) -> None:
+        """Record a combination in LDPlayer and append it to this state."""
+        actions = RecorderDialog.ask(self, self.app)
+        if not actions:
+            return
+        self.state.actions.extend(actions)
+        self._refresh_actions()
 
     def _edit_action(self) -> None:
         selection = self._actions.curselection()
@@ -1290,7 +1482,7 @@ class StateEditor(tk.Toplevel):
 
     def _clear_condition(self) -> None:
         self.state.condition = None
-        self._condition_label.configure(text="always")
+        self._condition_label.configure(text=tr('always'))
 
     def _edit_expected_condition(self) -> None:
         condition = ConditionEditor.ask(self, self.app, self.state.expected_condition)
@@ -1302,7 +1494,7 @@ class StateEditor(tk.Toplevel):
     def _accept(self) -> None:
         name = self._name.get().strip()
         if not name:
-            messagebox.showerror("Missing name", "The state needs a name.", parent=self)
+            messagebox.showerror(tr('Missing name'), tr('The state needs a name.'), parent=self)
             return
         try:
             self.state.name = name
@@ -1320,7 +1512,7 @@ class StateEditor(tk.Toplevel):
             self.state.terminal = bool(self._terminal.get())
             self.state.enabled = bool(self._enabled.get())
         except ValueError as exc:
-            messagebox.showerror("Invalid value", str(exc), parent=self)
+            messagebox.showerror(tr('Invalid value'), str(exc), parent=self)
             return
         self.result = self.state
         self.destroy()
@@ -1451,13 +1643,14 @@ class App(tk.Tk):
     def __init__(self, project: Project | None = None, log: EventLog | None = None,
                  dry_run: bool = False) -> None:
         super().__init__()
-        self.title("LDPlayer Visual UI Tester")
+        self.title(tr('LDPlayer Visual UI Tester'))
         self.geometry("1440x900")
         self.minsize(1100, 700)
         self.configure(background=PALETTE["bg"])
         apply_theme(self)
         self.log = log or get_logger()
         self.project = project or example_project()
+        set_language(self.project.settings.language)
         self.safety = SafetyController(self.project.settings.safety, log=self.log)
         self.window: ldplayer.LDPlayerWindow | None = None
         self.instances: list[ldplayer.LDPlayerInstance] = []
@@ -1498,36 +1691,49 @@ class App(tk.Tk):
     def _build_ui(self) -> None:
         project_bar = ttk.Frame(self, style="Toolbar.TFrame", padding=(10, 8, 10, 2))
         project_bar.pack(fill="x")
-        ttk.Button(project_bar, text="New", command=self.new_project).pack(side="left")
-        ttk.Button(project_bar, text="Open...", command=self.open_project).pack(side="left", padx=4)
-        ttk.Button(project_bar, text="Save", command=self.save_project).pack(side="left")
-        ttk.Button(project_bar, text="Save as...", command=self.save_project_as).pack(side="left", padx=4)
+        ttk.Button(project_bar, text=tr('New'), command=self.new_project).pack(side="left")
+        ttk.Button(project_bar, text=tr('Open...'), command=self.open_project).pack(side="left", padx=4)
+        ttk.Button(project_bar, text=tr('Save'), command=self.save_project).pack(side="left")
+        ttk.Button(project_bar, text=tr('Save as...'), command=self.save_project_as).pack(side="left", padx=4)
         ttk.Separator(project_bar, orient="vertical").pack(side="left", fill="y", padx=10)
-        ttk.Label(project_bar, text="LDPlayer:", background=PALETTE["bg"]).pack(side="left")
+        ttk.Label(project_bar, text=tr('LDPlayer:'), background=PALETTE["bg"]).pack(side="left")
         self._instance_box = ttk.Combobox(project_bar, state="readonly", width=52)
         self._instance_box.pack(side="left", padx=6)
-        ttk.Button(project_bar, text="Refresh", command=self.refresh_instances).pack(side="left")
-        ttk.Button(project_bar, text="Select", style="Accent.TButton",
+        ttk.Button(project_bar, text=tr('Refresh'), command=self.refresh_instances).pack(side="left")
+        ttk.Button(project_bar, text=tr('Select'), style="Accent.TButton",
                    command=self.select_instance).pack(side="left", padx=4)
-        ttk.Button(project_bar, text="Screen region...",
+        ttk.Button(project_bar, text=tr('Screen region...'),
                    command=self.select_manual_region).pack(side="left")
 
         engine_bar = ttk.Frame(self, style="Toolbar.TFrame", padding=(10, 2, 10, 8))
         engine_bar.pack(fill="x")
-        ttk.Label(engine_bar, text="Engine mode:", background=PALETTE["bg"]).pack(side="left")
+        ttk.Label(engine_bar, text=tr('Engine mode:'), background=PALETTE["bg"]).pack(side="left")
         ttk.Combobox(engine_bar, textvariable=self.engine_mode, state="readonly", width=12,
                      values=("workflow", "states")).pack(side="left", padx=6)
-        ttk.Checkbutton(engine_bar, text="Dry run (analyse only, no input)",
+        ttk.Checkbutton(engine_bar, text=tr("Dry run (analyse only, no input)"),
                         variable=self.dry_run).pack(side="left", padx=6)
-        ttk.Label(engine_bar, text="F8 start/pause    F9 emergency stop",
+        ttk.Label(engine_bar, text=tr("Language:"), background=PALETTE["bg"]).pack(
+            side="left", padx=(14, 4)
+        )
+        self._language_box = ttk.Combobox(
+            engine_bar, state="readonly", width=10,
+            values=[label for _code, label in available_languages()],
+        )
+        self._language_box.set(language_label(get_language()))
+        self._language_box.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self.change_language(language_code(self._language_box.get())),
+        )
+        self._language_box.pack(side="left")
+        ttk.Label(engine_bar, text=tr('F8 start/pause    F9 emergency stop'),
                   background=PALETTE["bg"], foreground=PALETTE["muted"]).pack(side="left", padx=14)
-        ttk.Button(engine_bar, text="■ STOP (F9)", style="Danger.TButton",
+        ttk.Button(engine_bar, text=tr('■ STOP (F9)'), style="Danger.TButton",
                    command=self.stop_engine).pack(side="right")
         self._start_button = ttk.Button(
-            engine_bar, text="▶ START (F8)", style="Accent.TButton", command=self.start_engine
+            engine_bar, text=tr('▶ START (F8)'), style="Accent.TButton", command=self.start_engine
         )
         self._start_button.pack(side="right", padx=6)
-        ttk.Button(engine_bar, text="Analyze once", command=self.analyze_once).pack(side="right", padx=6)
+        ttk.Button(engine_bar, text=tr('Analyze once'), command=self.analyze_once).pack(side="right", padx=6)
 
         main = ttk.PanedWindow(self, orient="horizontal")
         main.pack(fill="both", expand=True, padx=8, pady=(8, 4))
@@ -1544,13 +1750,13 @@ class App(tk.Tk):
         self._left_notebook = notebook
 
         states_tab = ttk.Frame(notebook, padding=8)
-        notebook.add(states_tab, text="States")
+        notebook.add(states_tab, text=tr('States'))
         columns = ("confidence", "references", "actions")
         self._states_tree = ttk.Treeview(states_tab, columns=columns, show="tree headings", height=12)
-        self._states_tree.heading("#0", text="State")
-        self._states_tree.heading("confidence", text="Conf.")
-        self._states_tree.heading("references", text="Refs")
-        self._states_tree.heading("actions", text="Acts")
+        self._states_tree.heading("#0", text=tr('State'))
+        self._states_tree.heading("confidence", text=tr('Conf.'))
+        self._states_tree.heading("references", text=tr('Refs'))
+        self._states_tree.heading("actions", text=tr('Acts'))
         self._states_tree.column("#0", width=150)
         for column in columns:
             self._states_tree.column(column, width=45, anchor="center")
@@ -1559,27 +1765,27 @@ class App(tk.Tk):
         self._states_tree.bind("<Double-1>", lambda _event: self.edit_state())
         controls = ttk.Frame(states_tab)
         controls.pack(fill="x", pady=6)
-        ttk.Button(controls, text="ADD STATE", style="Accent.TButton",
+        ttk.Button(controls, text=tr('ADD STATE'), style="Accent.TButton",
                    command=self.add_state).pack(side="left")
-        ttk.Button(controls, text="Edit", command=self.edit_state).pack(side="left", padx=4)
-        ttk.Button(controls, text="Copy", command=self.duplicate_state).pack(side="left")
-        ttk.Button(controls, text="Delete", command=self.delete_state).pack(side="left", padx=4)
+        ttk.Button(controls, text=tr('Edit'), command=self.edit_state).pack(side="left", padx=4)
+        ttk.Button(controls, text=tr('Copy'), command=self.duplicate_state).pack(side="left")
+        ttk.Button(controls, text=tr('Delete'), command=self.delete_state).pack(side="left", padx=4)
 
         detection_tab = ttk.Frame(notebook, padding=8)
-        notebook.add(detection_tab, text="Detection test")
-        ttk.Button(detection_tab, text="Analyze the current screen",
+        notebook.add(detection_tab, text=tr('Detection test'))
+        ttk.Button(detection_tab, text=tr('Analyze the current screen'),
                    command=self.analyze_once).pack(fill="x")
         self._scores = ttk.Treeview(detection_tab, columns=("confidence", "where"),
                                    show="tree headings", height=8)
-        self._scores.heading("#0", text="State")
-        self._scores.heading("confidence", text="Confidence")
-        self._scores.heading("where", text="Position")
+        self._scores.heading("#0", text=tr('State'))
+        self._scores.heading("confidence", text=tr('Confidence'))
+        self._scores.heading("where", text=tr('Position'))
         self._scores.column("#0", width=110)
         self._scores.column("confidence", width=80, anchor="center")
         self._scores.column("where", width=110, anchor="center")
         self._scores.pack(fill="x", pady=8)
         self._preview = tk.Label(detection_tab, background=PALETTE["bg"],
-                                text="No frame captured yet", foreground=PALETTE["muted"])
+                                text=tr('No frame captured yet'), foreground=PALETTE["muted"])
         self._preview.pack(fill="both", expand=True)
         return frame
 
@@ -1587,36 +1793,37 @@ class App(tk.Tk):
         frame = ttk.Frame(parent)
         header = ttk.Frame(frame)
         header.pack(fill="x", pady=(0, 6))
-        ttk.Label(header, text="Scenario", style="Heading.TLabel").pack(side="left")
-        ttk.Label(header, text="  (select a box or a branch, then add a step)",
+        ttk.Label(header, text=tr('Scenario'), style="Heading.TLabel").pack(side="left")
+        ttk.Label(header, text=tr('  (select a box or a branch, then add a step)'),
                   style="Muted.TLabel").pack(side="left")
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=(0, 6))
         additions = [
-            ("ADD STATE", self.add_state_node),
-            ("ADD CONDITION", self.add_condition_node),
-            ("ADD ACTION", self.add_action_node),
-            ("ADD VERIFY", self.add_verify_node),
-            ("ADD ELSE", self.add_else_branch),
-            ("ADD WAIT", self.add_wait_node),
-            ("ADD RETRY", self.add_retry_node),
+            (tr("ADD STATE"), self.add_state_node),
+            (tr("ADD CONDITION"), self.add_condition_node),
+            (tr("ADD ACTION"), self.add_action_node),
+            (tr("ADD VERIFY"), self.add_verify_node),
+            (tr("ADD ELSE"), self.add_else_branch),
+            (tr("ADD WAIT"), self.add_wait_node),
+            (tr("ADD RETRY"), self.add_retry_node),
+            (tr("RECORD MACRO"), self.record_macro_node),
         ]
         for label, command in additions:
             ttk.Button(buttons, text=label, command=command).pack(side="left", padx=(0, 4))
         more = ttk.Frame(frame)
         more.pack(fill="x", pady=(0, 6))
         for label, command in [
-            ("ADD ANALYZE", self.add_analyze_node),
-            ("ADD LOOP", self.add_loop_node),
-            ("ADD STOP", self.add_stop_node),
+            (tr("ADD ANALYZE"), self.add_analyze_node),
+            (tr("ADD LOOP"), self.add_loop_node),
+            (tr("ADD STOP"), self.add_stop_node),
         ]:
             ttk.Button(more, text=label, command=command).pack(side="left", padx=(0, 4))
         for label, command in [
-            ("On/off", self.toggle_node),
+            (tr("On/off"), self.toggle_node),
             ("↓", lambda: self.move_node(1)),
             ("↑", lambda: self.move_node(-1)),
-            ("Delete", self.delete_node),
-            ("Edit", self.edit_node),
+            (tr("Delete"), self.delete_node),
+            (tr("Edit"), self.edit_node),
         ]:
             ttk.Button(more, text=label, command=command).pack(side="right", padx=(4, 0))
         self._canvas = WorkflowCanvas(frame, self._on_node_selected, lambda *_: self.edit_node())
@@ -1625,16 +1832,16 @@ class App(tk.Tk):
 
     def _build_right_panel(self, parent: tk.Misc) -> ttk.Frame:
         frame = ttk.Frame(parent, width=320)
-        ttk.Label(frame, text="Details", style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(frame, text=tr('Details'), style="Heading.TLabel").pack(anchor="w")
         self._details = tk.Text(frame, height=14, wrap="word", background=PALETTE["panel_light"],
                                foreground=PALETTE["text"], borderwidth=0, state="disabled")
         self._details.pack(fill="both", expand=True, pady=(4, 8))
-        ttk.Label(frame, text="Validation", style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(frame, text=tr('Validation'), style="Heading.TLabel").pack(anchor="w")
         self._warnings = tk.Text(frame, height=8, wrap="word", background=PALETTE["panel_light"],
                                 foreground=PALETTE["warning"], borderwidth=0, state="disabled")
         self._warnings.pack(fill="both", expand=True, pady=(4, 8))
-        ttk.Button(frame, text="Check the project", command=self.validate_project).pack(fill="x")
-        ttk.Button(frame, text="Engine settings...", command=self.edit_settings).pack(fill="x", pady=4)
+        ttk.Button(frame, text=tr('Check the project'), command=self.validate_project).pack(fill="x")
+        ttk.Button(frame, text=tr('Engine settings...'), command=self.edit_settings).pack(fill="x", pady=4)
         return frame
 
     def _build_log_panel(self) -> None:
@@ -1642,12 +1849,12 @@ class App(tk.Tk):
         frame.pack(fill="both", expand=False)
         header = ttk.Frame(frame)
         header.pack(fill="x")
-        ttk.Label(header, text="Live log", style="Heading.TLabel").pack(side="left")
-        ttk.Checkbutton(header, text="Autoscroll", variable=self.autoscroll).pack(side="right")
+        ttk.Label(header, text=tr('Live log'), style="Heading.TLabel").pack(side="left")
+        ttk.Checkbutton(header, text=tr('Autoscroll'), variable=self.autoscroll).pack(side="right")
         ttk.Combobox(header, textvariable=self.log_level, state="readonly", width=9,
                      values=("DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR")).pack(side="right", padx=6)
-        ttk.Button(header, text="Clear", command=self.clear_log).pack(side="right")
-        ttk.Button(header, text="Save log...", command=self.save_log).pack(side="right", padx=6)
+        ttk.Button(header, text=tr('Clear'), command=self.clear_log).pack(side="right")
+        ttk.Button(header, text=tr('Save log...'), command=self.save_log).pack(side="right", padx=6)
         body = ttk.Frame(frame)
         body.pack(fill="both", expand=True, pady=(4, 0))
         self._log_view = tk.Text(body, height=11, wrap="none", background="#12141a",
@@ -1670,7 +1877,7 @@ class App(tk.Tk):
         self._status_label = ttk.Label(bar, text="", background=PALETTE["bg"],
                                       foreground=PALETTE["muted"])
         self._status_label.pack(side="left")
-        self._window_label = ttk.Label(bar, text="No LDPlayer selected", background=PALETTE["bg"],
+        self._window_label = ttk.Label(bar, text=tr('No LDPlayer selected'), background=PALETTE["bg"],
                                       foreground=PALETTE["muted"])
         self._window_label.pack(side="right")
         self._update_status()
@@ -1689,19 +1896,21 @@ class App(tk.Tk):
             self._status["frames"] = self._context.frames_analyzed
         if self._runner is not None:
             self._status["cycles"] = self._runner.report.cycles
-        text = (
-            f"Engine: {self._status['engine']}   |   Run: {self.safety.state}   |   "
-            f"State: {self._status['state']} ({self._status['confidence']:.2f})   |   "
-            f"Frames: {self._status['frames']}   |   Cycles: {self._status['cycles']}   |   "
-            f"OCR: {self.project.settings.ocr_engine}   |   "
-            f"{'DRY RUN' if self.dry_run.get() else 'LIVE INPUT'}"
+        text = tr(
+            "Engine: %s   |   Run: %s   |   State: %s (%.2f)   |   Frames: %s   |   "
+            "Cycles: %s   |   OCR: %s   |   %s"
+        ) % (
+            self._status["engine"], self.safety.state, self._status["state"],
+            self._status["confidence"], self._status["frames"], self._status["cycles"],
+            self.project.settings.ocr_engine,
+            tr("DRY RUN") if self.dry_run.get() else tr("LIVE INPUT"),
         )
         self._status_label.configure(text=text)
         if self.window is not None and self.window.is_alive():
             rect = self.window.client_rect
             self._window_label.configure(text=f"{self.window.title}  {rect}")
         elif self.window is not None:
-            self._window_label.configure(text=f"{self.window.title} (window lost)")
+            self._window_label.configure(text=tr("%s (window lost)") % self.window.title)
 
     def _queue_log_record(self, record: LogRecord) -> None:
         self._queue.put(("log", record))
@@ -1743,7 +1952,8 @@ class App(tk.Tk):
                     running = self.project.workflow.find(payload)
                     if running is not None:
                         self._set_text(
-                            self._details, self._describe_node(running, prefix="RUNNING - ")
+                            self._details,
+                            self._describe_node(running, prefix=tr("RUNNING - ")),
                         )
                 elif kind == "run_state":
                     self._start_button.configure(
@@ -1779,6 +1989,7 @@ class App(tk.Tk):
         if not self._confirm_discard():
             return
         self.project = example_project()
+        self.project.settings.language = get_language()
         self.safety.settings = self.project.settings.safety
         self.engine_mode.set(self.project.settings.engine_mode)
         self.refresh_states()
@@ -1788,16 +1999,19 @@ class App(tk.Tk):
     def open_project(self) -> None:
         if not self._confirm_discard():
             return
-        path = filedialog.askdirectory(title="Open a project folder (*.ldproj)")
+        path = filedialog.askdirectory(title=tr('Open a project folder (*.ldproj)'))
         if not path:
             return
         try:
             self.project = Project.load(path, log=self.log)
         except ProjectError as exc:
-            messagebox.showerror("Open project", str(exc))
+            messagebox.showerror(tr('Open project'), str(exc))
             return
         self.safety.settings = self.project.settings.safety
         self.engine_mode.set(self.project.settings.engine_mode)
+        if self.project.settings.language != get_language():
+            set_language(self.project.settings.language)
+            self._rebuild_ui()
         self.refresh_states()
         self.refresh_workflow()
         self.validate_project()
@@ -1811,7 +2025,7 @@ class App(tk.Tk):
 
     def save_project_as(self) -> None:
         path = filedialog.asksaveasfilename(
-            title="Save the project", defaultextension=".ldproj",
+            title=tr('Save the project'), defaultextension=".ldproj",
             filetypes=[("LDPlayer test project", "*.ldproj")],
         )
         if not path:
@@ -1820,13 +2034,13 @@ class App(tk.Tk):
         try:
             self.project.save(path)
         except ProjectError as exc:
-            messagebox.showerror("Save project", str(exc))
+            messagebox.showerror(tr('Save project'), str(exc))
 
     def _confirm_discard(self) -> bool:
         if not self.project.dirty:
             return True
         answer = messagebox.askyesnocancel(
-            "Unsaved changes", "Save the current project first?"
+            tr('Unsaved changes'), tr('Save the current project first?')
         )
         if answer is None:
             return False
@@ -1839,37 +2053,40 @@ class App(tk.Tk):
         if problems:
             self._set_text(self._warnings, "\n".join(f"• {problem}" for problem in problems))
         else:
-            self._set_text(self._warnings, "No problems found.")
+            self._set_text(self._warnings, tr("No problems found."))
 
     def edit_settings(self) -> None:
         settings = self.project.settings
         values = FormDialog.ask(
             self, "Engine settings",
             [
-                Field("min_confidence", "Default confidence", "float", default=settings.min_confidence),
-                Field("ambiguity_margin", "Ambiguity margin", "float",
+                Field("min_confidence", tr('Default confidence'), "float", default=settings.min_confidence),
+                Field("ambiguity_margin", tr('Ambiguity margin'), "float",
                       default=settings.safety.ambiguity_margin),
-                Field("pointer_cooldown", "Click cooldown (s)", "float",
+                Field("pointer_cooldown", tr('Click cooldown (s)'), "float",
                       default=settings.safety.pointer_cooldown),
-                Field("max_actions_per_minute", "Max actions / minute", "int",
+                Field("max_actions_per_minute", tr('Max actions / minute'), "int",
                       default=settings.safety.max_actions_per_minute),
-                Field("require_foreground", "Require the window in front", "bool",
+                Field("require_foreground", tr('Require the window in front'), "bool",
                       default=settings.safety.require_foreground),
-                Field("capture_backend", "Capture backend", "choice", ("auto", "windows", "mss"),
+                Field("capture_backend", tr('Capture backend'), "choice", ("auto", "windows", "mss"),
                       default=settings.capture_backend),
-                Field("ocr_engine", "OCR engine", "choice", ("auto", "paddleocr", "tesseract", "none"),
+                Field("ocr_engine", tr('OCR engine'), "choice", ("auto", "paddleocr", "tesseract", "none"),
                       default=settings.ocr_engine),
-                Field("ocr_language", "OCR language", "str", default=settings.ocr_language),
-                Field("ocr_scale", "OCR upscaling", "float", default=settings.ocr_preprocess.scale),
-                Field("loop", "Repeat the workflow", "bool", default=settings.runner.loop),
-                Field("cycle_delay", "Delay between cycles (s)", "float",
+                Field("ocr_language", tr('OCR language'), "str", default=settings.ocr_language),
+                Field("ocr_scale", tr('OCR upscaling'), "float", default=settings.ocr_preprocess.scale),
+                Field("loop", tr('Repeat the workflow'), "bool", default=settings.runner.loop),
+                Field("cycle_delay", tr('Delay between cycles (s)'), "float",
                       default=settings.runner.analyze_interval),
-                Field("max_cycles", "Max cycles (0 = unlimited)", "int",
+                Field("max_cycles", tr('Max cycles (0 = unlimited)'), "int",
                       default=settings.runner.max_cycles),
-                Field("inset_left", "Inset left (px)", "int", default=settings.window_insets[0]),
-                Field("inset_top", "Inset top (px)", "int", default=settings.window_insets[1]),
-                Field("inset_right", "Inset right (px)", "int", default=settings.window_insets[2]),
-                Field("inset_bottom", "Inset bottom (px)", "int", default=settings.window_insets[3]),
+                Field("inset_left", tr('Inset left (px)'), "int", default=settings.window_insets[0]),
+                Field("inset_top", tr('Inset top (px)'), "int", default=settings.window_insets[1]),
+                Field("inset_right", tr('Inset right (px)'), "int", default=settings.window_insets[2]),
+                Field("inset_bottom", tr("Inset bottom (px)"), "int", default=settings.window_insets[3]),
+                Field("language", tr("Interface language"), "choice",
+                      [label for _code, label in available_languages()],
+                      default=language_label(get_language())),
             ],
         )
         if values is None:
@@ -1904,6 +2121,9 @@ class App(tk.Tk):
             self.window.set_insets(*settings.window_insets)
         self.project.mark_dirty()
         self.log.info("Engine settings updated")
+        chosen = language_code(str(values.get("language", "")))
+        if chosen != get_language():
+            self.change_language(chosen)
 
     # ------------------------------------------------------------ instances
     def refresh_instances(self) -> None:
@@ -1922,7 +2142,7 @@ class App(tk.Tk):
     def select_instance(self) -> None:
         index = self._instance_box.current()
         if index < 0 or index >= len(self.instances):
-            messagebox.showinfo("Select LDPlayer", "Refresh the list and pick an instance.")
+            messagebox.showinfo(tr('Select LDPlayer'), tr('Refresh the list and pick an instance.'))
             return
         instance = self.instances[index]
         self.window = instance.open(log=self.log, insets=self.project.settings.window_insets)
@@ -1937,11 +2157,11 @@ class App(tk.Tk):
         values = FormDialog.ask(
             self, "Screen region",
             [
-                Field("left", "Left", "int", default=0),
-                Field("top", "Top", "int", default=0),
-                Field("width", "Width", "int", default=960),
-                Field("height", "Height", "int", default=540),
-                Field("title", "Name", "str", default="Screen region"),
+                Field("left", tr('Left'), "int", default=0),
+                Field("top", tr('Top'), "int", default=0),
+                Field("width", tr('Width'), "int", default=960),
+                Field("height", tr('Height'), "int", default=540),
+                Field("title", tr('Name'), "str", default="Screen region"),
             ],
         )
         if values is None:
@@ -1955,9 +2175,13 @@ class App(tk.Tk):
 
     # ----------------------------------------------------------- capture/test
     def grab_preview_frame(self) -> np.ndarray | None:
+        return self.capture_frame()
+
+    def capture_frame(self, quiet: bool = False) -> np.ndarray | None:
         """Capture one frame for the UI (kept in RAM, never written to disk)."""
         if self.window is None:
-            messagebox.showinfo("No window", "Select an LDPlayer instance first.")
+            if not quiet:
+                messagebox.showinfo(tr("No window"), tr("Select an LDPlayer instance first."))
             return None
         try:
             capture = WindowCapture(self.window, backend=self.project.settings.capture_backend,
@@ -1968,13 +2192,14 @@ class App(tk.Tk):
             capture.close()
             return image
         except CaptureError as exc:
-            messagebox.showerror("Capture failed", str(exc))
+            if not quiet:
+                messagebox.showerror(tr("Capture failed"), str(exc))
             return None
 
     def analyze_once(self) -> None:
         """Capture one frame, score every state and show the result."""
         if self.window is None:
-            messagebox.showinfo("No window", "Select an LDPlayer instance first.")
+            messagebox.showinfo(tr('No window'), tr('Select an LDPlayer instance first.'))
             return
         context = self._build_context(dry_run=True)
         if context is None:
@@ -1992,7 +2217,7 @@ class App(tk.Tk):
             self.log.info("Analysis: %s", outcome.describe())
             self._show_preview(context.image)
         except CaptureError as exc:
-            messagebox.showerror("Capture failed", str(exc))
+            messagebox.showerror(tr('Capture failed'), str(exc))
         finally:
             context.release()
 
@@ -2006,13 +2231,15 @@ class App(tk.Tk):
 
     def ask_reference_name(self, parent: tk.Misc, default: str = "reference") -> str:
         values = FormDialog.ask(
-            parent, "Reference image name", [Field("name", "Name", "str", default=default)]
+            parent, "Reference image name", [Field("name", tr('Name'), "str", default=default)]
         )
         if values is None:
             return ""
         name = str(values["name"]).strip()
         if name and name in self.project.references:
-            if not messagebox.askyesno("Replace", f"Replace the image '{name}'?", parent=parent):
+            if not messagebox.askyesno(
+                tr("Replace"), tr("Replace the image '%s'?") % name, parent=parent
+            ):
                 return ""
         return name
 
@@ -2035,29 +2262,38 @@ class App(tk.Tk):
         state = self.project.states.get(self._selected_state)
         if state is None:
             return
-        lines = [f"STATE {state.name}", state.description or "(no description)", ""]
+        lines = [
+            tr("STATE %s") % state.name,
+            state.description or tr("(no description)"),
+            "",
+        ]
         lines.append(state.summary())
         if state.references:
             lines.append("")
-            lines.append("Reference images:")
+            lines.append(tr("Reference images:"))
             lines.extend(f"  • {spec.describe()}" for spec in state.references)
         if state.condition is not None:
             lines.append("")
-            lines.append(f"Condition: {state.condition.describe()}")
+            lines.append(tr("Condition: %s") % state.condition.describe())
         if state.actions:
             lines.append("")
-            lines.append("Actions:")
+            lines.append(tr("Actions:"))
             lines.extend(f"  {index}. {action.describe()}"
                          for index, action in enumerate(state.actions, start=1))
         if state.has_expectation():
             lines.append("")
-            lines.append(f"Expected: {state.expected_state or describe_condition(state.expected_condition)}")
-            lines.append(f"Verification timeout: {state.verify_timeout:g}s")
+            lines.append(
+                tr("Expected: %s")
+                % (state.expected_state or describe_condition(state.expected_condition))
+            )
+            lines.append(tr("Verification timeout: %gs") % state.verify_timeout)
         lines.append("")
-        lines.append(f"Retries: {state.retry_count} (delay {state.retry_delay:g}s), "
-                     f"cooldown {state.cooldown:g}s")
+        lines.append(
+            tr("Retries: %s (delay %gs), cooldown %gs")
+            % (state.retry_count, state.retry_delay, state.cooldown)
+        )
         if state.fallback:
-            lines.append(f"Fallback: {state.fallback}")
+            lines.append(tr("Fallback: %s") % state.fallback)
         self._set_text(self._details, "\n".join(lines))
 
     def add_state(self) -> None:
@@ -2095,7 +2331,9 @@ class App(tk.Tk):
     def delete_state(self) -> None:
         if not self._selected_state:
             return
-        if not messagebox.askyesno("Delete state", f"Delete '{self._selected_state}'?"):
+        if not messagebox.askyesno(
+            tr("Delete state"), tr("Delete '%s'?") % self._selected_state
+        ):
             return
         self.project.remove_state(self._selected_state)
         self._selected_state = ""
@@ -2115,19 +2353,19 @@ class App(tk.Tk):
     def _describe_node(self, node: WorkflowNode, branch: str = "", prefix: str = "") -> str:
         lines = [f"{prefix}{node.type.value}: {node.describe()}"]
         if branch:
-            lines.append(f"Selected branch: {branch}")
+            lines.append(tr("Selected branch: %s") % tr(branch))
         if node.condition is not None:
-            lines.append(f"Condition: {node.condition.describe()}")
+            lines.append(tr("Condition: %s") % node.condition.describe())
         if node.action is not None:
-            lines.append(f"Action: {node.action.describe()}")
+            lines.append(tr("Action: %s") % node.action.describe())
         if node.type in (NodeType.VERIFY, NodeType.ANALYZE, NodeType.WAIT):
-            lines.append(f"Timeout: {node.timeout:g}s, check every {node.poll:g}s")
+            lines.append(tr("Timeout: %gs, check every %gs") % (node.timeout, node.poll))
         if node.type is NodeType.RETRY:
-            lines.append(f"Attempts: {node.attempts}, delay {node.delay:g}s")
+            lines.append(tr("Attempts: %s, delay %gs") % (node.attempts, node.delay))
         if node.type is NodeType.LOOP:
-            lines.append(f"Count: {node.count}, iteration limit {node.max_iterations}")
+            lines.append(tr("Count: %s, iteration limit %s") % (node.count, node.max_iterations))
         if not node.enabled:
-            lines.append("This step is disabled.")
+            lines.append(tr("This step is disabled."))
         return "\n".join(lines)
 
     def _insertion_point(self) -> tuple[list[WorkflowNode], int]:
@@ -2170,10 +2408,10 @@ class App(tk.Tk):
         values = FormDialog.ask(
             self, "ANALYZE",
             [
-                Field("state", "Wait for state (optional)", "choice",
+                Field("state", tr('Wait for state (optional)'), "choice",
                       [""] + self.project.state_names()),
-                Field("timeout", "Timeout (s)", "float", default=10.0),
-                Field("poll", "Check every (s)", "float", default=0.4),
+                Field("timeout", tr('Timeout (s)'), "float", default=10.0),
+                Field("poll", tr('Check every (s)'), "float", default=0.4),
             ],
         )
         if values is None:
@@ -2198,10 +2436,10 @@ class App(tk.Tk):
     def add_state_node(self) -> None:
         names = self.project.state_names()
         if not names:
-            messagebox.showinfo("No states", "Create a visual state first.")
+            messagebox.showinfo(tr('No states'), tr('Create a visual state first.'))
             return
         values = FormDialog.ask(
-            self, "Run a state", [Field("state", "State", "choice", names, default=names[0])]
+            self, "Run a state", [Field("state", tr('State'), "choice", names, default=names[0])]
         )
         if values is None or not values["state"]:
             return
@@ -2211,10 +2449,10 @@ class App(tk.Tk):
         values = FormDialog.ask(
             self, "VERIFY",
             [
-                Field("state", "Expected state", "choice", [""] + self.project.state_names()),
-                Field("timeout", "Timeout (s)", "float", default=5.0),
-                Field("poll", "Check every (s)", "float", default=0.4),
-                Field("with_branches", "Add SUCCESS / FAILED branches", "bool", default=True),
+                Field("state", tr('Expected state'), "choice", [""] + self.project.state_names()),
+                Field("timeout", tr('Timeout (s)'), "float", default=5.0),
+                Field("poll", tr('Check every (s)'), "float", default=0.4),
+                Field("with_branches", tr('Add SUCCESS / FAILED branches'), "bool", default=True),
             ],
         )
         if values is None:
@@ -2237,10 +2475,10 @@ class App(tk.Tk):
         node_id, _branch = self._selection
         node = self.project.workflow.find(node_id) if node_id else None
         if node is None or node.type is not NodeType.IF:
-            messagebox.showinfo("Select an IF", "Select the IF step you want to extend.")
+            messagebox.showinfo(tr('Select an IF'), tr('Select the IF step you want to extend.'))
             return
         answer = messagebox.askyesnocancel(
-            "ADD ELSE", "Add an ELSE IF branch with its own condition?\nChoose No for a plain ELSE."
+            tr('ADD ELSE'), tr('Add an ELSE IF branch with its own condition?\nChoose No for a plain ELSE.')
         )
         if answer is None:
             return
@@ -2256,7 +2494,7 @@ class App(tk.Tk):
         elif not node.else_nodes:
             node.else_nodes.append(make_node(NodeType.WAIT, seconds=1.0))
         else:
-            messagebox.showinfo("ELSE exists", "This IF already has an ELSE branch.")
+            messagebox.showinfo(tr('ELSE exists'), tr('This IF already has an ELSE branch.'))
             return
         self.project.mark_dirty()
         self.refresh_workflow()
@@ -2265,10 +2503,10 @@ class App(tk.Tk):
         values = FormDialog.ask(
             self, "WAIT",
             [
-                Field("seconds", "Seconds", "float", default=1.0),
-                Field("until", "Wait until a condition instead", "bool", default=False),
-                Field("timeout", "Timeout (s)", "float", default=10.0),
-                Field("poll", "Check every (s)", "float", default=0.4),
+                Field("seconds", tr('Seconds'), "float", default=1.0),
+                Field("until", tr('Wait until a condition instead'), "bool", default=False),
+                Field("timeout", tr('Timeout (s)'), "float", default=10.0),
+                Field("poll", tr('Check every (s)'), "float", default=0.4),
             ],
         )
         if values is None:
@@ -2288,8 +2526,8 @@ class App(tk.Tk):
         values = FormDialog.ask(
             self, "RETRY",
             [
-                Field("attempts", "Attempts", "int", default=3),
-                Field("delay", "Delay between attempts (s)", "float", default=1.0),
+                Field("attempts", tr('Attempts'), "int", default=3),
+                Field("delay", tr('Delay between attempts (s)'), "float", default=1.0),
             ],
         )
         if values is None:
@@ -2303,8 +2541,8 @@ class App(tk.Tk):
         values = FormDialog.ask(
             self, "LOOP",
             [
-                Field("count", "Iterations (0 = while a condition holds)", "int", default=3),
-                Field("max_iterations", "Iteration limit", "int", default=100),
+                Field("count", tr('Iterations (0 = while a condition holds)'), "int", default=3),
+                Field("max_iterations", tr('Iteration limit'), "int", default=100),
             ],
         )
         if values is None:
@@ -2321,9 +2559,54 @@ class App(tk.Tk):
             node.count = 1
         self._insert_node(node)
 
+    def record_macro_node(self) -> None:
+        """Record a combination in LDPlayer and insert it as scenario steps."""
+        actions = RecorderDialog.ask(self, self)
+        if not actions:
+            return
+        for action in actions:
+            self._insert_node(make_node(NodeType.ACTION, action=action))
+
+    def store_reference_patch(
+        self, patch: np.ndarray, frame_size: tuple[int, int], suggested_name: str
+    ) -> str:
+        """Store a patch captured while recording as a project reference image."""
+        if self.project.path is None:
+            return ""
+        name = suggested_name
+        index = 1
+        while name in self.project.references:
+            index += 1
+            name = f"{suggested_name}_{index}"
+        self.project.add_reference_image(patch, name, source_size=frame_size)
+        return name
+
+    def change_language(self, code: str) -> None:
+        """Switch the interface language and rebuild the window."""
+        if code == get_language():
+            return
+        set_language(code)
+        self.project.settings.language = code
+        self.project.mark_dirty()
+        self._rebuild_ui()
+        self.log.info("Language changed to %s", language_label(code))
+
+    def _rebuild_ui(self) -> None:
+        selection = self._selection
+        for child in list(self.winfo_children()):
+            child.destroy()
+        self._build_ui()
+        self._selection = selection
+        self._canvas.selection = selection
+        self.refresh_states()
+        self.refresh_workflow()
+        for record in self.log.records():
+            self._append_log(record)
+        self._update_status()
+
     def add_stop_node(self) -> None:
         values = FormDialog.ask(
-            self, "STOP", [Field("reason", "Reason", "str", default="scenario finished")]
+            self, "STOP", [Field("reason", tr('Reason'), "str", default="scenario finished")]
         )
         if values is None:
             return
@@ -2344,11 +2627,11 @@ class App(tk.Tk):
                 node.condition = condition
         elif node.type in (NodeType.WAIT, NodeType.VERIFY, NodeType.ANALYZE, NodeType.LOOP):
             fields = [
-                Field("timeout", "Timeout (s)", "float", default=node.timeout),
-                Field("poll", "Check every (s)", "float", default=node.poll),
-                Field("seconds", "Wait seconds", "float", default=node.seconds),
-                Field("state", "State", "choice", [""] + self.project.state_names(), node.state),
-                Field("edit_condition", "Edit the condition too", "bool", default=False),
+                Field("timeout", tr('Timeout (s)'), "float", default=node.timeout),
+                Field("poll", tr('Check every (s)'), "float", default=node.poll),
+                Field("seconds", tr('Wait seconds'), "float", default=node.seconds),
+                Field("state", tr('State'), "choice", [""] + self.project.state_names(), node.state),
+                Field("edit_condition", tr('Edit the condition too'), "bool", default=False),
             ]
             values = FormDialog.ask(self, node.type.value, fields)
             if values is None:
@@ -2365,8 +2648,8 @@ class App(tk.Tk):
             values = FormDialog.ask(
                 self, "RETRY",
                 [
-                    Field("attempts", "Attempts", "int", default=node.attempts),
-                    Field("delay", "Delay (s)", "float", default=node.delay),
+                    Field("attempts", tr('Attempts'), "int", default=node.attempts),
+                    Field("delay", tr('Delay (s)'), "float", default=node.delay),
                 ],
             )
             if values is None:
@@ -2374,14 +2657,14 @@ class App(tk.Tk):
             node.attempts = max(1, int(values["attempts"]))
             node.delay = values["delay"] or 0.0
         elif node.type is NodeType.STOP:
-            values = FormDialog.ask(self, "STOP", [Field("reason", "Reason", "str", default=node.reason)])
+            values = FormDialog.ask(self, "STOP", [Field("reason", tr('Reason'), "str", default=node.reason)])
             if values is None:
                 return
             node.reason = values["reason"]
         elif node.type is NodeType.STATE:
             values = FormDialog.ask(
                 self, "Run a state",
-                [Field("state", "State", "choice", self.project.state_names(), node.state)],
+                [Field("state", tr('State'), "choice", self.project.state_names(), node.state)],
             )
             if values is None:
                 return
@@ -2440,7 +2723,7 @@ class App(tk.Tk):
                 ocr_service=self._ocr(),
             )
         except CaptureError as exc:
-            messagebox.showerror("Capture backend", str(exc))
+            messagebox.showerror(tr('Capture backend'), str(exc))
             return None
 
     def _on_hotkey_start_pause(self) -> None:
@@ -2454,14 +2737,15 @@ class App(tk.Tk):
             self.safety.toggle_pause()
             return
         if self.window is None:
-            messagebox.showinfo("No window", "Select an LDPlayer instance first.")
+            messagebox.showinfo(tr('No window'), tr('Select an LDPlayer instance first.'))
             return
         problems = self.project.validate()
         if problems:
             self.validate_project()
             if not messagebox.askyesno(
-                "Warnings", "The project has warnings:\n\n"
-                + "\n".join(problems[:6]) + "\n\nStart anyway?"
+                tr("Warnings"),
+                tr("The project has warnings:\n\n%s\n\nStart anyway?")
+                % "\n".join(problems[:6]),
             ):
                 return
         context = self._build_context()
@@ -2521,7 +2805,7 @@ class App(tk.Tk):
 
     def save_log(self) -> None:
         path = filedialog.asksaveasfilename(
-            title="Save the log", defaultextension=".log",
+            title=tr('Save the log'), defaultextension=".log",
             filetypes=[("Text log", "*.log *.txt")],
         )
         if not path:

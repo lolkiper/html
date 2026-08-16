@@ -24,9 +24,11 @@ from typing import Any, Iterable
 import cv2
 import numpy as np
 
+from i18n import DEFAULT_LANGUAGE, tr
 from logger import EventLog, get_logger
 from mouse import PointerSettings
 from ocr import Preprocess
+from recorder import RecorderSettings
 from safety import SafetySettings, audit_no_frame_artifacts
 from state_machine import ReferenceSpec, RunnerSettings, UNKNOWN_STATE, VisualState, build_states
 from vision import Roi, load_image
@@ -47,6 +49,7 @@ class ProjectSettings:
     """Everything the engine needs to configure itself for this project."""
 
     engine_mode: str = "workflow"          # workflow | states
+    language: str = DEFAULT_LANGUAGE       # interface language
     capture_backend: str = "auto"
     ocr_engine: str = "auto"
     ocr_language: str = "en"
@@ -57,10 +60,12 @@ class ProjectSettings:
     safety: SafetySettings = field(default_factory=SafetySettings)
     pointer: PointerSettings = field(default_factory=PointerSettings)
     runner: RunnerSettings = field(default_factory=RunnerSettings)
+    recorder: RecorderSettings = field(default_factory=RecorderSettings)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "engine_mode": self.engine_mode,
+            "language": self.language,
             "capture_backend": self.capture_backend,
             "ocr_engine": self.ocr_engine,
             "ocr_language": self.ocr_language,
@@ -71,6 +76,7 @@ class ProjectSettings:
             "safety": self.safety.to_dict(),
             "pointer": self.pointer.to_dict(),
             "runner": self.runner.to_dict(),
+            "recorder": self.recorder.to_dict(),
         }
 
     @classmethod
@@ -79,6 +85,7 @@ class ProjectSettings:
         insets = data.get("window_insets") or [0, 0, 0, 0]
         return cls(
             engine_mode=str(data.get("engine_mode", "workflow")),
+            language=str(data.get("language", DEFAULT_LANGUAGE)),
             capture_backend=str(data.get("capture_backend", "auto")),
             ocr_engine=str(data.get("ocr_engine", "auto")),
             ocr_language=str(data.get("ocr_language", "en")),
@@ -89,6 +96,7 @@ class ProjectSettings:
             safety=SafetySettings.from_dict(data.get("safety")),
             pointer=PointerSettings.from_dict(data.get("pointer")),
             runner=RunnerSettings.from_dict(data.get("runner")),
+            recorder=RecorderSettings.from_dict(data.get("recorder")),
         )
 
 
@@ -404,10 +412,9 @@ class Project:
         return audit_no_frame_artifacts(self.path, allowed=(REFERENCES_DIR,))
 
     def describe(self) -> str:
-        return (
-            f"{self.name}: {len(self.states)} state(s), "
-            f"{len(list(self.workflow.walk()))} workflow node(s), "
-            f"{len(self.references)} reference image(s)"
+        return tr("%s: %s state(s), %s workflow node(s), %s reference image(s)") % (
+            self.name, len(self.states), len(list(self.workflow.walk())),
+            len(self.references),
         )
 
 
@@ -425,12 +432,12 @@ def _write_png(path: Path, image: np.ndarray) -> None:
     buffer.tofile(str(path))
 
 
-def example_project(name: str = "LDPlayer example") -> Project:
+def example_project(name: str | None = None) -> Project:
     """A ready to edit project with the four example states and the scenario."""
     states = {
         "STATE_A": VisualState(
             name="STATE_A",
-            description="Main screen the test starts from",
+            description=tr("Main screen the test starts from"),
             confidence=0.85,
             timeout=10.0,
             retry_count=3,
@@ -439,7 +446,7 @@ def example_project(name: str = "LDPlayer example") -> Project:
         ),
         "STATE_B": VisualState(
             name="STATE_B",
-            description="Error message screen",
+            description=tr("Error message screen"),
             confidence=0.85,
             timeout=8.0,
             retry_count=2,
@@ -447,17 +454,18 @@ def example_project(name: str = "LDPlayer example") -> Project:
         ),
         "STATE_C": VisualState(
             name="STATE_C",
-            description="Success screen",
+            description=tr("Success screen"),
             confidence=0.85,
             terminal=False,
         ),
         UNKNOWN_STATE: VisualState(
             name=UNKNOWN_STATE,
-            description="Nothing recognised: wait and analyse again",
+            description=tr("Nothing recognised: wait and analyse again"),
             confidence=0.99,
             retry_count=0,
         ),
     }
-    project = Project(name=name, states=states, workflow=example_workflow())
+    project = Project(name=name or tr("LDPlayer example"), states=states,
+                      workflow=example_workflow())
     project.settings.engine_mode = "workflow"
     return project

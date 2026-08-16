@@ -19,6 +19,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, Sequence
 
 from conditions import Condition, ConditionResult, condition_from_dict, condition_to_dict, evaluate
+from i18n import tr
 from logger import Secret, mask_text
 from safety import EmergencyStop, SafetyViolation
 from vision import MatchResult, Roi
@@ -143,17 +144,17 @@ class Target:
         mode = TargetMode(self.mode)
         if mode is TargetMode.WINDOW:
             if self.units == "pixels":
-                return f"window pixel ({int(self.x)},{int(self.y)})"
-            return f"window ({self.x:.3f},{self.y:.3f})"
+                return tr("window pixel (%s,%s)") % (int(self.x), int(self.y))
+            return tr("window (%.3f,%.3f)") % (self.x, self.y)
         if mode is TargetMode.LAST_MATCH:
-            return "last match"
+            return tr("last match")
         if mode is TargetMode.REFERENCE:
-            return f"image '{self.reference}'"
+            return tr("image '%s'") % self.reference
         if mode is TargetMode.TEXT:
-            return f"text '{self.text}'"
+            return tr("text '%s'") % self.text
         if mode is TargetMode.STATE:
-            return f"element of state '{self.state or 'current'}'"
-        return "current pointer"
+            return tr("element of state '%s'") % (self.state or tr("current"))
+        return tr("current pointer")
 
 
 @dataclass
@@ -291,7 +292,7 @@ class MoveMouse(PointerAction):
         return ActionResult(moved, f"move to {self.target.describe()}", point.confidence or 0.0, point.match)
 
     def describe(self) -> str:
-        return f"MOVE MOUSE -> {self.target.describe()}"
+        return tr("%s -> %s") % (tr(self.label).upper(), self.target.describe())
 
     @classmethod
     def build(cls, data: dict[str, Any]) -> "MoveMouse":
@@ -316,7 +317,7 @@ class _Click(PointerAction):
         return ActionResult(clicked, detail, point.confidence or 0.0, point.match)
 
     def describe(self) -> str:
-        return f"{self.label.upper()} -> {self.target.describe()}"
+        return tr("%s -> %s") % (tr(self.label).upper(), self.target.describe())
 
     @classmethod
     def build(cls, data: dict[str, Any]):
@@ -376,7 +377,8 @@ class Drag(PointerAction):
         return ActionResult(dragged, detail, start.confidence or 0.0, start.match)
 
     def describe(self) -> str:
-        return f"DRAG {self.target.describe()} -> {self.end.describe()}"
+        return tr("%s -> %s") % (tr(self.label).upper(),
+                                 f"{self.target.describe()} -> {self.end.describe()}")
 
     def payload(self) -> dict[str, Any]:
         return {**super().payload(), "end": self.end.to_dict(), "duration": self.duration}
@@ -408,8 +410,9 @@ class PressKey(Action):
         return ActionResult(done, f"press {self.key}")
 
     def describe(self) -> str:
-        suffix = f" x{self.presses}" if self.presses > 1 else ""
-        return f"PRESS KEY {self.key}{suffix}"
+        if self.presses > 1:
+            return tr("PRESS KEY %s x%s") % (self.key, self.presses)
+        return tr("PRESS KEY %s") % self.key
 
     def payload(self) -> dict[str, Any]:
         return {"key": self.key, "presses": self.presses, "interval": self.interval}
@@ -436,7 +439,7 @@ class Hotkey(Action):
         return ActionResult(done, f"hotkey {self.combination}")
 
     def describe(self) -> str:
-        return f"HOTKEY {self.combination}"
+        return tr("HOTKEY %s") % self.combination
 
     def payload(self) -> dict[str, Any]:
         return {"combination": self.combination}
@@ -474,11 +477,11 @@ class TypeText(Action):
 
     def describe(self) -> str:
         if self.variable:
-            return f"TYPE TEXT from variable '{self.variable}'"
+            return tr("TYPE TEXT from variable '%s'") % self.variable
         if self.sensitive:
-            return f"TYPE TEXT ({mask_text(self.text)})"
+            return tr("TYPE TEXT (%s)") % mask_text(self.text)
         preview = self.text if len(self.text) <= 24 else self.text[:21] + "..."
-        return f"TYPE TEXT '{preview}'"
+        return tr("TYPE TEXT '%s'") % preview
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -519,7 +522,7 @@ class Wait(Action):
         return ActionResult(True, f"waited {duration:.2f}s")
 
     def describe(self) -> str:
-        return f"WAIT {self.seconds:g}s"
+        return tr("WAIT %gs") % self.seconds
 
     def payload(self) -> dict[str, Any]:
         return {"seconds": self.seconds, "jitter": self.jitter}
@@ -560,8 +563,8 @@ class WaitUntil(Action):
     def describe(self) -> str:
         from conditions import describe_condition
 
-        prefix = "WAIT UNTIL" if self.expect else "WAIT WHILE NOT"
-        return f"{prefix} {describe_condition(self.condition)} (timeout {self.timeout:g}s)"
+        template = "WAIT UNTIL %s (timeout %gs)" if self.expect else "WAIT WHILE NOT %s (timeout %gs)"
+        return tr(template) % (describe_condition(self.condition), self.timeout)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -605,8 +608,8 @@ class Verify(Action):
         from conditions import describe_condition
 
         if self.expected_state:
-            return f"VERIFY state {self.expected_state} (timeout {self.timeout:g}s)"
-        return f"VERIFY {describe_condition(self.condition)}"
+            return tr("VERIFY state %s (timeout %gs)") % (self.expected_state, self.timeout)
+        return tr("VERIFY %s") % describe_condition(self.condition)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -653,7 +656,7 @@ class Repeat(Action):
         return ActionResult(True, f"repeated {self.times}x ({performed} actions)")
 
     def describe(self) -> str:
-        return f"REPEAT {self.times}x ({len(self.actions)} action(s))"
+        return tr("REPEAT %sx (%s action(s))") % (self.times, len(self.actions))
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -685,7 +688,7 @@ class Stop(Action):
         raise StopRequested(self.reason)
 
     def describe(self) -> str:
-        return f"STOP ({self.reason})"
+        return tr("STOP (%s)") % self.reason
 
     def payload(self) -> dict[str, Any]:
         return {"reason": self.reason}
@@ -732,8 +735,8 @@ class SetVariable(Action):
 
     def describe(self) -> str:
         if self.mode == "increment":
-            return f"SET VARIABLE {self.name} += {self.value}"
-        return f"SET VARIABLE {self.name} = {self.value!r} ({self.mode})"
+            return tr("SET VARIABLE %s += %s") % (self.name, self.value)
+        return tr("SET VARIABLE %s = %r (%s)") % (self.name, self.value, self.mode)
 
     def payload(self) -> dict[str, Any]:
         return {"name": self.name, "value": self.value, "mode": self.mode}
@@ -759,7 +762,7 @@ class LogMessage(Action):
         return ActionResult(True, "logged")
 
     def describe(self) -> str:
-        return f"LOG '{self.message}'"
+        return tr("LOG '%s'") % self.message
 
     def payload(self) -> dict[str, Any]:
         return {"message": self.message, "level": self.level}
@@ -815,24 +818,28 @@ def verify_expected(
             ctx.log.info("State detected: %s", outcome.state)
             if outcome.state == expected_state:
                 if outcome.ambiguous:
-                    last_detail = f"ambiguous match with {outcome.runner_up}"
+                    last_detail = tr("ambiguous match with %s") % outcome.runner_up
                     ctx.log.warning("Verification: ambiguous (%s)", last_detail)
                 else:
                     ctx.log.success("Verification: SUCCESS")
                     return VerificationResult(
                         True, observed, confidence,
-                        f"expected {expected_state} confirmed", False, attempts,
+                        tr("expected %s confirmed") % expected_state, False, attempts,
                     )
             else:
-                last_detail = f"expected {expected_state}, observed {outcome.state}"
+                last_detail = tr("expected %s, observed %s") % (expected_state, outcome.state)
         if condition is None and not expected_state:
-            return VerificationResult(True, ctx.detect().state, 1.0, "nothing to verify", False, attempts)
+            return VerificationResult(
+                True, ctx.detect().state, 1.0, tr("nothing to verify"), False, attempts
+            )
         if time.monotonic() >= deadline:
             ctx.log.warning("Verification: FAILED (%s)", last_detail or "timeout")
-            return VerificationResult(False, observed, confidence, last_detail or "timeout", True, attempts)
+            return VerificationResult(
+                False, observed, confidence, last_detail or tr("timeout"), True, attempts
+            )
         ctx.safety.sleep(poll)
 
 
 def available_actions() -> list[tuple[str, str]]:
     """``(kind, label)`` pairs for the GUI action picker."""
-    return [(kind, cls.label) for kind, cls in ACTION_TYPES.items()]
+    return [(kind, tr(cls.label)) for kind, cls in ACTION_TYPES.items()]
