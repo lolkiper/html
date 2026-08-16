@@ -224,6 +224,8 @@ def test_the_interface_follows_the_project_language(log):
     try:
         assert get_language() == "ru"
         assert "СОСТОЯНИЕ" in outline_text(app.project.workflow)
+        assert app._record_macro_button.cget("text") == "+ ЗАПИСАТЬ МАКРОС"
+        assert app._title_label.cget("text") == "🚀  LDPLAYER VISUAL UI TESTER"
     finally:
         app.hotkeys.stop()
         app.log.remove_listener(app._queue_log_record)
@@ -280,3 +282,34 @@ def test_recorded_actions_are_inserted_into_the_scenario(app, monkeypatch):
         app._insert_node(gui.make_node(NodeType.ACTION, action=action))
     assert len(app.project.workflow.nodes) == before + 3
     assert app.project.workflow.nodes[1].action.target.mode.value == "window"
+
+
+def test_scenario_buttons_wrap_and_stay_reachable(app):
+    """Long captions must wrap onto more rows instead of being cut off."""
+    from i18n import tr
+    import gui
+
+    assert app._record_macro_button.winfo_ismapped()
+    assert app._record_macro_button.cget("text") == "+ " + tr("RECORD MACRO")
+    assert app._record_macro_button.cget("style") == "Success.TButton"
+    assert app._title_label.cget("fg").lower() == gui.PALETTE["title"]
+    assert gui.PALETTE["bg"] == "#0d0d0d"
+    assert gui.PALETTE["accent"] == "#f5c518"
+    assert app._record_macro_button.winfo_rooty() < app._scenario_buttons.winfo_rooty()
+
+    toolbar = app._scenario_buttons
+    toolbar.relayout(available=900)          # a realistic centre-panel width
+    app.update_idletasks()
+    labels = [widget.cget("text") for widget in toolbar._items]
+    assert tr("RECORD MACRO") not in labels, "the recorder lives on its own full-width row"
+    for name in ("ADD STATE", "ADD CONDITION", "ADD ACTION", "ADD VERIFY", "ADD ELSE",
+                 "ADD WAIT", "ADD RETRY", "ADD ANALYZE", "ADD LOOP", "ADD STOP"):
+        assert tr(name) in labels
+    delete = [widget for widget in toolbar._items if widget.cget("text") == tr("Delete")][0]
+    assert delete.cget("style") == "Danger.TButton"
+    width = 900
+    for widget in toolbar._items:
+        right = widget.winfo_x() + widget.winfo_reqwidth()
+        assert right <= width + toolbar.spacing, f"{widget.cget('text')} is clipped"
+    assert toolbar.rows() > 1, "the buttons should occupy more than one row"
+    assert toolbar.winfo_reqheight() > 1

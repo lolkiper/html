@@ -16,6 +16,7 @@ are converted in memory and dropped immediately - nothing is written to disk.
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -72,38 +73,51 @@ from workflow import (
 )
 
 PALETTE = {
-    "bg": "#171a21",
-    "panel": "#1f2430",
-    "panel_light": "#262c3a",
-    "border": "#333b4d",
-    "text": "#e6e9ef",
-    "muted": "#98a2b8",
-    "accent": "#4da3ff",
-    "success": "#3ecf8e",
-    "warning": "#ffb454",
-    "error": "#ff6b6b",
-    "select": "#2f6feb",
+    "bg": "#0d0d0d",
+    "panel": "#111111",
+    "panel_light": "#1a1a1a",
+    "border": "#2a2a2a",
+    "text": "#e8e8e8",
+    "muted": "#9a9a9a",
+    "accent": "#f5c518",
+    "title": "#f5c518",
+    "success": "#1e8a4a",
+    "success_active": "#259d56",
+    "warning": "#f5c518",
+    "error": "#e74c3c",
+    "select": "#3a3110",
+    "danger": "#7a1f1f",
+    "danger_active": "#9a2828",
 }
 
 LEVEL_COLORS = {
     LogLevel.DEBUG: PALETTE["muted"],
     LogLevel.INFO: PALETTE["text"],
-    LogLevel.SUCCESS: PALETTE["success"],
+    LogLevel.SUCCESS: "#3ecf8e",
     LogLevel.WARNING: PALETTE["warning"],
     LogLevel.ERROR: PALETTE["error"],
 }
 
 NODE_COLORS = {
-    NodeType.ANALYZE: "#2b4a6f",
-    NodeType.IF: "#4a3d6b",
-    NodeType.ACTION: "#1f4d3d",
-    NodeType.VERIFY: "#4d4620",
-    NodeType.WAIT: "#33394a",
-    NodeType.RETRY: "#5a3a2b",
-    NodeType.LOOP: "#2b4a4a",
-    NodeType.STOP: "#5a2b2b",
-    NodeType.STATE: "#2f3f6b",
+    NodeType.ANALYZE: "#1a334d",
+    NodeType.IF: "#2e2448",
+    NodeType.ACTION: "#143d2e",
+    NodeType.VERIFY: "#3d3614",
+    NodeType.WAIT: "#22262e",
+    NodeType.RETRY: "#3d2418",
+    NodeType.LOOP: "#143d3d",
+    NodeType.STOP: "#3d1818",
+    NodeType.STATE: "#1a2848",
 }
+
+UI_FONT = "Segoe UI" if os.name == "nt" else "Noto Sans"
+MONO_FONT = "Consolas" if os.name == "nt" else "DejaVu Sans Mono"
+
+
+def ui_font(size: int = 10, weight: str = "normal") -> tuple[str, int] | tuple[str, int, str]:
+    if weight == "normal":
+        return (UI_FONT, size)
+    return (UI_FONT, size, weight)
 
 
 def apply_theme(root: tk.Misc) -> None:
@@ -113,23 +127,43 @@ def apply_theme(root: tk.Misc) -> None:
     except tk.TclError:  # pragma: no cover - platform dependent
         pass
     style.configure(".", background=PALETTE["panel"], foreground=PALETTE["text"],
-                    fieldbackground=PALETTE["panel_light"], bordercolor=PALETTE["border"])
+                    fieldbackground=PALETTE["panel_light"], bordercolor=PALETTE["border"],
+                    font=ui_font())
     style.configure("TFrame", background=PALETTE["panel"])
     style.configure("Toolbar.TFrame", background=PALETTE["bg"])
-    style.configure("TLabel", background=PALETTE["panel"], foreground=PALETTE["text"])
-    style.configure("Muted.TLabel", foreground=PALETTE["muted"])
-    style.configure("Heading.TLabel", font=("Segoe UI", 10, "bold"))
+    style.configure("TLabel", background=PALETTE["panel"], foreground=PALETTE["text"],
+                    font=ui_font())
+    style.configure("Muted.TLabel", foreground=PALETTE["muted"], background=PALETTE["panel"])
+    style.configure("Heading.TLabel", font=ui_font(10, "bold"), foreground=PALETTE["title"],
+                    background=PALETTE["panel"])
+    style.configure("Title.TLabel", font=ui_font(18, "bold"), foreground=PALETTE["title"],
+                    background=PALETTE["bg"])
     style.configure("TButton", background=PALETTE["panel_light"], foreground=PALETTE["text"],
-                    borderwidth=0, padding=(8, 4))
-    style.map("TButton", background=[("active", PALETTE["border"])])
-    style.configure("Accent.TButton", background=PALETTE["select"], foreground="#ffffff")
-    style.map("Accent.TButton", background=[("active", PALETTE["accent"])])
-    style.configure("Danger.TButton", background="#7a2d2d", foreground="#ffffff")
+                    borderwidth=0, padding=(10, 5), font=ui_font(9), relief="flat")
+    style.map("TButton", background=[("active", PALETTE["border"]), ("pressed", PALETTE["border"])],
+              foreground=[("disabled", PALETTE["muted"])])
+    style.configure("Accent.TButton", background=PALETTE["accent"], foreground="#111111",
+                    padding=(12, 6), font=ui_font(9, "bold"))
+    style.map("Accent.TButton",
+              background=[("active", "#ffd84d"), ("pressed", "#d4a90f")],
+              foreground=[("active", "#111111"), ("disabled", "#555555")])
+    style.configure("Success.TButton", background=PALETTE["success"], foreground="#ffffff",
+                    padding=(16, 9), font=ui_font(10, "bold"))
+    style.map("Success.TButton",
+              background=[("active", PALETTE["success_active"]), ("pressed", "#165a30")],
+              foreground=[("disabled", "#bbbbbb")])
+    style.configure("Danger.TButton", background=PALETTE["danger"], foreground="#ffffff",
+                    padding=(10, 5), font=ui_font(9, "bold"))
+    style.map("Danger.TButton",
+              background=[("active", PALETTE["danger_active"]), ("pressed", "#5a1515")],
+              foreground=[("disabled", "#bbbbbb")])
     style.configure("TEntry", fieldbackground=PALETTE["panel_light"], foreground=PALETTE["text"],
-                    insertcolor=PALETTE["text"])
+                    insertcolor=PALETTE["text"], bordercolor=PALETTE["border"],
+                    lightcolor=PALETTE["border"], darkcolor=PALETTE["border"])
     style.configure("TCombobox", fieldbackground=PALETTE["panel_light"], foreground=PALETTE["text"],
                     arrowcolor=PALETTE["text"], selectbackground=PALETTE["panel_light"],
-                    selectforeground=PALETTE["text"])
+                    selectforeground=PALETTE["text"], bordercolor=PALETTE["border"],
+                    lightcolor=PALETTE["border"], darkcolor=PALETTE["border"])
     # ttk keeps a separate colour set for the readonly state, which the engine
     # mode / level pickers use; without this they render as empty boxes.
     style.map(
@@ -142,16 +176,31 @@ def apply_theme(root: tk.Misc) -> None:
     root.option_add("*TCombobox*Listbox.background", PALETTE["panel_light"])
     root.option_add("*TCombobox*Listbox.foreground", PALETTE["text"])
     root.option_add("*TCombobox*Listbox.selectBackground", PALETTE["select"])
-    style.configure("TCheckbutton", background=PALETTE["panel"], foreground=PALETTE["text"])
+    style.configure("TCheckbutton", background=PALETTE["panel"], foreground=PALETTE["text"],
+                    font=ui_font())
+    style.map("TCheckbutton", background=[("active", PALETTE["panel"])],
+              foreground=[("disabled", PALETTE["muted"])])
+    style.configure("Toolbar.TCheckbutton", background=PALETTE["bg"], foreground=PALETTE["text"],
+                    font=ui_font())
+    style.map("Toolbar.TCheckbutton", background=[("active", PALETTE["bg"])])
+    style.configure("Toolbar.TLabel", background=PALETTE["bg"], foreground=PALETTE["text"])
+    style.configure("MutedToolbar.TLabel", background=PALETTE["bg"], foreground=PALETTE["muted"])
     style.configure("TNotebook", background=PALETTE["panel"], borderwidth=0)
     style.configure("TNotebook.Tab", background=PALETTE["panel_light"], foreground=PALETTE["muted"],
-                    padding=(12, 6))
+                    padding=(12, 6), font=ui_font(9, "bold"))
     style.map("TNotebook.Tab", background=[("selected", PALETTE["panel"])],
-              foreground=[("selected", PALETTE["text"])])
+              foreground=[("selected", PALETTE["title"])])
     style.configure("Treeview", background=PALETTE["panel_light"], fieldbackground=PALETTE["panel_light"],
-                    foreground=PALETTE["text"], borderwidth=0, rowheight=22)
-    style.map("Treeview", background=[("selected", PALETTE["select"])])
-    style.configure("Treeview.Heading", background=PALETTE["bg"], foreground=PALETTE["muted"])
+                    foreground=PALETTE["text"], borderwidth=0, rowheight=24, font=ui_font(9))
+    style.map("Treeview", background=[("selected", PALETTE["select"])],
+              foreground=[("selected", PALETTE["title"])])
+    style.configure("Treeview.Heading", background=PALETTE["bg"], foreground=PALETTE["title"],
+                    font=ui_font(9, "bold"), relief="flat")
+    style.map("Treeview.Heading", background=[("active", PALETTE["panel_light"])],
+              foreground=[("active", PALETTE["title"])])
+    style.configure("TSeparator", background=PALETTE["border"])
+    style.configure("TScrollbar", background=PALETTE["panel_light"], troughcolor=PALETTE["bg"],
+                    bordercolor=PALETTE["bg"], arrowcolor=PALETTE["muted"])
 
 
 # --------------------------------------------------------------------------- #
@@ -1050,11 +1099,11 @@ class RecorderDialog(tk.Toplevel):
         buttons = ttk.Frame(self, padding=(12, 0, 12, 12))
         buttons.pack(fill="x")
         self._start_button = ttk.Button(
-            buttons, text=tr("Start recording"), style="Accent.TButton", command=self._start
+            buttons, text=tr("Start recording"), style="Success.TButton", command=self._start
         )
         self._start_button.pack(side="left")
         self._stop_button = ttk.Button(
-            buttons, text=tr("Stop"), command=self._stop, state="disabled"
+            buttons, text=tr("Stop"), style="Danger.TButton", command=self._stop, state="disabled"
         )
         self._stop_button.pack(side="left", padx=6)
         ttk.Button(buttons, text=tr("Cancel"), command=self._cancel).pack(side="right")
@@ -1260,10 +1309,11 @@ class StateEditor(tk.Toplevel):
         controls.pack(fill="x")
         ttk.Button(controls, text=tr("Add"), command=self._add_action).pack(side="left")
         ttk.Button(
-            controls, text=tr("Record..."), style="Accent.TButton", command=self._record_actions
+            controls, text=tr("Record..."), style="Success.TButton", command=self._record_actions
         ).pack(side="left", padx=4)
         ttk.Button(controls, text=tr("Edit"), command=self._edit_action).pack(side="left", padx=4)
-        ttk.Button(controls, text=tr('Remove'), command=self._remove_action).pack(side="left")
+        ttk.Button(controls, text=tr('Remove'), style="Danger.TButton",
+                   command=self._remove_action).pack(side="left")
         ttk.Button(controls, text=tr('Up'), command=lambda: self._move_action(-1)).pack(side="right")
         ttk.Button(controls, text=tr('Down'), command=lambda: self._move_action(1)).pack(
             side="right", padx=4
@@ -1531,6 +1581,51 @@ class StateEditor(tk.Toplevel):
 # --------------------------------------------------------------------------- #
 # workflow diagram
 # --------------------------------------------------------------------------- #
+class FlowFrame(ttk.Frame):
+    """A toolbar that wraps its buttons onto more rows instead of clipping them.
+
+    Button captions differ in length per language, and the centre panel can be
+    narrow, so a fixed single row would hide the last buttons.
+    """
+
+    def __init__(self, parent: tk.Misc, spacing: int = 4, **kwargs: Any) -> None:
+        super().__init__(parent, **kwargs)
+        self.spacing = spacing
+        self._items: list[tk.Widget] = []
+        self._width = 0
+        self.bind("<Configure>", self._on_configure)
+
+    def add(self, widget: tk.Widget) -> tk.Widget:
+        self._items.append(widget)
+        self.after_idle(self.relayout)
+        return widget
+
+    def _on_configure(self, event: tk.Event) -> None:
+        if abs(event.width - self._width) > 8:
+            self._width = event.width
+            self.relayout()
+
+    def relayout(self, available: int | None = None) -> None:
+        available = available or self._width or self.winfo_width()
+        if available <= 1 or not self._items:
+            return
+        x = y = row_height = 0
+        for widget in self._items:
+            width = widget.winfo_reqwidth() + self.spacing
+            height = widget.winfo_reqheight() + self.spacing
+            if x and x + width > available:
+                x = 0
+                y += row_height
+                row_height = 0
+            widget.place(x=x, y=y)
+            x += width
+            row_height = max(row_height, height)
+        self.configure(height=y + row_height)
+
+    def rows(self) -> int:
+        return len({widget.winfo_y() for widget in self._items}) if self._items else 0
+
+
 class WorkflowCanvas(ttk.Frame):
     """Draws the workflow as connected boxes and reports the selection."""
 
@@ -1606,12 +1701,12 @@ class WorkflowCanvas(ttk.Frame):
             text = row.text
             if row.kind == "marker":
                 canvas.create_text(x + 10, y + 8, text=text, anchor="w",
-                                   fill=PALETTE["muted"], font=("Consolas", 10))
+                                   fill=PALETTE["muted"], font=(MONO_FONT, 10))
                 y += 20
                 continue
             if row.kind == "branch":
                 canvas.create_text(x, y + 8, text=f"{text} →", anchor="w",
-                                   fill=PALETTE["accent"], font=("Segoe UI", 9, "bold"))
+                                   fill=PALETTE["accent"], font=ui_font(9, "bold"))
                 self._hits.append((x, y, x + 160, y + 18, row.node_id, row.branch_label))
                 y += 22
                 continue
@@ -1628,7 +1723,7 @@ class WorkflowCanvas(ttk.Frame):
                 fill=fill, outline=outline, width=width,
             )
             canvas.create_text(x + 10, y + self.BOX_HEIGHT / 2, text=text, anchor="w",
-                               fill=PALETTE["text"], font=("Segoe UI", 9))
+                               fill=PALETTE["text"], font=ui_font(9))
             self._hits.append((x, y, x + self.BOX_WIDTH, y + self.BOX_HEIGHT, row.node_id, ""))
             y += self.BOX_HEIGHT + 6
         canvas.configure(scrollregion=(0, 0, 16 + self.BOX_WIDTH + 240, y + 20))
@@ -1643,14 +1738,14 @@ class App(tk.Tk):
     def __init__(self, project: Project | None = None, log: EventLog | None = None,
                  dry_run: bool = False) -> None:
         super().__init__()
+        self.log = log or get_logger()
+        self.project = project or example_project()
+        set_language(self.project.settings.language)
         self.title(tr('LDPlayer Visual UI Tester'))
         self.geometry("1440x900")
         self.minsize(1100, 700)
         self.configure(background=PALETTE["bg"])
         apply_theme(self)
-        self.log = log or get_logger()
-        self.project = project or example_project()
-        set_language(self.project.settings.language)
         self.safety = SafetyController(self.project.settings.safety, log=self.log)
         self.window: ldplayer.LDPlayerWindow | None = None
         self.instances: list[ldplayer.LDPlayerInstance] = []
@@ -1664,6 +1759,7 @@ class App(tk.Tk):
         self._runner: Any = None
         self._ocr_service: Any = None
         self._closing = False
+        self._tick: str | None = None
         self._selected_state: str = ""
         self._selection: tuple[str, str] = ("", "")
         self._preview_photo = None
@@ -1681,7 +1777,7 @@ class App(tk.Tk):
         self.bind_all("<F8>", lambda _event: self._on_hotkey_start_pause())
         self.bind_all("<F9>", lambda _event: self.stop_engine())
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.after(80, self._drain_queue)
+        self._tick: str | None = self.after(80, self._drain_queue)
         self.refresh_instances()
         self.refresh_states()
         self.refresh_workflow()
@@ -1689,6 +1785,17 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------------- UI
     def _build_ui(self) -> None:
+        title_bar = tk.Frame(self, background=PALETTE["bg"])
+        title_bar.pack(fill="x")
+        self._title_label = tk.Label(
+            title_bar,
+            text="🚀  LDPLAYER VISUAL UI TESTER",
+            font=ui_font(18, "bold"),
+            fg=PALETTE["title"],
+            bg=PALETTE["bg"],
+        )
+        self._title_label.pack(pady=(16, 8))
+
         project_bar = ttk.Frame(self, style="Toolbar.TFrame", padding=(10, 8, 10, 2))
         project_bar.pack(fill="x")
         ttk.Button(project_bar, text=tr('New'), command=self.new_project).pack(side="left")
@@ -1696,7 +1803,7 @@ class App(tk.Tk):
         ttk.Button(project_bar, text=tr('Save'), command=self.save_project).pack(side="left")
         ttk.Button(project_bar, text=tr('Save as...'), command=self.save_project_as).pack(side="left", padx=4)
         ttk.Separator(project_bar, orient="vertical").pack(side="left", fill="y", padx=10)
-        ttk.Label(project_bar, text=tr('LDPlayer:'), background=PALETTE["bg"]).pack(side="left")
+        ttk.Label(project_bar, text=tr('LDPlayer:'), style="Toolbar.TLabel").pack(side="left")
         self._instance_box = ttk.Combobox(project_bar, state="readonly", width=52)
         self._instance_box.pack(side="left", padx=6)
         ttk.Button(project_bar, text=tr('Refresh'), command=self.refresh_instances).pack(side="left")
@@ -1707,12 +1814,12 @@ class App(tk.Tk):
 
         engine_bar = ttk.Frame(self, style="Toolbar.TFrame", padding=(10, 2, 10, 8))
         engine_bar.pack(fill="x")
-        ttk.Label(engine_bar, text=tr('Engine mode:'), background=PALETTE["bg"]).pack(side="left")
+        ttk.Label(engine_bar, text=tr('Engine mode:'), style="Toolbar.TLabel").pack(side="left")
         ttk.Combobox(engine_bar, textvariable=self.engine_mode, state="readonly", width=12,
                      values=("workflow", "states")).pack(side="left", padx=6)
         ttk.Checkbutton(engine_bar, text=tr("Dry run (analyse only, no input)"),
-                        variable=self.dry_run).pack(side="left", padx=6)
-        ttk.Label(engine_bar, text=tr("Language:"), background=PALETTE["bg"]).pack(
+                        variable=self.dry_run, style="Toolbar.TCheckbutton").pack(side="left", padx=6)
+        ttk.Label(engine_bar, text=tr("Language:"), style="Toolbar.TLabel").pack(
             side="left", padx=(14, 4)
         )
         self._language_box = ttk.Combobox(
@@ -1726,11 +1833,11 @@ class App(tk.Tk):
         )
         self._language_box.pack(side="left")
         ttk.Label(engine_bar, text=tr('F8 start/pause    F9 emergency stop'),
-                  background=PALETTE["bg"], foreground=PALETTE["muted"]).pack(side="left", padx=14)
+                  style="MutedToolbar.TLabel").pack(side="left", padx=14)
         ttk.Button(engine_bar, text=tr('■ STOP (F9)'), style="Danger.TButton",
                    command=self.stop_engine).pack(side="right")
         self._start_button = ttk.Button(
-            engine_bar, text=tr('▶ START (F8)'), style="Accent.TButton", command=self.start_engine
+            engine_bar, text=tr('▶ START (F8)'), style="Success.TButton", command=self.start_engine
         )
         self._start_button.pack(side="right", padx=6)
         ttk.Button(engine_bar, text=tr('Analyze once'), command=self.analyze_once).pack(side="right", padx=6)
@@ -1765,11 +1872,12 @@ class App(tk.Tk):
         self._states_tree.bind("<Double-1>", lambda _event: self.edit_state())
         controls = ttk.Frame(states_tab)
         controls.pack(fill="x", pady=6)
-        ttk.Button(controls, text=tr('ADD STATE'), style="Accent.TButton",
+        ttk.Button(controls, text=tr('ADD STATE'), style="Success.TButton",
                    command=self.add_state).pack(side="left")
         ttk.Button(controls, text=tr('Edit'), command=self.edit_state).pack(side="left", padx=4)
         ttk.Button(controls, text=tr('Copy'), command=self.duplicate_state).pack(side="left")
-        ttk.Button(controls, text=tr('Delete'), command=self.delete_state).pack(side="left", padx=4)
+        ttk.Button(controls, text=tr('Delete'), style="Danger.TButton",
+                   command=self.delete_state).pack(side="left", padx=4)
 
         detection_tab = ttk.Frame(notebook, padding=8)
         notebook.add(detection_tab, text=tr('Detection test'))
@@ -1792,40 +1900,40 @@ class App(tk.Tk):
     def _build_center_panel(self, parent: tk.Misc) -> ttk.Frame:
         frame = ttk.Frame(parent)
         header = ttk.Frame(frame)
-        header.pack(fill="x", pady=(0, 6))
+        header.pack(fill="x", pady=(0, 4))
         ttk.Label(header, text=tr('Scenario'), style="Heading.TLabel").pack(side="left")
         ttk.Label(header, text=tr('  (select a box or a branch, then add a step)'),
                   style="Muted.TLabel").pack(side="left")
-        buttons = ttk.Frame(frame)
+        ttk.Label(frame, text=tr("MACRO"), style="Heading.TLabel").pack(anchor="w", pady=(6, 4))
+        # Full-width green button, never clipped by the wrapping toolbar.
+        self._record_macro_button = ttk.Button(
+            frame,
+            text="+ " + tr("RECORD MACRO"),
+            style="Success.TButton",
+            command=self.record_macro_node,
+        )
+        self._record_macro_button.pack(fill="x", pady=(0, 8))
+        buttons = FlowFrame(frame)
         buttons.pack(fill="x", pady=(0, 6))
-        additions = [
-            (tr("ADD STATE"), self.add_state_node),
-            (tr("ADD CONDITION"), self.add_condition_node),
-            (tr("ADD ACTION"), self.add_action_node),
-            (tr("ADD VERIFY"), self.add_verify_node),
-            (tr("ADD ELSE"), self.add_else_branch),
-            (tr("ADD WAIT"), self.add_wait_node),
-            (tr("ADD RETRY"), self.add_retry_node),
-            (tr("RECORD MACRO"), self.record_macro_node),
-        ]
-        for label, command in additions:
-            ttk.Button(buttons, text=label, command=command).pack(side="left", padx=(0, 4))
-        more = ttk.Frame(frame)
-        more.pack(fill="x", pady=(0, 6))
-        for label, command in [
-            (tr("ADD ANALYZE"), self.add_analyze_node),
-            (tr("ADD LOOP"), self.add_loop_node),
-            (tr("ADD STOP"), self.add_stop_node),
+        for label, command, style in [
+            (tr("ADD STATE"), self.add_state_node, "Success.TButton"),
+            (tr("ADD CONDITION"), self.add_condition_node, "TButton"),
+            (tr("ADD ACTION"), self.add_action_node, "TButton"),
+            (tr("ADD VERIFY"), self.add_verify_node, "TButton"),
+            (tr("ADD ELSE"), self.add_else_branch, "TButton"),
+            (tr("ADD WAIT"), self.add_wait_node, "TButton"),
+            (tr("ADD RETRY"), self.add_retry_node, "TButton"),
+            (tr("ADD ANALYZE"), self.add_analyze_node, "TButton"),
+            (tr("ADD LOOP"), self.add_loop_node, "TButton"),
+            (tr("ADD STOP"), self.add_stop_node, "TButton"),
+            (tr("Edit"), self.edit_node, "TButton"),
+            (tr("Delete"), self.delete_node, "Danger.TButton"),
+            ("↑", lambda: self.move_node(-1), "TButton"),
+            ("↓", lambda: self.move_node(1), "TButton"),
+            (tr("On/off"), self.toggle_node, "TButton"),
         ]:
-            ttk.Button(more, text=label, command=command).pack(side="left", padx=(0, 4))
-        for label, command in [
-            (tr("On/off"), self.toggle_node),
-            ("↓", lambda: self.move_node(1)),
-            ("↑", lambda: self.move_node(-1)),
-            (tr("Delete"), self.delete_node),
-            (tr("Edit"), self.edit_node),
-        ]:
-            ttk.Button(more, text=label, command=command).pack(side="right", padx=(4, 0))
+            buttons.add(ttk.Button(buttons, text=label, command=command, style=style))
+        self._scenario_buttons = buttons
         self._canvas = WorkflowCanvas(frame, self._on_node_selected, lambda *_: self.edit_node())
         self._canvas.pack(fill="both", expand=True)
         return frame
@@ -1857,9 +1965,9 @@ class App(tk.Tk):
         ttk.Button(header, text=tr('Save log...'), command=self.save_log).pack(side="right", padx=6)
         body = ttk.Frame(frame)
         body.pack(fill="both", expand=True, pady=(4, 0))
-        self._log_view = tk.Text(body, height=11, wrap="none", background="#12141a",
+        self._log_view = tk.Text(body, height=11, wrap="none", background="#0a0a0a",
                                 foreground=PALETTE["text"], borderwidth=0, state="disabled",
-                                font=("Consolas", 9))
+                                font=(MONO_FONT, 9))
         scroll_y = ttk.Scrollbar(body, orient="vertical", command=self._log_view.yview)
         scroll_x = ttk.Scrollbar(body, orient="horizontal", command=self._log_view.xview)
         self._log_view.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
@@ -1874,11 +1982,10 @@ class App(tk.Tk):
     def _build_status_bar(self) -> None:
         bar = ttk.Frame(self, style="Toolbar.TFrame", padding=(10, 4))
         bar.pack(fill="x")
-        self._status_label = ttk.Label(bar, text="", background=PALETTE["bg"],
-                                      foreground=PALETTE["muted"])
+        self._status_label = ttk.Label(bar, text="", style="MutedToolbar.TLabel")
         self._status_label.pack(side="left")
-        self._window_label = ttk.Label(bar, text=tr('No LDPlayer selected'), background=PALETTE["bg"],
-                                      foreground=PALETTE["muted"])
+        self._window_label = ttk.Label(bar, text=tr('No LDPlayer selected'),
+                                      style="MutedToolbar.TLabel")
         self._window_label.pack(side="right")
         self._update_status()
 
@@ -1931,7 +2038,7 @@ class App(tk.Tk):
             self.log.error("GUI update failed: %s", exc)
         finally:
             if not self._closing:
-                self.after(80, self._drain_queue)
+                self._tick = self.after(80, self._drain_queue)
 
     def _process_events(self) -> None:
         try:
@@ -1957,7 +2064,7 @@ class App(tk.Tk):
                         )
                 elif kind == "run_state":
                     self._start_button.configure(
-                        text="⏸ PAUSE (F8)" if payload == RunState.RUNNING else "▶ START (F8)"
+                        text=tr("⏸ PAUSE (F8)") if payload == RunState.RUNNING else tr("▶ START (F8)")
                     )
                 elif kind == "frames":
                     self._status["frames"] = payload
@@ -2588,6 +2695,7 @@ class App(tk.Tk):
         set_language(code)
         self.project.settings.language = code
         self.project.mark_dirty()
+        self.title(tr('LDPlayer Visual UI Tester'))
         self._rebuild_ui()
         self.log.info("Language changed to %s", language_label(code))
 
@@ -2812,6 +2920,17 @@ class App(tk.Tk):
             return
         Path(path).write_text("\n".join(self.log.lines()), encoding="utf-8")
         self.log.info("Log saved (text only)")
+
+    def destroy(self) -> None:
+        """Stop the update tick before the widgets go away."""
+        self._closing = True
+        if self._tick is not None:
+            try:
+                self.after_cancel(self._tick)
+            except tk.TclError:  # pragma: no cover - already gone
+                pass
+            self._tick = None
+        super().destroy()
 
     def _on_close(self) -> None:
         if self._engine_thread is not None and self._engine_thread.is_alive():

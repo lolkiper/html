@@ -118,8 +118,9 @@ exactly what it would do, without moving the mouse.
 
 ## Recording a macro
 
-**RECORD MACRO** in the scenario panel, or **Record...** in the state editor,
-opens the recorder: press *Start recording*, perform the combination in LDPlayer,
+**+ RECORD MACRO** is the full-width green button under the yellow **MACRO**
+heading in the centre panel. **Record...** in the state editor opens the same
+recorder: press *Start recording*, perform the combination in LDPlayer,
 press **F10**, then *Use the recording*.
 
 Raw input is condensed into meaningful actions:
