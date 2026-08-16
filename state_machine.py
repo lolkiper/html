@@ -426,9 +426,11 @@ class AnalysisContext:
         source_size: tuple[int, int] | None = None,
     ) -> MatchResult:
         """Locate a reference image on the current frame (results are cached)."""
-        roi = roi or Roi.full()
-        cache_key = (name, round(threshold, 4), roi.to_dict()["x"], roi.to_dict()["y"],
-                     roi.width, roi.height, grayscale, match_mode, multi_scale)
+        roi = (roi or Roi.full()).clamped()
+        cache_key = (
+            name, round(threshold, 4), roi.x, roi.y, roi.width, roi.height,
+            grayscale, match_mode, multi_scale,
+        )
         cached = self._reference_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -686,7 +688,8 @@ class StateMachineRunner:
     # ----------------------------------------------------------------- loop
     def run(self, start_state: str = "") -> RunReport:
         self.report = RunReport()
-        self.ctx.safety.start() if not self.ctx.safety.is_running else None
+        if not self.ctx.safety.is_running:
+            self.ctx.safety.start()
         self._set_engine_state(EngineState.WAITING_FOR_STATE)
         target = start_state
         unknown_streak = 0

@@ -354,8 +354,10 @@ class OcrService:
         roi = roi or Roi.full()
         if frame_token is not None and frame_token != self._cache_token:
             self.invalidate(frame_token)
-        cache_key = (roi.clamped().to_dict()["x"], roi.clamped().to_dict()["y"],
-                     roi.width, roi.height, preprocess.key())
+        clamped = roi.clamped()
+        cache_key = (
+            clamped.x, clamped.y, clamped.width, clamped.height, preprocess.key()
+        )
         if frame_token is not None and cache_key in self._cache:
             lines = self._cache[cache_key]
         else:

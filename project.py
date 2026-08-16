@@ -213,14 +213,13 @@ class Project:
             if not source.exists():
                 raise ProjectError(f"reference image not found: {source}")
             array = load_image(source)
-            shutil.copyfile(source, destination) if source.suffix.lower() == ".png" else _write_png(
-                destination, array
-            )
+            if source.suffix.lower() == ".png":
+                shutil.copyfile(source, destination)
+            else:
+                _write_png(destination, array)
         else:
             array = image
             _write_png(destination, array)
-        if source_size is None:
-            source_size = None  # unknown: matching then assumes the reference scale
         record = ReferenceRecord(
             name=name, file=file_name, source_size=source_size, note=note
         )

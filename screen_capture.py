@@ -145,6 +145,7 @@ class WindowsGdiBackend:
     SRCCOPY = 0x00CC0020
     CAPTUREBLT = 0x40000000
     DIB_RGB_COLORS = 0
+    PW_CLIENTONLY = 0x00000001
     PW_RENDERFULLCONTENT = 0x00000002
 
     def __init__(self) -> None:
@@ -215,8 +216,13 @@ class WindowsGdiBackend:
         try:
             copied = False
             if handle:
+                # PW_CLIENTONLY keeps the title bar and the border out of the
+                # bitmap, so the frame matches the client rectangle the engine
+                # measured and coordinates stay valid.
                 copied = bool(
-                    user32.PrintWindow(handle, memory_dc, self.PW_RENDERFULLCONTENT)
+                    user32.PrintWindow(
+                        handle, memory_dc, self.PW_CLIENTONLY | self.PW_RENDERFULLCONTENT
+                    )
                 )
             if not copied:
                 screen_dc = user32.GetDC(0)
