@@ -16,7 +16,9 @@ from pipeline import (
     TestData,
     bind_typed_text_to_test_data,
     build_pipeline_workflow,
+    describe_variable_resolution,
     parse_record_text,
+    resolve_template,
     substitute_placeholders,
     verify_error,
     verify_success,
@@ -85,18 +87,24 @@ def test_parse_record_text_supports_pipe_and_colon():
                 "two@host.com:beta",
                 "# comment",
                 "",
+                "VALUE1:VALUE2",
                 "not-an-email|x",
                 "missing",
                 "ok@host.com|",
             ]
         )
     )
-    assert [row["email"] for row in rows] == ["one@host.com", "two@host.com"]
-    assert [row["password"] for row in rows] == ["alpha", "beta"]
+    assert [row["email"] for row in rows] == [
+        "one@host.com",
+        "two@host.com",
+        "VALUE1",
+        "not-an-email",
+    ]
+    assert [row["password"] for row in rows] == ["alpha", "beta", "VALUE2", "x"]
     reasons = {item.reason for item in invalid}
-    assert "invalid email" in reasons
     assert "missing separator (use email|password or email:password)" in reasons
     assert "empty password" in reasons
+    assert "invalid email" not in reasons
 
 
 def test_verify_error_skips_later_macros_and_loads_the_next_row(context, log):
@@ -255,3 +263,68 @@ def test_imported_passwords_are_not_written_to_the_project(tmp_path):
     assert "keep@host.com" not in raw
     reloaded = type(project).load(project.path)
     assert reloaded.test_data.rows == []
+
+
+def test_value1_colon_value2_reaches_type_and_never_sends_braces(context, log):
+    from i18n import tr
+
+    rows, invalid = parse_record_text("VALUE1:VALUE2\n")
+    assert invalid == []
+    assert rows[0]["email"] == "VALUE1"
+    attach(
+        context,
+        macros={
+            "MACRO_1": Macro(
+                "MACRO_1",
+                actions=[TypeText(text="{{EMAIL}}", is_variable=True)],
+            ),
+            "MACRO_2": Macro("MACRO_2"),
+            "MACRO_3": Macro("MACRO_3"),
+            "MACRO_4": Macro("MACRO_4"),
+            RESET_MACRO: Macro(RESET_MACRO),
+        },
+        test_data=TestData(rows=rows),
+    )
+    context.emulator.screen = "B"
+    run_pipeline(context)
+    typed = [event for event in context.keyboard.backend.events if event.kind == "type"]
+    assert typed, "TYPE must send the resolved VALUE1"
+    assert typed[0].text == "VALUE1"
+    assert "{{EMAIL}}" not in typed[0].text
+    assert ".." not in typed[0].text
+    text = log_text(log)
+    assert tr("TXT PARSED") in text
+    assert tr("CURRENT RECORD CREATED") in text
+    assert tr("RUNTIME CONTEXT CREATED") in text
+    assert tr("PLACEHOLDER FOUND") in text
+    assert tr("PLACEHOLDER RESOLVED") in text
+    assert tr("TYPE ACTION") in text
+    assert tr("EMAIL length: %s") % 6 in text
+    assert tr("PASSWORD length: %s") % 6 in text
+    assert "VALUE1" not in text
+    assert "VALUE2" not in text
+
+
+def test_unresolved_placeholder_is_not_sent_to_the_keyboard(context, log):
+    from i18n import tr
+
+    action = TypeText(text="{{EMAIL}}", is_variable=True)
+    result = action.execute(context)
+    assert result.success is False
+    assert context.keyboard.backend.events == []
+    assert tr("Variable resolved: %s") % tr("NO") in log_text(log)
+
+
+def test_variable_resolution_dry_run_hides_secrets():
+    runtime = {
+        "EMAIL": "test@example.com",
+        "PASSWORD": Secret("test_password"),
+    }
+    lines = describe_variable_resolution(runtime)
+    blob = "\n".join(lines)
+    assert "test@example.com" not in blob
+    assert "test_password" not in blob
+    text, ok, length = resolve_template("{{EMAIL}}", runtime)
+    assert ok and text == "test@example.com" and length == len("test@example.com")
+    text, ok, length = resolve_template("{{PASSWORD}}", runtime, allow_password=True)
+    assert ok and text == "test_password" and length == len("test_password")

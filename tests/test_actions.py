@@ -213,14 +213,16 @@ def test_insert_variable_types_context_and_literal_text_stays_literal(context, l
 
     assert variable.execute(context).success
     assert literal.execute(context).success
-    assert leftover.execute(context).success
+    leftover_result = leftover.execute(context)
+    assert leftover_result.success is False
     typed = [event for event in context.keyboard.backend.events if event.kind == "type"]
     assert typed[0].text == "test@example.com"
     assert typed[1].text == "email@example.com"
-    assert typed[2].text == "{{EMAIL}}"
+    assert all(event.text != "{{EMAIL}}" for event in typed)
     joined = "\n".join(log.lines())
     assert "test@example.com" not in joined
     assert "test_password" not in joined
+    assert "{{EMAIL}}" not in [event.text for event in typed]
     assert variable.describe() == "TYPE VARIABLE {{EMAIL}}"
     assert leftover.describe() == "TYPE TEXT '{{EMAIL}}'"
 

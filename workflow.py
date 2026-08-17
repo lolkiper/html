@@ -643,6 +643,8 @@ class WorkflowRunner:
             self.ctx.safety.wait_while_paused()
 
     def _node_macro(self, node: WorkflowNode) -> NodeOutcome:
+        from pipeline import ensure_runtime_context
+
         name = node.state or node.title
         macros = getattr(self.ctx, "macros", {}) or {}
         macro = macros.get(name)
@@ -651,6 +653,7 @@ class WorkflowRunner:
             return NodeOutcome(NodeStatus.FAILED, f"unknown macro {name}")
         self.ctx.current_macro = name
         self.ctx.allow_password = name == "MACRO_3"
+        ensure_runtime_context(self.ctx)
         actions = list(macro.actions)
         if not actions:
             return NodeOutcome(NodeStatus.SUCCESS, f"{name} empty")

@@ -518,19 +518,41 @@ class TypeText(Action):
         return self.text
 
     def execute(self, ctx: "AnalysisContext") -> ActionResult:
-        from pipeline import substitute_placeholders
+        from pipeline import (
+            contains_unresolved_placeholder,
+            ensure_runtime_context,
+            log_type_debug,
+            resolve_template,
+        )
 
         sensitive = self.sensitive
+        runtime = ensure_runtime_context(ctx)
+        allow_password = bool(getattr(ctx, "allow_password", True))
+        macro = getattr(ctx, "current_macro", "") or ""
+        if macro:
+            allow_password = macro == "MACRO_3"
+
         if self._should_resolve():
             source = self._source_text()
-            value, _from_placeholder = substitute_placeholders(source, ctx)
+            value, resolved_ok, length = resolve_template(
+                source, runtime, allow_password=allow_password
+            )
             sensitive = True
+            log_type_debug(ctx, source, resolved_ok, length)
             compact = (source or "").upper().replace(" ", "")
             if not value and "{{PASSWORD}}" in compact:
                 ctx.log.warning("PASSWORD is not used in this macro")
                 return ActionResult(True, "password skipped")
+            if not resolved_ok or contains_unresolved_placeholder(value):
+                ctx.log.warning("Variable resolved: %s", tr("NO"))
+                return ActionResult(False, "variable not resolved")
         else:
             value = str(self.text or "")
+            if contains_unresolved_placeholder(value):
+                # Literal typing of {{EMAIL}} would send '{' '{' to LDPlayer
+                # (PyAutoGUI turns those into '..' on many layouts). Never do that.
+                ctx.log.warning("Refusing to type an unresolved placeholder")
+                return ActionResult(False, "unresolved placeholder")
         if not value:
             return ActionResult(False, "nothing to type")
         if self.clear_first:

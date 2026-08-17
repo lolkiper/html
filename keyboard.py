@@ -222,6 +222,9 @@ class Keyboard:
         raw = text.reveal() if isinstance(text, Secret) else str(text)
         if not raw:
             return True
+        if "{{" in raw and "}}" in raw:
+            self.log.warning("Refusing to type an unresolved placeholder")
+            return False
         if not self._prepare("type"):
             return False
         if sensitive:

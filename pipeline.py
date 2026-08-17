@@ -106,25 +106,29 @@ class InvalidRow:
 
 
 def parse_record_line(line: str) -> tuple[dict[str, str] | None, str]:
-    """Return (record, error).  The error string never contains the password."""
+    """Return (record, error).  The error string never contains the password.
+
+    A line is ``VALUE1:VALUE2`` or ``VALUE1|VALUE2``. VALUE1 is the login/email
+    field; VALUE2 is the password.  Neither side is required to look like an
+    email address — rejecting non-emails was dropping the user's records and
+    left MACRO_1 with an empty context.
+    """
     text = line.strip()
     if not text or text.startswith("#"):
         return None, "empty"
     if "|" in text:
-        email, separator, rest = text.partition("|")
+        left, _separator, right = text.partition("|")
     elif ":" in text:
-        email, separator, rest = text.partition(":")
+        left, _separator, right = text.partition(":")
     else:
         return None, "missing separator (use email|password or email:password)"
-    email = email.strip()
-    password = rest.strip()
-    if not email:
+    value1 = left.strip()
+    value2 = right.strip()
+    if not value1:
         return None, "empty email"
-    if not EMAIL_RE.match(email):
-        return None, "invalid email"
-    if not password:
+    if not value2:
         return None, "empty password"
-    return {"email": email, "password": password}, ""
+    return {"email": value1, "password": value2, "login": value1}, ""
 
 
 def parse_record_text(text: str) -> tuple[list[dict[str, str]], list[InvalidRow]]:
@@ -302,27 +306,192 @@ def clear_record_variables(ctx: Any) -> None:
         "email", "password", "username", "login",
     ):
         ctx.variables.pop(key, None)
+    if hasattr(ctx, "runtime_context"):
+        ctx.runtime_context = {}
+    if hasattr(ctx, "_runtime_context_marker"):
+        ctx._runtime_context_marker = None
+
+
+def _secret_length(value: Any) -> int:
+    if isinstance(value, Secret):
+        return len(value.reveal())
+    return len(str(value or ""))
+
+
+def _has_value(value: Any) -> bool:
+    if isinstance(value, Secret):
+        return bool(value.reveal())
+    return bool(value)
+
+
+def runtime_context_from_row(row: dict[str, Any] | None) -> dict[str, Any]:
+    """Build the dict TYPE uses: EMAIL / PASSWORD from the current record."""
+    row = dict(row or {})
+    email = row.get("email") or row.get("login") or ""
+    password = row.get("password") or ""
+    username = row.get("username") or row.get("login") or email
+    context = {
+        EMAIL_VAR: email,
+        "email": email,
+        USERNAME_VAR: username,
+        "username": username,
+    }
+    if password:
+        secret = password if isinstance(password, Secret) else Secret(str(password))
+        context[PASSWORD_VAR] = secret
+        context["password"] = secret
+    else:
+        context[PASSWORD_VAR] = ""
+        context["password"] = ""
+    return context
+
+
+def log_record_debug(ctx: Any, data: TestData) -> None:
+    """Safe DEBUG after a row is loaded. Never logs the values themselves."""
+    row = data.current()
+    email = row.get("email") or row.get("login") or ""
+    password = row.get("password") or ""
+    log = ctx.log
+    log.info("CURRENT RECORD CREATED")
+    log.info("RUNTIME CONTEXT CREATED")
+    log.info("Record loaded: #%s", data.current_number())
+    log.info("EMAIL exists: %s", tr("YES") if email else tr("NO"))
+    log.info("EMAIL length: %s", len(email))
+    log.info("PASSWORD exists: %s", tr("YES") if password else tr("NO"))
+    log.info("PASSWORD length: %s", len(password))
 
 
 def apply_row_to_context(ctx: Any, data: TestData) -> str:
     """Copy the current row into EMAIL / PASSWORD. Secrets are never logged."""
     clear_record_variables(ctx)
-    row = data.current()
-    email = row.get("email") or row.get("login") or ""
-    password = row.get("password") or ""
-    username = row.get("username") or row.get("login") or email
-    ctx.variables[EMAIL_VAR] = email
-    ctx.variables["email"] = email
-    ctx.variables[USERNAME_VAR] = username
-    ctx.variables["username"] = username
-    if password:
-        secret = Secret(password)
-        ctx.variables[PASSWORD_VAR] = secret
-        ctx.variables["password"] = secret
-        ctx.log.register_secret(password)
+    runtime = runtime_context_from_row(data.current())
+    ctx.runtime_context = dict(runtime)
+    ctx._runtime_context_marker = (id(data), data.index, data.current_number())
+    for key, value in runtime.items():
+        ctx.variables[key] = value
+        if isinstance(value, Secret):
+            ctx.log.register_secret(value.reveal())
+    log_record_debug(ctx, data)
     if data.rows:
         return f"{data.index + 1}/{len(data.rows)}"
     return "manual"
+
+
+def _merge_variables_into_runtime(ctx: Any, runtime: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(runtime)
+    for key, value in (getattr(ctx, "variables", None) or {}).items():
+        merged.setdefault(key, value)
+        if isinstance(key, str):
+            merged.setdefault(key.upper(), value)
+            merged.setdefault(key.lower(), value)
+    return merged
+
+
+def ensure_runtime_context(ctx: Any) -> dict[str, Any]:
+    """Guarantee runtime_context exists BEFORE MACRO_1 types anything."""
+    data = getattr(ctx, "test_data", None)
+    existing = getattr(ctx, "runtime_context", None) or {}
+    if data is not None and data.has_current():
+        marker = (id(data), data.index, data.current_number())
+        if getattr(ctx, "_runtime_context_marker", None) != marker or not existing.get(EMAIL_VAR):
+            apply_row_to_context(ctx, data)
+        runtime = _merge_variables_into_runtime(ctx, getattr(ctx, "runtime_context", None) or {})
+        ctx.runtime_context = runtime
+        return dict(runtime)
+    fallback = _merge_variables_into_runtime(ctx, existing or runtime_context_from_variables(ctx))
+    ctx.runtime_context = fallback
+    return dict(fallback)
+
+
+def runtime_context_from_variables(ctx: Any) -> dict[str, Any]:
+    variables = getattr(ctx, "variables", None) or {}
+    email = variables.get(EMAIL_VAR, variables.get("email", ""))
+    password = variables.get(PASSWORD_VAR, variables.get("password", ""))
+    username = variables.get(USERNAME_VAR, variables.get("username", email))
+    return runtime_context_from_row(
+        {
+            "email": "" if isinstance(email, Secret) else str(email or ""),
+            "login": "" if isinstance(email, Secret) else str(email or ""),
+            "password": password.reveal() if isinstance(password, Secret) else str(password or ""),
+            "username": "" if isinstance(username, Secret) else str(username or ""),
+        }
+    )
+
+
+def resolve_template(
+    text: str,
+    runtime_context: dict[str, Any] | None,
+    allow_password: bool = True,
+) -> tuple[str, bool, int]:
+    """Replace {{EMAIL}} / {{PASSWORD}} from runtime_context.
+
+    Returns ``(resolved_text, resolved_ok, length)``.  Never returns secrets
+    into the log — callers must only print the template, YES/NO and length.
+    """
+    source = text or ""
+    runtime_context = dict(runtime_context or {})
+    missing: list[str] = []
+    found = False
+
+    def replacer(match: re.Match[str]) -> str:
+        nonlocal found
+        found = True
+        name = match.group(1).upper()
+        if name == PASSWORD_VAR and not allow_password:
+            missing.append(name)
+            return ""
+        raw = runtime_context.get(name, runtime_context.get(name.lower(), ""))
+        if isinstance(raw, Secret):
+            if not allow_password:
+                missing.append(name)
+                return ""
+            value = raw.reveal()
+        else:
+            value = str(raw or "")
+        if not value:
+            missing.append(name)
+            return ""
+        return value
+
+    resolved = PLACEHOLDER.sub(replacer, source)
+    if not found:
+        return source, True, len(source)
+    ok = not missing and "{{" not in resolved
+    return resolved, ok, len(resolved)
+
+
+def contains_unresolved_placeholder(text: str) -> bool:
+    return bool(PLACEHOLDER.search(text or ""))
+
+
+def log_type_debug(ctx: Any, template: str, resolved_ok: bool, length: int) -> None:
+    log = ctx.log
+    log.info("PLACEHOLDER FOUND")
+    log.info("Template: %s", template)
+    log.info("Variable resolved: %s", tr("YES") if resolved_ok else tr("NO"))
+    log.info("Resolved length: %s", length)
+    if resolved_ok:
+        log.info("PLACEHOLDER RESOLVED")
+        log.info("TYPE action started")
+        log.info("TYPE ACTION")
+
+
+def describe_variable_resolution(runtime_context: dict[str, Any] | None) -> list[str]:
+    """Dry-run {{EMAIL}} / {{PASSWORD}} against a context. No secrets, no typing."""
+    runtime_context = dict(runtime_context or {})
+    lines = [
+        tr("RUNTIME CONTEXT CREATED"),
+        tr("EMAIL exists: %s") % (tr("YES") if _has_value(runtime_context.get(EMAIL_VAR)) else tr("NO")),
+        tr("EMAIL length: %s") % _secret_length(runtime_context.get(EMAIL_VAR, "")),
+        tr("PASSWORD exists: %s") % (tr("YES") if _has_value(runtime_context.get(PASSWORD_VAR)) else tr("NO")),
+        tr("PASSWORD length: %s") % _secret_length(runtime_context.get(PASSWORD_VAR, "")),
+    ]
+    for template in ("{{EMAIL}}", "{{PASSWORD}}"):
+        _text, ok, length = resolve_template(template, runtime_context, allow_password=True)
+        lines.append(tr("Template: %s") % template)
+        lines.append(tr("Variable resolved: %s") % (tr("YES") if ok else tr("NO")))
+        lines.append(tr("Resolved length: %s") % length)
+    return lines
 
 
 def bind_typed_text_to_test_data(macro: Macro, data: TestData, allow_password: bool = False) -> int:
@@ -357,28 +526,17 @@ def bind_typed_text_to_test_data(macro: Macro, data: TestData, allow_password: b
 
 def substitute_placeholders(text: str, ctx: Any) -> tuple[str, bool]:
     """Replace {{EMAIL}} / {{PASSWORD}}.  Never returns a password into the log."""
-    sensitive = False
     allow_password = bool(getattr(ctx, "allow_password", True))
     macro = getattr(ctx, "current_macro", "") or ""
     if macro:
         allow_password = macro == PASSWORD_STAGE
-
-    def replacer(match: re.Match[str]) -> str:
-        nonlocal sensitive
-        name = match.group(1).upper()
-        if name == PASSWORD_VAR:
-            if not allow_password:
-                return ""
-            sensitive = True
-            raw = ctx.variables.get(PASSWORD_VAR, ctx.variables.get("password", ""))
-            return raw.reveal() if isinstance(raw, Secret) else str(raw or "")
-        raw = ctx.variables.get(name, ctx.variables.get(name.lower(), ""))
-        if isinstance(raw, Secret):
-            sensitive = True
-            return raw.reveal() if allow_password else ""
-        return str(raw or "")
-
-    return PLACEHOLDER.sub(replacer, text), sensitive
+    runtime = getattr(ctx, "runtime_context", None) or runtime_context_from_variables(ctx)
+    resolved, _ok, _length = resolve_template(text, runtime, allow_password=allow_password)
+    compact = (text or "").upper().replace(" ", "")
+    sensitive = "{{PASSWORD}}" in compact or bool(
+        isinstance((runtime or {}).get(PASSWORD_VAR), Secret) and "{{" in (text or "")
+    )
+    return resolved, sensitive
 
 
 @register_condition
@@ -467,7 +625,9 @@ class LoadTestData(Action):
         data = getattr(ctx, "test_data", None)
         if data is None or not data.has_current():
             ctx.log.info("No test data row; macros will use recorded text")
+            ctx.runtime_context = getattr(ctx, "runtime_context", None) or {}
             return ActionResult(True, "no test data")
+        ctx.log.info("TXT PARSED")
         label = apply_row_to_context(ctx, data)
         ctx.log.info("Record #%s loaded", data.current_number())
         return ActionResult(True, f"loaded {label}")

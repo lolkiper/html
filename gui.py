@@ -53,7 +53,10 @@ from pipeline import (
     RESET_MACRO,
     STAGE_MACROS,
     START_STATE,
+    describe_variable_resolution,
+    ensure_runtime_context,
     parse_record_file,
+    runtime_context_from_row,
     verify_error,
     verify_success,
 )
@@ -1962,11 +1965,15 @@ class App(tk.Tk):
         ttk.Label(tab, text=tr("LOAD TEST DATA"), style="Heading.TLabel").pack(anchor="w")
         ttk.Label(
             tab,
-            text=tr("File: one line email|password or email:password. Passwords stay in RAM."),
+            text=tr("File: one line VALUE1:VALUE2 or VALUE1|VALUE2. Passwords stay in RAM."),
             style="Muted.TLabel", wraplength=260,
         ).pack(anchor="w")
         ttk.Button(tab, text=tr("LOAD TEST DATA"), style="Success.TButton",
                    command=self.import_test_data_file).pack(fill="x", pady=4)
+        ttk.Button(
+            tab, text=tr("TEST VARIABLE RESOLUTION"),
+            command=self.test_variable_resolution,
+        ).pack(fill="x", pady=(0, 4))
         self._counter_record = ttk.Label(tab, text="")
         self._counter_success = ttk.Label(tab, text="", foreground=PALETTE["success"])
         self._counter_failed = ttk.Label(tab, text="", foreground=PALETTE["error"])
@@ -2983,6 +2990,7 @@ class App(tk.Tk):
         if context is None:
             return
         self.log.info("Starting %s (test)", name)
+        ensure_runtime_context(context)
         try:
             for action in macro.actions:
                 self.log.info("Action: %s", action.describe())
@@ -3153,10 +3161,46 @@ class App(tk.Tk):
             return
         self.project.test_data.replace_rows(rows, invalid, source_name=Path(path).name)
         self.refresh_test_data()
+        self.log.info("TXT PARSED")
         self.log.info(
             "Imported %s record(s), %s invalid line(s) from %s",
             len(rows), len(invalid), Path(path).name,
         )
+        current = self.project.test_data.current()
+        if current:
+            email = current.get("email") or ""
+            password = current.get("password") or ""
+            self.log.info("CURRENT RECORD CREATED")
+            self.log.info("Record loaded: #%s", self.project.test_data.current_number())
+            self.log.info("EMAIL exists: %s", tr("YES") if email else tr("NO"))
+            self.log.info("EMAIL length: %s", len(email))
+            self.log.info("PASSWORD exists: %s", tr("YES") if password else tr("NO"))
+            self.log.info("PASSWORD length: %s", len(password))
+            messagebox.showinfo(
+                tr("LOAD TEST DATA"),
+                "\n".join(
+                    [
+                        tr("Record loaded: #%s") % self.project.test_data.current_number(),
+                        tr("EMAIL exists: %s") % (tr("YES") if email else tr("NO")),
+                        tr("EMAIL length: %s") % len(email),
+                        tr("PASSWORD exists: %s") % (tr("YES") if password else tr("NO")),
+                        tr("PASSWORD length: %s") % len(password),
+                    ]
+                ),
+            )
+
+    def test_variable_resolution(self) -> None:
+        data = self.project.test_data
+        if data.rows:
+            runtime = runtime_context_from_row(data.current())
+        else:
+            runtime = runtime_context_from_row(
+                {"email": "test@example.com", "password": "test_password"}
+            )
+        lines = describe_variable_resolution(runtime)
+        for line in lines:
+            self.log.info("%s", line)
+        messagebox.showinfo(tr("TEST VARIABLE RESOLUTION"), "\n".join(lines))
 
     def add_test_row(self) -> None:
         data = self.project.test_data

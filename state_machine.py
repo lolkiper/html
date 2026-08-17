@@ -305,6 +305,7 @@ class AnalysisContext:
         self.ocr_preprocess = ocr_preprocess or Preprocess()
         self.detector = StateDetector(self.states, min_confidence, ambiguity_margin, log=self.log)
         self.variables: dict[str, Any] = {}
+        self.runtime_context: dict[str, Any] = {}
         self.macros: dict[str, Any] = {}
         self.test_data: Any = None
         self.step_by_step: bool = False
@@ -983,6 +984,10 @@ def create_context(
     context.skip_manual_wait = False
     context.allow_password = True
     context.current_macro = ""
+    context.runtime_context = {}
+    from pipeline import ensure_runtime_context
+
+    ensure_runtime_context(context)
     return context
 
 
