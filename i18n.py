@@ -296,6 +296,15 @@ RU: dict[str, str] = {
     "Start recording": "Начать запись",
     "Stop": "Остановить",
     "Use the recording": "Использовать запись",
+    "INSERT VARIABLE": "ВСТАВИТЬ ПЕРЕМЕННУЮ",
+    "CUSTOM VARIABLE": "СВОЯ ПЕРЕМЕННАЯ",
+    "Start recording first": "Сначала начните запись",
+    "Enter a variable name (A-Z, digits, underscore).":
+        "Введите имя переменной (латиница, цифры, подчёркивание).",
+    "Invalid variable name": "Неверное имя переменной",
+    "The name must start with a letter or underscore.":
+        "Имя должно начинаться с буквы или подчёркивания.",
+    "Resolve as variable": "Подставлять как переменную",
     "Recording... switch to LDPlayer and act. %s to stop.":
         "Идёт запись... переключитесь на LDPlayer. %s — остановить.",
     "Recording stopped: %s step(s)": "Запись остановлена, шагов: %s",
@@ -442,6 +451,7 @@ RU: dict[str, str] = {
     "PRESS KEY %s x%s": "НАЖАТЬ КЛАВИШУ %s x%s",
     "HOTKEY %s": "ГОРЯЧИЕ КЛАВИШИ %s",
     "TYPE TEXT from variable '%s'": "ВВЕСТИ ТЕКСТ из переменной «%s»",
+    "TYPE VARIABLE {{%s}}": "ВВЕСТИ ПЕРЕМЕННУЮ {{%s}}",
     "TYPE TEXT (%s)": "ВВЕСТИ ТЕКСТ (%s)",
     "TYPE TEXT '%s'": "ВВЕСТИ ТЕКСТ «%s»",
     "REPEAT %sx (%s action(s))": "ПОВТОРИТЬ %s раз (действий: %s)",

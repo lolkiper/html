@@ -173,6 +173,7 @@ def test_text_can_come_from_a_variable(context):
     assert action.execute(context).success
     assert context.keyboard.backend.events[-1].length == len("player_one")
     assert TypeText(variable="unset").execute(context).success is False
+    assert context.keyboard.backend.events[-1].text == "player_one"
 
 
 def test_secret_variable_is_typed_but_never_logged(context, log):
@@ -184,7 +185,44 @@ def test_secret_variable_is_typed_but_never_logged(context, log):
     assert context.keyboard.backend.events[-1].length == len("hunter2-secret")
     joined = "\n".join(log.lines())
     assert "hunter2-secret" not in joined
-    assert "TYPE TEXT from variable 'password'" == action.describe()
+    assert "TYPE VARIABLE {{PASSWORD}}" == action.describe()
+
+
+def test_insert_variable_types_context_and_literal_text_stays_literal(context, log):
+    context.refresh()
+    context.variables["EMAIL"] = "test@example.com"
+    context.variables["PASSWORD"] = Secret("test_password")
+    context.log.register_secret("test_password")
+    context.allow_password = True
+
+    variable = TypeText(text="{{EMAIL}}", is_variable=True)
+    literal = TypeText(text="email@example.com", is_variable=False)
+    leftover = TypeText(text="{{EMAIL}}", is_variable=False)
+
+    dumped = variable.to_dict()
+    assert dumped["type"] == "type"
+    assert dumped["text"] == "{{EMAIL}}"
+    assert dumped["is_variable"] is True
+    restored = action_from_dict(dumped)
+    assert isinstance(restored, TypeText)
+    assert restored.is_variable is True
+    assert restored.text == "{{EMAIL}}"
+
+    from_alias = action_from_dict({"type": "type", "text": "{{PASSWORD}}", "is_variable": True})
+    assert isinstance(from_alias, TypeText) and from_alias.is_variable
+
+    assert variable.execute(context).success
+    assert literal.execute(context).success
+    assert leftover.execute(context).success
+    typed = [event for event in context.keyboard.backend.events if event.kind == "type"]
+    assert typed[0].text == "test@example.com"
+    assert typed[1].text == "email@example.com"
+    assert typed[2].text == "{{EMAIL}}"
+    joined = "\n".join(log.lines())
+    assert "test@example.com" not in joined
+    assert "test_password" not in joined
+    assert variable.describe() == "TYPE VARIABLE {{EMAIL}}"
+    assert leftover.describe() == "TYPE TEXT '{{EMAIL}}'"
 
 
 def test_wait_and_wait_until(context):

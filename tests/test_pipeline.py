@@ -174,7 +174,7 @@ def test_email_placeholder_is_typed_password_stays_out_of_macro_1(context, log):
     attach(
         context,
         macros={
-            "MACRO_1": Macro("MACRO_1", actions=[TypeText(text="{{EMAIL}}")]),
+            "MACRO_1": Macro("MACRO_1", actions=[TypeText(text="{{EMAIL}}", is_variable=True)]),
             "MACRO_2": Macro("MACRO_2"),
             "MACRO_3": Macro("MACRO_3"),
             "MACRO_4": Macro("MACRO_4"),
@@ -194,10 +194,10 @@ def test_password_placeholder_types_only_in_macro_3(context, log):
     context.allow_password = False
     context.variables[PASSWORD_VAR] = Secret("hunter2-secret")
     context.log.register_secret("hunter2-secret")
-    skipped = TypeText(text="{{PASSWORD}}").execute(context)
+    skipped = TypeText(text="{{PASSWORD}}", is_variable=True).execute(context)
     assert skipped.detail == "password skipped"
     context.allow_password = True
-    typed = TypeText(text="{{PASSWORD}}").execute(context)
+    typed = TypeText(text="{{PASSWORD}}", is_variable=True).execute(context)
     assert typed.success
     assert context.keyboard.backend.events[-1].length == len("hunter2-secret")
     assert "hunter2-secret" not in "\n".join(log.lines())

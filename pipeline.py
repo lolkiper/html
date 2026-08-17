@@ -42,6 +42,7 @@ START_STATE = "START_STATE"
 MANUAL_STATE = "MANUAL_ACTION_REQUIRED"
 EMAIL_VAR = "EMAIL"
 PASSWORD_VAR = "PASSWORD"
+USERNAME_VAR = "USERNAME"
 PASSWORD_STAGE = "MACRO_3"
 
 PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -296,7 +297,10 @@ def default_pipeline_states() -> dict[str, VisualState]:
 
 
 def clear_record_variables(ctx: Any) -> None:
-    for key in (EMAIL_VAR, PASSWORD_VAR, "email", "password", "login"):
+    for key in (
+        EMAIL_VAR, PASSWORD_VAR, USERNAME_VAR,
+        "email", "password", "username", "login",
+    ):
         ctx.variables.pop(key, None)
 
 
@@ -306,8 +310,11 @@ def apply_row_to_context(ctx: Any, data: TestData) -> str:
     row = data.current()
     email = row.get("email") or row.get("login") or ""
     password = row.get("password") or ""
+    username = row.get("username") or row.get("login") or email
     ctx.variables[EMAIL_VAR] = email
     ctx.variables["email"] = email
+    ctx.variables[USERNAME_VAR] = username
+    ctx.variables["username"] = username
     if password:
         secret = Secret(password)
         ctx.variables[PASSWORD_VAR] = secret
@@ -334,6 +341,7 @@ def bind_typed_text_to_test_data(macro: Macro, data: TestData, allow_password: b
             action.variable = EMAIL_VAR
             action.sensitive = False
             action.text = "{{EMAIL}}"
+            action.is_variable = True
             changed += 1
             continue
         if not allow_password:
@@ -342,6 +350,7 @@ def bind_typed_text_to_test_data(macro: Macro, data: TestData, allow_password: b
             action.variable = PASSWORD_VAR
             action.sensitive = True
             action.text = "{{PASSWORD}}"
+            action.is_variable = True
             changed += 1
     return changed
 
@@ -361,7 +370,7 @@ def substitute_placeholders(text: str, ctx: Any) -> tuple[str, bool]:
             if not allow_password:
                 return ""
             sensitive = True
-            raw = ctx.variables.get(PASSWORD_VAR, "")
+            raw = ctx.variables.get(PASSWORD_VAR, ctx.variables.get("password", ""))
             return raw.reveal() if isinstance(raw, Secret) else str(raw or "")
         raw = ctx.variables.get(name, ctx.variables.get(name.lower(), ""))
         if isinstance(raw, Secret):

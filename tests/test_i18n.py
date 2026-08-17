@@ -144,7 +144,7 @@ def test_recorded_step_descriptions_are_translated(russian, window, log):
     recorder.feed(RawEvent(kind="key_down", key="enter", at=3.0))
     recorder.stop()
     descriptions = recorder.summary()
-    assert descriptions[0].startswith("Клик в (")
-    assert "Пауза" in descriptions[1]
-    assert "Ввод текста (1 символов)" in descriptions
+    assert descriptions[0] == "ЛЕВЫЙ КЛИК"
+    assert "ПАУЗА" in descriptions
+    assert any(line.startswith("ВВЕСТИ ТЕКСТ") for line in descriptions)
     assert "Клавиша enter" in descriptions

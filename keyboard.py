@@ -54,6 +54,7 @@ class KeyEvent:
     kind: str
     keys: tuple[str, ...] = ()
     length: int = 0
+    text: str = ""
     at: float = field(default_factory=time.time)
 
 
@@ -140,7 +141,7 @@ class RecordingKeyboard:
 
     def type_text(self, text: str, interval: float = 0.02) -> None:
         raw = text.reveal() if isinstance(text, Secret) else str(text)
-        self.events.append(KeyEvent("type", (), len(raw)))
+        self.events.append(KeyEvent("type", (), len(raw), raw))
 
     def clear(self) -> None:
         self.events.clear()

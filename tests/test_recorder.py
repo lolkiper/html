@@ -16,11 +16,13 @@ from actions import (
     TargetMode,
     TypeText,
     Wait,
+    action_from_dict,
 )
 from recorder import (
     ActionRecorder,
     PynputListener,
     RawEvent,
+    RecordedStep,
     RecorderSettings,
     ScriptedListener,
     create_listener,
@@ -126,7 +128,8 @@ def test_typing_is_merged_into_one_text_action(window, log):
     assert [step.kind for step in recorder.steps] == ["text"]
     action = recorder.to_actions()[0]
     assert isinstance(action, TypeText) and action.text == "hello"
-    assert "5 characters" in recorder.steps[0].describe()
+    assert action.is_variable is False
+    assert "hello" in recorder.steps[0].describe()
 
 
 def test_a_long_pause_splits_typed_text(window, log):
@@ -226,7 +229,7 @@ def test_clicks_can_be_anchored_to_a_reference_image(window, log):
     step = recorder.steps[0]
     assert step.patch is not None
     assert step.frame_size == (320, 480)
-    assert "recognised element" in step.describe()
+    assert step.describe() == "LEFT CLICK"
 
     action = recorder.to_actions(save_reference=save)[0]
     assert isinstance(action, LeftClick)
@@ -416,3 +419,101 @@ def test_frame_buffer_survives_a_failing_provider(log):
     buffer = FrameBuffer(lambda: (_ for _ in ()).throw(RuntimeError("boom")), log=log)
     assert buffer.capture_once() is None
     assert any("Could not capture" in line for line in log.lines())
+
+
+def test_typed_characters_stay_literal_text(window, log):
+    recorder = new_recorder(window, log)
+    type_keys(recorder, "email@example.com", at=1.0)
+    recorder.stop()
+    action = recorder.to_actions()[0]
+    assert isinstance(action, TypeText)
+    assert action.text == "email@example.com"
+    assert action.is_variable is False
+    payload = action.to_dict()
+    assert payload["text"] == "email@example.com"
+    assert payload["is_variable"] is False
+
+
+def test_insert_variable_records_placeholders_and_preview(window, log, context):
+    from i18n import set_language
+    from logger import Secret
+
+    recorder = new_recorder(window, log, insert_waits=False)
+    press_release(recorder, 200, 200, at=1.0)
+    assert recorder.insert_variable("EMAIL", at=1.05) is not None
+    recorder.steps.append(RecordedStep(kind="wait", at=1.2, seconds=0.0))
+    press_release(recorder, 220, 260, at=1.3)
+    assert recorder.insert_variable("PASSWORD", at=1.35) is not None
+    recorder.stop()
+
+    set_language("ru")
+    try:
+        lines = recorder.summary()
+        assert lines == [
+            "ЛЕВЫЙ КЛИК",
+            "ВВЕСТИ ПЕРЕМЕННУЮ {{EMAIL}}",
+            "ПАУЗА",
+            "ЛЕВЫЙ КЛИК",
+            "ВВЕСТИ ПЕРЕМЕННУЮ {{PASSWORD}}",
+        ]
+        numbered = [f"{index}. {line}" for index, line in enumerate(lines, start=1)]
+        assert numbered[1] == "2. ВВЕСТИ ПЕРЕМЕННУЮ {{EMAIL}}"
+        assert numbered[4] == "5. ВВЕСТИ ПЕРЕМЕННУЮ {{PASSWORD}}"
+        actions = recorder.to_actions()
+        preview = [action.preview() for action in actions]
+        assert preview == lines
+    finally:
+        set_language("en")
+
+    actions = recorder.to_actions()
+    assert [type(action).__name__ for action in actions] == [
+        "LeftClick", "TypeText", "Wait", "LeftClick", "TypeText",
+    ]
+    email_action, password_action = actions[1], actions[4]
+    assert email_action.text == "{{EMAIL}}"
+    assert email_action.is_variable is True
+    assert password_action.text == "{{PASSWORD}}"
+    assert password_action.is_variable is True
+    email_payload = email_action.to_dict()
+    assert email_payload["type"] == "type"
+    assert email_payload["text"] == "{{EMAIL}}"
+    assert email_payload["is_variable"] is True
+    password_payload = password_action.to_dict()
+    assert password_payload["type"] == "type"
+    assert password_payload["is_variable"] is True
+
+    restored = [action_from_dict(action.to_dict()) for action in actions]
+    assert restored[1].is_variable and restored[1].text == "{{EMAIL}}"
+    assert restored[4].is_variable and restored[4].text == "{{PASSWORD}}"
+
+    context.refresh()
+    context.variables["EMAIL"] = "test@example.com"
+    context.variables["PASSWORD"] = Secret("test_password")
+    context.log.register_secret("test_password")
+    context.allow_password = True
+    for action in restored:
+        assert action.execute(context).success
+    typed = [event for event in context.keyboard.backend.events if event.kind == "type"]
+    assert typed[0].text == "test@example.com"
+    assert typed[1].text == "test_password"
+    joined = "\n".join(log.lines()) + "\n".join(context.log.lines())
+    assert "{{EMAIL}}" not in [event.text for event in typed]
+    assert "{{PASSWORD}}" not in [event.text for event in typed]
+    assert "test@example.com" not in joined
+    assert "test_password" not in joined
+
+
+def test_insert_variable_does_not_infer_from_typed_email(window, log):
+    recorder = new_recorder(window, log)
+    type_keys(recorder, "email", at=1.0)
+    recorder.insert_variable("EMAIL", at=1.2)
+    recorder.stop()
+    actions = recorder.to_actions()
+    assert [action.text for action in actions if isinstance(action, TypeText)] == [
+        "email",
+        "{{EMAIL}}",
+    ]
+    assert [action.is_variable for action in actions if isinstance(action, TypeText)] == [
+        False,
+        True,
+    ]

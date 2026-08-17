@@ -12,6 +12,7 @@ raised so a workflow can branch on them.
 
 from __future__ import annotations
 
+import re
 import random
 import time
 from dataclasses import dataclass, field
@@ -20,12 +21,35 @@ from typing import TYPE_CHECKING, Any, ClassVar, Sequence
 
 from conditions import Condition, ConditionResult, condition_from_dict, condition_to_dict, evaluate
 from i18n import tr
-from logger import Secret, mask_text
+from logger import mask_text
 from safety import EmergencyStop, SafetyViolation
 from vision import MatchResult, Roi
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from state_machine import AnalysisContext
+
+VARIABLE_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+VARIABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ACTION_KIND_ALIASES = {"type": "type_text"}
+
+
+def normalize_variable_name(name: str) -> str:
+    """Return EMAIL from 'email', '{{EMAIL}}' or empty if the name is invalid."""
+    raw = (name or "").strip()
+    match = VARIABLE_PLACEHOLDER.fullmatch(raw)
+    if match:
+        raw = match.group(1)
+    raw = raw.strip().strip("{}").strip()
+    if not VARIABLE_NAME_RE.match(raw):
+        return ""
+    return raw.upper()
+
+
+def variable_token_from_text(text: str) -> str:
+    match = VARIABLE_PLACEHOLDER.search(text or "")
+    if match:
+        return match.group(1).upper()
+    return ""
 
 
 class StopRequested(RuntimeError):
@@ -192,6 +216,10 @@ class Action:
     def describe(self) -> str:  # pragma: no cover - overridden
         return self.label
 
+    def preview(self) -> str:
+        """Short label for recorder / macro lists."""
+        return self.describe()
+
     def payload(self) -> dict[str, Any]:
         return {}
 
@@ -206,7 +234,8 @@ class Action:
 def action_from_dict(data: dict[str, Any] | None) -> Action | None:
     if not data:
         return None
-    kind = str(data.get("kind", "")).lower()
+    kind = str(data.get("kind") or data.get("type") or "").lower()
+    kind = ACTION_KIND_ALIASES.get(kind, kind)
     action_type = ACTION_TYPES.get(kind)
     if action_type is None:
         raise ValueError(f"unknown action kind: {kind!r}")
@@ -320,6 +349,9 @@ class _Click(PointerAction):
 
     def describe(self) -> str:
         return tr("%s -> %s") % (tr(self.label).upper(), self.target.describe())
+
+    def preview(self) -> str:
+        return tr(self.label).upper()
 
     @classmethod
     def build(cls, data: dict[str, Any]):
@@ -454,7 +486,12 @@ class Hotkey(Action):
 @register_action
 @dataclass
 class TypeText(Action):
-    """Type text. Sensitive values are redacted in the log and never echoed."""
+    """Type text. Sensitive values are redacted in the log and never echoed.
+
+    Ordinary typing is stored as-is.  A value marked ``is_variable`` is a
+    placeholder such as ``{{EMAIL}}`` and is resolved from the runtime context
+    only when the macro runs — never by guessing from the typed characters.
+    """
 
     kind: ClassVar[str] = "type_text"
     label: ClassVar[str] = "Type Text"
@@ -464,30 +501,36 @@ class TypeText(Action):
     interval: float = 0.02
     clear_first: bool = False
     variable: str = ""  # read the value from a variable instead of the project file
+    is_variable: bool = False
+
+    def _should_resolve(self) -> bool:
+        return bool(self.is_variable or self.variable)
+
+    def typed_variable_name(self) -> str:
+        if self.variable:
+            return normalize_variable_name(self.variable) or self.variable.strip().upper()
+        return variable_token_from_text(self.text) or normalize_variable_name(self.text)
+
+    def _source_text(self) -> str:
+        if self.variable and not VARIABLE_PLACEHOLDER.search(self.text or ""):
+            name = self.typed_variable_name()
+            return "{{%s}}" % name if name else self.text
+        return self.text
 
     def execute(self, ctx: "AnalysisContext") -> ActionResult:
         from pipeline import substitute_placeholders
 
         sensitive = self.sensitive
-        if self.variable:
-            raw = ctx.variables.get(self.variable, "")
-            if isinstance(raw, Secret):
-                macro = getattr(ctx, "current_macro", "") or ""
-                if macro and macro != "MACRO_3":
-                    ctx.log.warning("PASSWORD is not used in this macro")
-                    return ActionResult(True, "password skipped")
-                value = raw.reveal()
-                sensitive = True
-            else:
-                value = str(raw or "")
-                sensitive = self.sensitive
-        else:
-            value, from_placeholder = substitute_placeholders(self.text, ctx)
-            sensitive = self.sensitive or from_placeholder
-            compact = (self.text or "").upper().replace(" ", "")
+        if self._should_resolve():
+            source = self._source_text()
+            value, _from_placeholder = substitute_placeholders(source, ctx)
+            sensitive = True
+            compact = (source or "").upper().replace(" ", "")
             if not value and "{{PASSWORD}}" in compact:
                 ctx.log.warning("PASSWORD is not used in this macro")
                 return ActionResult(True, "password skipped")
+        else:
+            value = str(self.text or "")
         if not value:
             return ActionResult(False, "nothing to type")
         if self.clear_first:
@@ -497,13 +540,10 @@ class TypeText(Action):
         return ActionResult(done, detail)
 
     def describe(self) -> str:
-        if self.variable:
-            return tr("TYPE TEXT from variable '%s'") % self.variable
-        compact = (self.text or "").upper().replace(" ", "")
-        if "{{PASSWORD}}" in compact:
-            return tr("TYPE TEXT from variable '%s'") % "PASSWORD"
-        if "{{EMAIL}}" in compact:
-            return tr("TYPE TEXT from variable '%s'") % "EMAIL"
+        if self._should_resolve():
+            name = self.typed_variable_name()
+            if name:
+                return tr("TYPE VARIABLE {{%s}}") % name
         if self.sensitive:
             return tr("TYPE TEXT (%s)") % mask_text(self.text)
         preview = self.text if len(self.text) <= 24 else self.text[:21] + "..."
@@ -511,7 +551,9 @@ class TypeText(Action):
 
     def payload(self) -> dict[str, Any]:
         return {
+            "type": "type",
             "text": self.text,
+            "is_variable": bool(self.is_variable),
             "sensitive": self.sensitive,
             "interval": self.interval,
             "clear_first": self.clear_first,
@@ -520,12 +562,19 @@ class TypeText(Action):
 
     @classmethod
     def build(cls, data: dict[str, Any]) -> "TypeText":
+        text = str(data.get("text", ""))
+        variable = str(data.get("variable", ""))
+        if "is_variable" in data:
+            is_variable = bool(data.get("is_variable"))
+        else:
+            is_variable = bool(variable) or bool(VARIABLE_PLACEHOLDER.search(text))
         return cls(
-            str(data.get("text", "")),
+            text,
             bool(data.get("sensitive", False)),
             float(data.get("interval", 0.02)),
             bool(data.get("clear_first", False)),
-            str(data.get("variable", "")),
+            variable,
+            is_variable,
         )
 
 
@@ -549,6 +598,9 @@ class Wait(Action):
 
     def describe(self) -> str:
         return tr("WAIT %gs") % self.seconds
+
+    def preview(self) -> str:
+        return tr(self.label).upper()
 
     def payload(self) -> dict[str, Any]:
         return {"seconds": self.seconds, "jitter": self.jitter}

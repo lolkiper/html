@@ -43,6 +43,8 @@ from actions import (
     TargetMode,
     TypeText,
     Wait,
+    normalize_variable_name,
+    variable_token_from_text,
 )
 from i18n import tr
 from logger import EventLog, get_logger
@@ -189,20 +191,19 @@ class RecordedStep:
     keys: tuple[str, ...] = ()
     text: str = ""
     seconds: float = 0.0
+    is_variable: bool = False
     patch: np.ndarray | None = None            # captured around a click, in RAM
     patch_offset: tuple[int, int] = (0, 0)     # click position inside the patch
     frame_size: tuple[int, int] = (0, 0)
     reference: str = ""                        # filled in once it is stored
 
     def describe(self) -> str:
-        if self.kind in ("click", "double", "right") and self.position:
-            name = {
-                "click": tr("Click"), "double": tr("Double click"), "right": tr("Right click")
-            }[self.kind]
-            where = "(%.3f, %.3f)" % self.position
-            if self.patch is not None or self.reference:
-                return tr("%s on the recognised element %s") % (name, where)
-            return tr("%s at %s") % (name, where)
+        if self.kind == "click":
+            return tr("Left Click").upper()
+        if self.kind == "double":
+            return tr("Double Click").upper()
+        if self.kind == "right":
+            return tr("Right Click").upper()
         if self.kind == "drag" and self.position and self.end_position:
             return tr("Drag %s -> %s") % (
                 "(%.3f, %.3f)" % self.position, "(%.3f, %.3f)" % self.end_position
@@ -214,9 +215,14 @@ class RecordedStep:
         if self.kind == "key":
             return tr("Key %s") % self.key
         if self.kind == "text":
-            return tr("Type text (%s characters)") % len(self.text)
+            if self.is_variable:
+                name = variable_token_from_text(self.text) or normalize_variable_name(self.text)
+                if name:
+                    return tr("TYPE VARIABLE {{%s}}") % name
+            preview = self.text if len(self.text) <= 24 else self.text[:21] + "..."
+            return tr("TYPE TEXT '%s'") % preview
         if self.kind == "wait":
-            return tr("Wait %.2fs") % self.seconds
+            return tr("Wait").upper()
         return self.kind
 
 
@@ -455,7 +461,25 @@ class ActionRecorder:
             return
         text = self._text_buffer
         self._text_buffer = ""
-        self._append(RecordedStep(kind="text", at=self._text_started, text=text))
+        self._append(RecordedStep(kind="text", at=self._text_started, text=text, is_variable=False))
+
+    def insert_variable(self, name: str, at: float | None = None) -> RecordedStep | None:
+        """Record TYPE({{NAME}}) explicitly. Never inferred from typed characters."""
+        if not self.recording and self._started_at == 0.0:
+            return None
+        token = normalize_variable_name(name)
+        if not token:
+            return None
+        self._flush_text()
+        moment = time.monotonic() if at is None else float(at)
+        return self._append(
+            RecordedStep(
+                kind="text",
+                at=moment,
+                text="{{%s}}" % token,
+                is_variable=True,
+            )
+        )
 
     # -------------------------------------------------------------- actions
     def to_actions(
@@ -511,7 +535,14 @@ class ActionRecorder:
                 actions.append(PressKey(key=step.key))
                 continue
             if step.kind == "text":
-                actions.append(TypeText(text=step.text))
+                token = variable_token_from_text(step.text) if step.is_variable else ""
+                actions.append(
+                    TypeText(
+                        text=step.text,
+                        is_variable=bool(step.is_variable),
+                        sensitive=token == "PASSWORD",
+                    )
+                )
         if anchored:
             self.log.info("%s click(s) anchored to a reference image", anchored)
         return actions

@@ -23,7 +23,7 @@ import time
 import tkinter as tk
 from dataclasses import dataclass, field
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Callable, Sequence
 
 import numpy as np
@@ -53,7 +53,6 @@ from pipeline import (
     RESET_MACRO,
     STAGE_MACROS,
     START_STATE,
-    bind_typed_text_to_test_data,
     parse_record_file,
     verify_error,
     verify_success,
@@ -803,6 +802,7 @@ def action_fields(kind: str, app: "App") -> list[Field]:
         "hotkey": [Field("combination", tr('Combination'), "str", default="ctrl+a")],
         "type_text": [
             Field("text", tr('Text'), "str"),
+            Field("is_variable", tr('Resolve as variable'), "bool", default=False),
             Field("sensitive", tr('Sensitive (never logged)'), "bool", default=False),
             Field("variable", tr('Read from variable'), "str", hint="optional"),
             Field("interval", tr('Interval (s)'), "float", default=0.02),
@@ -1127,6 +1127,11 @@ class RecorderDialog(tk.Toplevel):
             buttons, text=tr("Stop"), style="Danger.TButton", command=self._stop, state="disabled"
         )
         self._stop_button.pack(side="left", padx=6)
+        self._insert_var_button = ttk.Button(
+            buttons, text=tr("INSERT VARIABLE"), command=self._show_insert_variable_menu,
+            state="disabled",
+        )
+        self._insert_var_button.pack(side="left", padx=6)
         ttk.Button(buttons, text=tr("Cancel"), command=self._cancel).pack(side="right")
         self._use_button = ttk.Button(
             buttons, text=tr("Use the recording"), style="Accent.TButton",
@@ -1181,6 +1186,7 @@ class RecorderDialog(tk.Toplevel):
         )
         self._start_button.configure(state="disabled")
         self._stop_button.configure(state="normal")
+        self._insert_var_button.configure(state="normal")
         self._poll()
 
     def _poll(self) -> None:
@@ -1200,6 +1206,58 @@ class RecorderDialog(tk.Toplevel):
             self._steps.insert("end", f"{index:2d}. {description}")
         self._steps.see("end")
 
+    def _show_insert_variable_menu(self) -> None:
+        if self.recorder is None:
+            messagebox.showinfo(
+                tr("INSERT VARIABLE"),
+                tr("Start recording first"),
+                parent=self,
+            )
+            return
+        menu = tk.Menu(self, tearoff=False)
+        for name in ("EMAIL", "PASSWORD", "USERNAME"):
+            menu.add_command(label=name, command=lambda token=name: self._insert_named_variable(token))
+        menu.add_separator()
+        menu.add_command(label=tr("CUSTOM VARIABLE"), command=self._insert_custom_variable)
+        try:
+            menu.tk_popup(
+                self._insert_var_button.winfo_rootx(),
+                self._insert_var_button.winfo_rooty() + self._insert_var_button.winfo_height(),
+            )
+        finally:
+            menu.grab_release()
+
+    def _insert_named_variable(self, name: str) -> None:
+        if self.recorder is None:
+            return
+        if not self.recorder.recording and self.recorder._started_at == 0.0:
+            messagebox.showinfo(
+                tr("INSERT VARIABLE"),
+                tr("Start recording first"),
+                parent=self,
+            )
+            return
+        step = self.recorder.insert_variable(name)
+        if step is None:
+            messagebox.showerror(
+                tr("Invalid variable name"),
+                tr("The name must start with a letter or underscore."),
+                parent=self,
+            )
+            return
+        self._refresh_steps()
+        self._use_button.configure(state="normal")
+
+    def _insert_custom_variable(self) -> None:
+        name = simpledialog.askstring(
+            tr("CUSTOM VARIABLE"),
+            tr("Enter a variable name (A-Z, digits, underscore)."),
+            parent=self,
+        )
+        if not name:
+            return
+        self._insert_named_variable(name)
+
     def _stop(self) -> None:
         if self.listener is not None:
             self.listener.stop()
@@ -1213,6 +1271,7 @@ class RecorderDialog(tk.Toplevel):
             self._use_button.configure(state="normal" if self.recorder.steps else "disabled")
         self._start_button.configure(state="normal")
         self._stop_button.configure(state="disabled")
+        self._insert_var_button.configure(state="normal" if self.recorder and self.recorder.steps else "disabled")
 
     def _accept(self) -> None:
         if self.recorder is None or not self.recorder.steps:
@@ -2899,21 +2958,16 @@ class App(tk.Tk):
             return
         macro = self.project.ensure_macro(name)
         macro.actions = list(actions)
-        bound = bind_typed_text_to_test_data(
-            macro, self.project.test_data, allow_password=(name == "MACRO_3")
-        )
         self.project.mark_dirty()
         self.refresh_workflow()
         self.log.info("Recorded %s action(s) into %s", len(actions), name)
-        if bound:
-            self.log.info("Bound %s typed field(s) to test data variables", bound)
 
     def edit_named_macro(self, name: str) -> None:
         macro = self.project.ensure_macro(name)
         if not macro.actions:
             messagebox.showinfo(name, tr("This macro has no steps. Press Record first."))
             return
-        lines = [f"{index + 1}. {action.describe()}" for index, action in enumerate(macro.actions)]
+        lines = [f"{index + 1}. {action.preview()}" for index, action in enumerate(macro.actions)]
         messagebox.showinfo(name, "\n".join(lines) if lines else tr("(empty)"))
 
     def test_named_macro(self, name: str) -> None:
