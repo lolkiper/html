@@ -309,6 +309,11 @@ class AnalysisContext:
         self.test_data: Any = None
         self.step_by_step: bool = False
         self.step_continue: threading.Event | None = None
+        self.allow_password: bool = True
+        self.current_macro: str = ""
+        self.manual_required: bool = False
+        self.manual_continue: threading.Event | None = None
+        self.skip_manual_wait: bool = False
         self.frame: Frame | None = None
         self.previous_signature: np.ndarray | None = None
         self.last_match: MatchResult | None = None
@@ -973,6 +978,11 @@ def create_context(
     if context.step_by_step:
         context.step_continue = threading.Event()
         context.step_continue.set()
+    context.manual_continue = threading.Event()
+    context.manual_required = False
+    context.skip_manual_wait = False
+    context.allow_password = True
+    context.current_macro = ""
     return context
 
 

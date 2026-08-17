@@ -101,34 +101,26 @@ CPython on Windows, so the GUI needs no extra install.
    finds nothing (for example a heavily customised window title), use
    **Screen region...** and give the rectangle by hand.
 4. **Save** the project (reference images can only be stored after that).
-5. Record **AUTH_VK** (green **+ RECORD MACRO**): perform the VK login yourself,
-   stop the recorder, save as `AUTH_VK`. The program does not invent clicks.
-6. Manually open the failed-login screen → **CAPTURE ERROR STATE** → crop a
-   *small* unique element (error text, button) → name `AUTH_ERROR`.
-7. Manually open the screen after a successful login → **CAPTURE SUCCESS STATE**
-   → crop a small unique element → name `AUTH_SUCCESS`.
-8. Record **MACRO_2** the same way for the steps after a successful login.
-   Optionally capture **MACRO_2** error/success states the same way.
-9. Add test-data rows (`login` / `password`) if AUTH_VK should type them.
-   Passwords are never written to the log.
-10. Press **START (F8)**. After AUTH_VK the engine **waits and analyses** the
-    screen. `AUTH_ERROR` fails the current row, resets, loads the next row and
-    runs AUTH_VK again — MACRO_2 is not started. `AUTH_SUCCESS` starts MACRO_2,
-    then verifies. Unknown results retry; after the limit the run stops.
-    **F9** is emergency stop. **STEP BY STEP** + **F10** advances one node.
-
-Tip: switch on **Dry run** first.  The engine then analyses, decides and logs
-exactly what it would do, without moving the mouse. Use **Test detection** on a
-state to analyse the current screen without clicking.
+5. **Save** the project (reference images can only be stored after that).
+6. **LOAD TEST DATA** — a text file, one account per line: `email|password` or
+   `email:password`. Invalid lines go to **INVALID**. Passwords stay in RAM and
+   are never written to the project or the log.
+7. Record **MACRO_1**: in the email field type `{{EMAIL}}` (or the real email
+   of the first row). Do not type the password here.
+8. **CAPTURE SUCCESS STATE** / **CAPTURE ERROR STATE** for VERIFY_1 (small crop).
+9. Record MACRO_2, MACRO_3 (`{{PASSWORD}}` only here), MACRO_4 the same way, and
+   capture VERIFY_2..4 success/error crops.
+10. If a bot-check / confirmation screen appears, capture it as
+    **MANUAL_ACTION_REQUIRED**. The engine **stops and waits** — it does not
+    solve or bypass that screen. Press **Continue** after you finished it.
+11. **START (F8)**. Each stage is MACRO → wait → visual VERIFY. Only
+    `VERIFY_n_SUCCESS` unlocks the next macro. Error → FAILED → RESET → next
+    record. Unknown → retry, then skip the record.
 
 ```
-START → LOAD TEST DATA → AUTH_VK → WAIT → ANALYZE
-  AUTH_ERROR  → FAILED → RESET → NEXT DATA → AUTH_VK
-  AUTH_SUCCESS → MACRO_2 → VERIFY → DONE / HANDLER
-  UNKNOWN → WAIT → RECHECK → RETRY → UNKNOWN_FINAL → STOP
+LOAD RECORD → MACRO_1 → VERIFY_1 → MACRO_2 → VERIFY_2
+           → MACRO_3 → VERIFY_3 → MACRO_4 → VERIFY_4 → SUCCESS → NEXT RECORD
 ```
-
-Finishing AUTH_VK is not success. Only a visual match of `AUTH_SUCCESS` is.
 
 Do not capture the whole screen as a reference. A small unique control works
 better. Automatic analysis frames stay in RAM; only Capture error/success
@@ -138,11 +130,12 @@ images are stored in the project.
 
 ## Recording a macro
 
-**+ RECORD MACRO (AUTH_VK)** is the full-width green button under the yellow
-**MACRO** heading. **RECORD MACRO 2** records the second stage. The Pipeline
-tab has Record / Edit / Test for `AUTH_VK`, `MACRO_2` and optional `RESET`.
+**+ RECORD MACRO (MACRO_1)** is the full-width green button under the yellow
+**MACRO** heading. MACRO_2 / MACRO_3 / MACRO_4 have their own Record buttons.
+The Pipeline tab has Record / Edit / Test for each stage plus RESET.
 Press *Start recording*, perform the combination in LDPlayer, press **F10**
 (while recording this stops the recorder), then *Use the recording*.
+Type `{{EMAIL}}` in MACRO_1 and `{{PASSWORD}}` only in MACRO_3.
 
 Raw input is condensed into meaningful actions:
 

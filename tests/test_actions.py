@@ -29,7 +29,7 @@ from actions import (
 from conditions import Always, ReferenceVisible, StateIs
 from logger import Secret
 from ocr import OcrService
-from pipeline import LoadTestData, NextTestData, SignalFail
+from pipeline import LoadTestData, MarkRecord, NextTestData, SignalFail, WaitForManual, WaitForStartState
 from state_machine import ReferenceSpec, VisualState
 from vision import PixelRect, Roi
 
@@ -273,6 +273,9 @@ def test_every_action_survives_serialisation():
         SignalFail(reason="still unknown"),
         LoadTestData(),
         NextTestData(),
+        MarkRecord(outcome="success"),
+        WaitForManual(),
+        WaitForStartState(timeout=5.0),
     ]
     for action in samples:
         restored = action_from_dict(action.to_dict())

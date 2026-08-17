@@ -305,7 +305,7 @@ class Project:
         return sorted(self.states)
 
     def rebuild_pipeline(self) -> None:
-        """Regenerate the sequential-macro workflow from AUTH_VK / MACRO_2 / states."""
+        """Regenerate the four-stage MACRO / VERIFY workflow."""
         self.workflow = build_pipeline_workflow(self.pipeline)
         self.mark_dirty()
 
@@ -352,7 +352,7 @@ class Project:
             macro = Macro.from_dict(item)
             if macro.name:
                 macros[macro.name] = macro
-        return cls(
+        project = cls(
             name=str(data.get("name", "Project")),
             path=path,
             states=build_states(data.get("states")),
@@ -365,6 +365,20 @@ class Project:
             pipeline=PipelineSettings.from_dict(data.get("pipeline")),
             log=log,
         )
+        project.ensure_pipeline_layout()
+        return project
+
+    def ensure_pipeline_layout(self) -> None:
+        """Fill in MACRO_1..4 / VERIFY states if this project predates them."""
+        from pipeline import RESET_MACRO, STAGE_MACROS, default_macros, default_pipeline_states
+
+        for name, macro in default_macros().items():
+            self.macros.setdefault(name, macro)
+        for name, state in default_pipeline_states().items():
+            self.states.setdefault(name, state)
+        has_macro1 = any(node.type.value == "MACRO" and node.state == "MACRO_1" for node in self.workflow.walk())
+        if not has_macro1:
+            self.workflow = build_pipeline_workflow(self.pipeline)
 
     def save(self, path: str | Path | None = None) -> Path:
         """Write ``project.json``. Reference images are already on disk."""
@@ -478,12 +492,12 @@ def _write_png(path: Path, image: np.ndarray) -> None:
 
 
 def example_project(name: str | None = None) -> Project:
-    """A new project: sequential macros AUTH_VK → visual check → MACRO_2.
+    """A new project: MACRO_1..4, each followed by a visual VERIFY.
 
     Result states exist as names only. Reference images are added when the user
-    presses Capture error/success — never as a full-screen demo.
+    presses Capture — never as a full-screen demo.
     """
-    from pipeline import AUTH_MACRO, RESET_MACRO, SECOND_MACRO
+    from pipeline import RESET_MACRO, STAGE_MACROS
 
     project = Project(
         name=name or tr("LDPlayer sequential macros"),
@@ -494,7 +508,6 @@ def example_project(name: str | None = None) -> Project:
         workflow=build_pipeline_workflow(),
     )
     project.settings.engine_mode = "workflow"
-    project.ensure_macro(AUTH_MACRO)
-    project.ensure_macro(SECOND_MACRO)
-    project.ensure_macro(RESET_MACRO)
+    for name in (*STAGE_MACROS, RESET_MACRO):
+        project.ensure_macro(name)
     return project

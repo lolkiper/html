@@ -688,6 +688,58 @@ RU: dict[str, str] = {
     "there is another test row": "есть ещё тестовая запись",
     "FAIL (%s)": "СБОЙ (%s)",
     "LOAD TEST DATA": "ЗАГРУЗИТЬ ТЕСТОВЫЕ ДАННЫЕ",
+    "File: one line email|password or email:password. Passwords stay in RAM.":
+        "Файл: одна строка email|password или email:password. Пароли остаются в ОЗУ.",
+    "VERIFY": "ПРОВЕРКА",
+    "RESET / START": "СБРОС / СТАРТ",
+    "Capture Success": "Захватить успех",
+    "Capture Error": "Захватить ошибку",
+    "Capture start screen": "Захватить стартовый экран",
+    "Capture manual / bot-check": "Захватить ручное подтверждение",
+    "Bot-check is never solved. The run waits until you press Continue.":
+        "Защитные экраны программа не обходит. Сценарий ждёт, пока вы нажмёте «Продолжить».",
+    "INVALID": "НЕКОРРЕКТНЫЕ",
+    "Line": "Строка",
+    "Continue": "Продолжить",
+    "Current record: %s / %s": "Текущая запись: %s / %s",
+    "Success: %s": "Успешно: %s",
+    "Failed: %s": "Ошибок: %s",
+    "Invalid: %s": "Некорректных: %s",
+    "Imported %s record(s), %s invalid line(s) from %s":
+        "Импортировано записей: %s, некорректных строк: %s (%s)",
+    "MANUAL ACTION REQUIRED": "НУЖНО РУЧНОЕ ДЕЙСТВИЕ",
+    "LOAD RECORD": "ЗАГРУЗИТЬ ЗАПИСЬ",
+    "NEXT RECORD": "СЛЕДУЮЩАЯ ЗАПИСЬ",
+    "RECORD RESULT (%s)": "ИТОГ ЗАПИСИ (%s)",
+    "WAIT FOR START STATE": "ЖДАТЬ СТАРТОВЫЙ ЭКРАН",
+    "Four-stage macros": "Четыре этапа макросов",
+    "Record stage 1. Type {{EMAIL}} in the email field.":
+        "Запишите этап 1. В поле email введите {{EMAIL}}.",
+    "Record stage 2. Bot-checks wait for you; they are not solved.":
+        "Запишите этап 2. Защитные экраны ждут вас; программа их не решает.",
+    "Record stage 3. Type {{PASSWORD}} where the password belongs.":
+        "Запишите этап 3. В поле пароля введите {{PASSWORD}}.",
+    "Record stage 4, after the previous verifies succeeded.":
+        "Запишите этап 4 после успешных проверок предыдущих этапов.",
+    "Optional reset between records": "Необязательный сброс между записями",
+    "Screen that means the workflow is back at the start":
+        "Экран, с которого сценарий начинается снова",
+    "Manual confirmation / bot-check — wait, do not solve":
+        "Ручное подтверждение / bot-check — ждать, не обходить",
+    "VERIFY_%s succeeded": "VERIFY_%s успешен",
+    "VERIFY_%s failed": "VERIFY_%s с ошибкой",
+    "PASSWORD is not used in this macro": "PASSWORD на этом этапе не используется",
+    "No test data row; macros will use recorded text":
+        "Нет тестовой записи; макросы используют записанный текст",
+    "Record #%s loaded": "Запись №%s загружена",
+    "Loading next record": "Загрузка следующей записи",
+    "RECORD #%s SUCCESS": "ЗАПИСЬ №%s УСПЕХ",
+    "RECORD #%s %s": "ЗАПИСЬ №%s %s",
+    "WORKFLOW SUCCESS": "СЦЕНАРИЙ УСПЕШНО ЗАВЕРШЁН",
+    "Start state detected": "Стартовый экран обнаружен",
+    "Start state not detected, continuing": "Стартовый экран не найден, продолжаем",
+    "Manual action confirmed, continuing": "Ручное действие подтверждено, продолжаем",
+    "Manual wait skipped (test)": "Ожидание ручного действия пропущено (тест)",
     "NEXT TEST DATA": "СЛЕДУЮЩАЯ ТЕСТОВАЯ ЗАПИСЬ",
     "This macro has no steps. Press Record first.":
         "В этом макросе ещё нет шагов. Сначала нажмите «Запись».",

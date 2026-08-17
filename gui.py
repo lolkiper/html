@@ -49,14 +49,14 @@ from conditions import CONDITION_TYPES, Condition, condition_from_dict, describe
 from keyboard import HotkeyManager, install_safety_hotkeys
 from logger import EventLog, LogLevel, LogRecord, get_logger
 from pipeline import (
-    AUTH_ERROR,
-    AUTH_MACRO,
-    AUTH_SUCCESS,
-    MACRO2_ERROR,
-    MACRO2_SUCCESS,
+    MANUAL_STATE,
     RESET_MACRO,
-    SECOND_MACRO,
+    STAGE_MACROS,
+    START_STATE,
     bind_typed_text_to_test_data,
+    parse_record_file,
+    verify_error,
+    verify_success,
 )
 from project import Project, ProjectError, example_project
 from safety import RunState, SafetyController
@@ -1868,6 +1868,17 @@ class App(tk.Tk):
         self._start_button.pack(side="right", padx=6)
         ttk.Button(engine_bar, text=tr('Analyze once'), command=self.analyze_once).pack(side="right", padx=6)
 
+        self._manual_bar = ttk.Frame(self, style="Toolbar.TFrame", padding=(10, 4))
+        self._manual_label = ttk.Label(
+            self._manual_bar, text=tr("MANUAL ACTION REQUIRED"),
+            style="Toolbar.TLabel", foreground=PALETTE["warning"],
+        )
+        self._manual_label.pack(side="left")
+        ttk.Button(
+            self._manual_bar, text=tr("Continue"), style="Success.TButton",
+            command=self.continue_manual,
+        ).pack(side="right")
+
         main = ttk.PanedWindow(self, orient="horizontal")
         main.pack(fill="both", expand=True, padx=8, pady=(8, 4))
         main.add(self._build_left_panel(main), weight=1)
@@ -1879,12 +1890,36 @@ class App(tk.Tk):
         self.after_idle(self._place_sashes)
 
     def _build_pipeline_tab(self, parent: tk.Misc) -> ttk.Frame:
-        tab = ttk.Frame(parent, padding=8)
-        ttk.Label(tab, text=tr("MACROS"), style="Heading.TLabel").pack(anchor="w")
-        for name in (AUTH_MACRO, SECOND_MACRO, RESET_MACRO):
+        outer = ttk.Frame(parent)
+        canvas = tk.Canvas(outer, highlightthickness=0, background=PALETTE["panel"], width=300)
+        scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        tab = ttk.Frame(canvas, padding=8)
+        tab.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=tab, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        ttk.Label(tab, text=tr("LOAD TEST DATA"), style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(
+            tab,
+            text=tr("File: one line email|password or email:password. Passwords stay in RAM."),
+            style="Muted.TLabel", wraplength=260,
+        ).pack(anchor="w")
+        ttk.Button(tab, text=tr("LOAD TEST DATA"), style="Success.TButton",
+                   command=self.import_test_data_file).pack(fill="x", pady=4)
+        self._counter_record = ttk.Label(tab, text="")
+        self._counter_success = ttk.Label(tab, text="", foreground=PALETTE["success"])
+        self._counter_failed = ttk.Label(tab, text="", foreground=PALETTE["error"])
+        self._counter_invalid = ttk.Label(tab, text="", foreground=PALETTE["warning"])
+        for widget in (self._counter_record, self._counter_success, self._counter_failed, self._counter_invalid):
+            widget.pack(anchor="w")
+
+        ttk.Label(tab, text=tr("MACROS"), style="Heading.TLabel").pack(anchor="w", pady=(12, 4))
+        for name in (*STAGE_MACROS, RESET_MACRO):
             row = ttk.Frame(tab)
             row.pack(fill="x", pady=3)
-            ttk.Label(row, text=name, width=12).pack(side="left")
+            ttk.Label(row, text=name, width=10).pack(side="left")
             ttk.Button(row, text=tr("Record"), style="Success.TButton",
                        command=lambda n=name: self.record_named_macro(n)).pack(side="left", padx=2)
             ttk.Button(row, text=tr("Edit"), command=lambda n=name: self.edit_named_macro(n)).pack(
@@ -1894,50 +1929,70 @@ class App(tk.Tk):
                 side="left", padx=2
             )
 
-        ttk.Label(tab, text=tr("STATES"), style="Heading.TLabel").pack(anchor="w", pady=(12, 4))
-        for name, capture_label in (
-            (AUTH_ERROR, tr("CAPTURE ERROR STATE")),
-            (AUTH_SUCCESS, tr("CAPTURE SUCCESS STATE")),
-            (MACRO2_ERROR, tr("CAPTURE MACRO 2 ERROR STATE")),
-            (MACRO2_SUCCESS, tr("CAPTURE MACRO 2 SUCCESS STATE")),
-        ):
+        ttk.Label(tab, text=tr("VERIFY"), style="Heading.TLabel").pack(anchor="w", pady=(12, 4))
+        for stage in range(1, 5):
             block = ttk.Frame(tab)
-            block.pack(fill="x", pady=4)
-            ttk.Label(block, text=name, style="Heading.TLabel").pack(anchor="w")
+            block.pack(fill="x", pady=6)
+            ttk.Label(block, text=f"VERIFY_{stage}", style="Heading.TLabel").pack(anchor="w")
             buttons = ttk.Frame(block)
             buttons.pack(fill="x")
             ttk.Button(
-                buttons, text=tr("Capture"), style="Success.TButton",
-                command=lambda n=name: self.capture_result_state(n),
+                buttons, text=tr("Capture Success"), style="Success.TButton",
+                command=lambda n=verify_success(stage): self.capture_result_state(n),
             ).pack(side="left", padx=(0, 4))
             ttk.Button(
-                buttons, text=tr("Test detection"),
-                command=lambda n=name: self.test_state_detection(n),
+                buttons, text=tr("Capture Error"), style="Danger.TButton",
+                command=lambda n=verify_error(stage): self.capture_result_state(n),
             ).pack(side="left", padx=2)
-            ttk.Button(buttons, text=tr("Edit"), command=lambda n=name: self.edit_named_state(n)).pack(
-                side="left", padx=2
-            )
+            ttk.Button(
+                buttons, text=tr("Test"),
+                command=lambda n=verify_success(stage): self.test_state_detection(n),
+            ).pack(side="left", padx=2)
 
-        ttk.Label(tab, text=tr("TEST DATA"), style="Heading.TLabel").pack(anchor="w", pady=(12, 4))
+        ttk.Label(tab, text=tr("RESET / START"), style="Heading.TLabel").pack(anchor="w", pady=(8, 4))
+        start_row = ttk.Frame(tab)
+        start_row.pack(fill="x", pady=2)
+        ttk.Button(start_row, text=tr("Capture start screen"),
+                   command=lambda: self.capture_result_state(START_STATE)).pack(side="left")
+        ttk.Button(start_row, text=tr("Test"),
+                   command=lambda: self.test_state_detection(START_STATE)).pack(side="left", padx=4)
+        manual_row = ttk.Frame(tab)
+        manual_row.pack(fill="x", pady=2)
+        ttk.Button(
+            manual_row, text=tr("Capture manual / bot-check"),
+            command=lambda: self.capture_result_state(MANUAL_STATE),
+        ).pack(side="left")
+        ttk.Button(manual_row, text=tr("Test"),
+                   command=lambda: self.test_state_detection(MANUAL_STATE)).pack(side="left", padx=4)
         ttk.Label(
             tab,
-            text=tr("login / password — AUTH_VK types these; passwords are not logged"),
-            style="Muted.TLabel", wraplength=280,
-        ).pack(anchor="w")
-        columns = tuple(self.project.test_data.columns)
+            text=tr("Bot-check is never solved. The run waits until you press Continue."),
+            style="Muted.TLabel", wraplength=260,
+        ).pack(anchor="w", pady=(4, 8))
+
+        ttk.Label(tab, text=tr("TEST DATA"), style="Heading.TLabel").pack(anchor="w")
+        columns = ("email", "password")
         self._test_data_tree = ttk.Treeview(tab, columns=columns, show="headings", height=5)
-        for column in columns:
-            self._test_data_tree.heading(column, text=column)
-            self._test_data_tree.column(column, width=110)
+        self._test_data_tree.heading("email", text="email")
+        self._test_data_tree.heading("password", text="password")
+        self._test_data_tree.column("email", width=140)
+        self._test_data_tree.column("password", width=80)
         self._test_data_tree.pack(fill="x", pady=4)
+        ttk.Label(tab, text=tr("INVALID"), style="Heading.TLabel").pack(anchor="w", pady=(8, 2))
+        self._invalid_tree = ttk.Treeview(tab, columns=("line", "reason"), show="headings", height=3)
+        self._invalid_tree.heading("line", text=tr("Line"))
+        self._invalid_tree.heading("reason", text=tr("Reason"))
+        self._invalid_tree.column("line", width=50)
+        self._invalid_tree.column("reason", width=180)
+        self._invalid_tree.pack(fill="x")
         data_buttons = ttk.Frame(tab)
-        data_buttons.pack(fill="x")
+        data_buttons.pack(fill="x", pady=4)
         ttk.Button(data_buttons, text=tr("+ Add row"), style="Success.TButton",
                    command=self.add_test_row).pack(side="left")
         ttk.Button(data_buttons, text=tr("Delete"), style="Danger.TButton",
                    command=self.delete_test_row).pack(side="left", padx=4)
         self.refresh_test_data()
-        return tab
+        return outer
 
     def _build_left_panel(self, parent: tk.Misc) -> ttk.Frame:
         frame = ttk.Frame(parent, width=330)
@@ -1997,24 +2052,31 @@ class App(tk.Tk):
         ttk.Label(frame, text=tr("MACRO"), style="Heading.TLabel").pack(anchor="w", pady=(6, 4))
         self._record_macro_button = ttk.Button(
             frame,
-            text="+ " + tr("RECORD MACRO") + f"  ({AUTH_MACRO})",
+            text="+ " + tr("RECORD MACRO") + "  (MACRO_1)",
             style="Success.TButton",
-            command=lambda: self.record_named_macro(AUTH_MACRO),
+            command=lambda: self.record_named_macro("MACRO_1"),
         )
         self._record_macro_button.pack(fill="x", pady=(0, 4))
         extra = ttk.Frame(frame)
-        extra.pack(fill="x", pady=(0, 8))
+        extra.pack(fill="x", pady=(0, 4))
+        for name in STAGE_MACROS[1:]:
+            ttk.Button(
+                extra, text=name, style="Success.TButton",
+                command=lambda n=name: self.record_named_macro(n),
+            ).pack(side="left", padx=(0, 4))
+        extra2 = ttk.Frame(frame)
+        extra2.pack(fill="x", pady=(0, 8))
         ttk.Button(
-            extra, text=tr("RECORD MACRO 2"), style="Success.TButton",
-            command=lambda: self.record_named_macro(SECOND_MACRO),
+            extra2, text=tr("CAPTURE SUCCESS STATE"), style="Success.TButton",
+            command=lambda: self.capture_result_state(verify_success(1)),
         ).pack(side="left")
         ttk.Button(
-            extra, text=tr("CAPTURE ERROR STATE"), style="Danger.TButton",
-            command=lambda: self.capture_result_state(AUTH_ERROR),
+            extra2, text=tr("CAPTURE ERROR STATE"), style="Danger.TButton",
+            command=lambda: self.capture_result_state(verify_error(1)),
         ).pack(side="left", padx=4)
         ttk.Button(
-            extra, text=tr("CAPTURE SUCCESS STATE"), style="Success.TButton",
-            command=lambda: self.capture_result_state(AUTH_SUCCESS),
+            extra2, text=tr("LOAD TEST DATA"),
+            command=self.import_test_data_file,
         ).pack(side="left")
         buttons = FlowFrame(frame)
         buttons.pack(fill="x", pady=(0, 6))
@@ -2136,6 +2198,13 @@ class App(tk.Tk):
             self.project.settings.ocr_engine,
             tr("DRY RUN") if self.dry_run.get() else tr("LIVE INPUT"),
         )
+        data = self.project.test_data
+        text += "   |   " + tr("Current record: %s / %s") % (
+            data.current_number() if data.rows else 0, data.total()
+        )
+        text += "   |   " + tr("Success: %s") % data.successes
+        text += "   |   " + tr("Failed: %s") % data.failures
+        text += "   |   " + tr("Invalid: %s") % len(data.invalid)
         self._status_label.configure(text=text)
         if self.window is not None and self.window.is_alive():
             rect = self.window.client_rect
@@ -2198,6 +2267,7 @@ class App(tk.Tk):
                     self._on_engine_finished(payload)
         except queue.Empty:
             pass
+        self.refresh_run_indicators()
 
     def _append_log(self, record: LogRecord) -> None:
         try:
@@ -2820,7 +2890,7 @@ class App(tk.Tk):
         self._insert_node(node)
 
     def record_macro_node(self) -> None:
-        self.record_named_macro(AUTH_MACRO)
+        self.record_named_macro("MACRO_1")
 
     def record_named_macro(self, name: str) -> None:
         """Record clicks in LDPlayer and store them as a named macro, not STATE_A."""
@@ -2829,7 +2899,9 @@ class App(tk.Tk):
             return
         macro = self.project.ensure_macro(name)
         macro.actions = list(actions)
-        bound = bind_typed_text_to_test_data(macro, self.project.test_data)
+        bound = bind_typed_text_to_test_data(
+            macro, self.project.test_data, allow_password=(name == "MACRO_3")
+        )
         self.project.mark_dirty()
         self.refresh_workflow()
         self.log.info("Recorded %s action(s) into %s", len(actions), name)
@@ -2974,14 +3046,63 @@ class App(tk.Tk):
         tree.delete(*tree.get_children())
         data = self.project.test_data
         for index, row in enumerate(data.rows):
-            values = []
-            for column in data.columns:
-                value = row.get(column, "")
-                if data.is_sensitive(column) and value:
-                    values.append("***")
-                else:
-                    values.append(value)
-            tree.insert("", "end", iid=str(index), values=values)
+            tree.insert("", "end", iid=str(index), values=(row.get("email") or row.get("login") or "", "***" if row.get("password") else ""))
+        invalid = getattr(self, "_invalid_tree", None)
+        if invalid is not None:
+            invalid.delete(*invalid.get_children())
+            for item in data.invalid:
+                invalid.insert("", "end", values=(item.line, item.reason))
+        self.refresh_counters()
+
+    def refresh_counters(self) -> None:
+        data = self.project.test_data
+        current = data.current_number() if data.rows else 0
+        total = data.total()
+        record = getattr(self, "_counter_record", None)
+        if record is None:
+            return
+        record.configure(text=tr("Current record: %s / %s") % (current, total))
+        self._counter_success.configure(text=tr("Success: %s") % data.successes)
+        self._counter_failed.configure(text=tr("Failed: %s") % data.failures)
+        self._counter_invalid.configure(text=tr("Invalid: %s") % len(data.invalid))
+
+    def refresh_run_indicators(self) -> None:
+        self.refresh_counters()
+        bar = getattr(self, "_manual_bar", None)
+        main = getattr(self, "_main", None)
+        if bar is None or main is None:
+            return
+        required = bool(self._context is not None and getattr(self._context, "manual_required", False))
+        if required:
+            if not bar.winfo_ismapped():
+                bar.pack(fill="x", before=main)
+        else:
+            bar.pack_forget()
+
+    def continue_manual(self) -> None:
+        context = self._context
+        if context is not None and getattr(context, "manual_continue", None) is not None:
+            context.manual_continue.set()
+            self.log.info("Manual action confirmed, continuing")
+
+    def import_test_data_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title=tr("LOAD TEST DATA"),
+            filetypes=[("Text", "*.txt *.csv *.lst"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            rows, invalid = parse_record_file(path)
+        except OSError as exc:
+            messagebox.showerror(tr("LOAD TEST DATA"), str(exc))
+            return
+        self.project.test_data.replace_rows(rows, invalid, source_name=Path(path).name)
+        self.refresh_test_data()
+        self.log.info(
+            "Imported %s record(s), %s invalid line(s) from %s",
+            len(rows), len(invalid), Path(path).name,
+        )
 
     def add_test_row(self) -> None:
         data = self.project.test_data

@@ -466,17 +466,28 @@ class TypeText(Action):
     variable: str = ""  # read the value from a variable instead of the project file
 
     def execute(self, ctx: "AnalysisContext") -> ActionResult:
+        from pipeline import substitute_placeholders
+
+        sensitive = self.sensitive
         if self.variable:
             raw = ctx.variables.get(self.variable, "")
             if isinstance(raw, Secret):
+                macro = getattr(ctx, "current_macro", "") or ""
+                if macro and macro != "MACRO_3":
+                    ctx.log.warning("PASSWORD is not used in this macro")
+                    return ActionResult(True, "password skipped")
                 value = raw.reveal()
                 sensitive = True
             else:
                 value = str(raw or "")
                 sensitive = self.sensitive
         else:
-            value = self.text
-            sensitive = self.sensitive
+            value, from_placeholder = substitute_placeholders(self.text, ctx)
+            sensitive = self.sensitive or from_placeholder
+            compact = (self.text or "").upper().replace(" ", "")
+            if not value and "{{PASSWORD}}" in compact:
+                ctx.log.warning("PASSWORD is not used in this macro")
+                return ActionResult(True, "password skipped")
         if not value:
             return ActionResult(False, "nothing to type")
         if self.clear_first:
@@ -488,6 +499,11 @@ class TypeText(Action):
     def describe(self) -> str:
         if self.variable:
             return tr("TYPE TEXT from variable '%s'") % self.variable
+        compact = (self.text or "").upper().replace(" ", "")
+        if "{{PASSWORD}}" in compact:
+            return tr("TYPE TEXT from variable '%s'") % "PASSWORD"
+        if "{{EMAIL}}" in compact:
+            return tr("TYPE TEXT from variable '%s'") % "EMAIL"
         if self.sensitive:
             return tr("TYPE TEXT (%s)") % mask_text(self.text)
         preview = self.text if len(self.text) <= 24 else self.text[:21] + "..."

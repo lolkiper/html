@@ -78,7 +78,7 @@ def test_the_scenario_diagram_is_translated(russian):
     project = example_project()
     text = outline_text(project.workflow)
     assert text.startswith("НАЧАЛО")
-    assert "ЕСЛИ СОСТОЯНИЕ AUTH_ERROR обнаружено" in text
+    assert "ЕСЛИ СОСТОЯНИЕ VERIFY_1_ERROR обнаружено" in text
     assert "├── ДА" in text and "└── ИНАЧЕ" in text
     assert "ИНАЧЕ ЕСЛИ" in text
     assert "ПОВТОР x3" in text and "ТЕЛО" in text

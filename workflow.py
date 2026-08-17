@@ -649,6 +649,8 @@ class WorkflowRunner:
         if macro is None:
             self.log.warning("Macro '%s' is not defined", name)
             return NodeOutcome(NodeStatus.FAILED, f"unknown macro {name}")
+        self.ctx.current_macro = name
+        self.ctx.allow_password = name == "MACRO_3"
         actions = list(macro.actions)
         if not actions:
             return NodeOutcome(NodeStatus.SUCCESS, f"{name} empty")
