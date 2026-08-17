@@ -1,0 +1,12 @@
+# LDPlayer Visual UI Tester - core dependencies (Python 3.11+)
+#
+# This is everything the app needs to start, recognise screens and act.
+# OCR is optional and lives in requirements-ocr.txt.
+
+numpy>=1.26
+opencv-python>=4.9          # template matching, colour analysis, image maths
+Pillow>=10.2                # decoding reference images, preview in the editor
+pyautogui>=0.9.54           # mouse and keyboard input
+mss>=9.0                    # capture fallback / screen-region capture
+pyperclip>=1.8              # typing non-ASCII text through the clipboard
+pynput>=1.7                 # recording real clicks and keystrokes (macro recorder)

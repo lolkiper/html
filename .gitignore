@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Runtime output: text logs only, never images
+logs/
+*.log
+
+# Local projects created by the app
+*.ldproj/
+
+# These must never exist: captured frames stay in RAM
+screenshots/
+cache_images/
+frame_cache/
+temp/
