@@ -1056,3 +1056,37 @@ input[type='range']:disabled {
 .queue-table tr.is-skip {
   opacity: 0.78;
 }
+
+/* ------------------------------------------------------ Настройки вкладки */
+.brand .btn--mini {
+  margin-left: 6px;
+}
+
+.ws-settings {
+  flex: 0 0 auto;
+}
+
+.ws-settings[hidden] {
+  display: none;
+}
+
+.ws-settings__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ws-settings__row .field {
+  flex: 1 1 220px;
+  margin-bottom: 0;
+}
+
+.ws-settings__row .field--narrow {
+  flex: 0 0 150px;
+}
+
+.ws-settings__actions {
+  flex: 0 0 auto;
+  padding-bottom: 1px;
+}

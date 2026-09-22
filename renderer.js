@@ -5,10 +5,42 @@
  * window.api (preload.js), напрямую Node в этом процессе не используется.
  */
 
-const STORAGE_KEY = 'shorts-inserter:settings';
+/**
+ * Каждая языковая вкладка — отдельная копия этой страницы (index.html?ws=ws1…ws5)
+ * в своём WebContentsView. Настройки хранятся под ключом своей вкладки, а
+ * main-процесс по отправителю запроса понимает, чьи это папки и очереди.
+ */
+const WS_ID = new URLSearchParams(window.location.search).get('ws') || 'ws1';
+const LEGACY_STORAGE_KEY = 'shorts-inserter:settings';
+const LEGACY_IMPORTED_KEY = 'shorts-inserter:legacy-imported';
+const STORAGE_KEY = `shorts-inserter:settings:${WS_ID}`;
 const MAX_LOG_ROWS = 2000;
+const FOLDER_REPORT_DELAY_MS = 250;
 
 const el = {
+  wsTitle: document.getElementById('ws-title'),
+  wsSubtitle: document.getElementById('ws-subtitle'),
+  wsSettingsToggle: document.getElementById('ws-settings-toggle'),
+  wsSettings: document.getElementById('ws-settings'),
+  wsName: document.getElementById('ws-name'),
+  wsFlag: document.getElementById('ws-flag'),
+  wsCode: document.getElementById('ws-code'),
+  wsSave: document.getElementById('ws-save'),
+  wsSettingsNote: document.getElementById('ws-settings-note'),
+  wsMakeFolders: document.getElementById('ws-make-folders'),
+  wsReset: document.getElementById('ws-reset'),
+  wsFoldersExample: document.getElementById('ws-folders-example'),
+  wsFoldersExampleOut: document.getElementById('ws-folders-example-out'),
+  exportHint: document.getElementById('export-hint'),
+  parallelJobs: document.getElementById('parallel-jobs'),
+  fileLabel: document.getElementById('file-label'),
+  conflictNotes: {
+    sourceDir: document.getElementById('conflict-sourceDir'),
+    outputDir: document.getElementById('conflict-outputDir'),
+    downloadDir: document.getElementById('conflict-downloadDir'),
+    renameDir: document.getElementById('conflict-renameDir')
+  },
+
   chipVersion: document.getElementById('chip-version'),
   chipFfmpeg: document.getElementById('chip-ffmpeg'),
   chipYtdlp: document.getElementById('chip-ytdlp'),
@@ -157,6 +189,10 @@ const el = {
 };
 
 const state = {
+  workspace: { id: WS_ID, name: '', code: 'es', flag: '' },
+  conflicts: [],
+  folderReportTimer: null,
+  downloadTableSignature: '',
   running: false,
   logLines: [],
   downloading: false,
@@ -308,17 +344,19 @@ function setRunning(running) {
 
   const lockable = [
     el.sourceDir, el.shortsFile, el.overlayFile, el.outputDir,
-    el.percent, el.percentRange, el.encoder, el.exportMode, el.resourceUsage, el.frame, el.fit, el.useOverlay,
+    el.percent, el.percentRange, el.encoder, el.exportMode, el.resourceUsage, el.parallelJobs,
+    el.frame, el.fit, el.useOverlay,
     el.overlayOpacity, el.verbose,
     el.useSplit, el.closeupFile, el.leftShare, el.feather,
     el.leftZoom, el.leftOffset, el.rightZoom, el.rightOffset
   ];
-  lockable.forEach((node) => {
+  lockable.filter(Boolean).forEach((node) => {
     node.disabled = running;
   });
   document.querySelectorAll('[data-pick]').forEach((button) => {
     button.disabled = running;
   });
+  if (el.wsCode) el.wsCode.disabled = running;
 }
 
 function updateOverlayState() {
@@ -393,7 +431,8 @@ function collectSettings() {
     percent: clamp(Number(el.percent.value) || 90, 50, 99),
     encoder: el.encoder.value,
     exportMode: el.exportMode ? el.exportMode.value : 'auto',
-    resourceUsage: el.resourceUsage ? el.resourceUsage.value : 'balanced',
+    resourceUsage: el.resourceUsage ? el.resourceUsage.value : 'max',
+    parallelJobs: el.parallelJobs ? el.parallelJobs.value : 'auto',
     frame: el.frame.value,
     fit: el.fit.value,
     verbose: el.verbose.checked,
@@ -418,15 +457,66 @@ function saveSettings() {
   } catch (err) {
     /* приватный режим / нет доступа к storage — не критично */
   }
+  scheduleFolderReport();
+}
+
+function currentFolders() {
+  return {
+    sourceDir: el.sourceDir.value.trim(),
+    outputDir: el.outputDir.value.trim(),
+    downloadDir: el.dlDir.value.trim(),
+    renameDir: el.rnDir.value.trim()
+  };
+}
+
+/** main-процесс знает папки всех вкладок и не даёт двум вкладкам взять одну папку. */
+function scheduleFolderReport() {
+  if (state.folderReportTimer) clearTimeout(state.folderReportTimer);
+  state.folderReportTimer = setTimeout(reportFolders, FOLDER_REPORT_DELAY_MS);
+}
+
+async function reportFolders() {
+  if (state.folderReportTimer) clearTimeout(state.folderReportTimer);
+  state.folderReportTimer = null;
+  const result = await window.api.setWorkspaceFolders(currentFolders());
+  if (result && result.ok) applyConflicts(result.conflicts);
+  return result;
+}
+
+function applyConflicts(conflicts) {
+  state.conflicts = Array.isArray(conflicts) ? conflicts : [];
+  Object.entries(el.conflictNotes).forEach(([field, node]) => {
+    if (!node) return;
+    const conflict = state.conflicts.find((item) => item.field === field);
+    node.hidden = !conflict;
+    node.textContent = conflict
+      ? `⚠ Эта папка уже занята вкладкой ${conflict.otherName} (${conflict.otherLabel}). Выберите другую — вкладки не должны пересекаться.`
+      : '';
+  });
+}
+
+function conflictFor(...fields) {
+  return state.conflicts.find((item) => fields.includes(item.field)) || null;
+}
+
+function readSavedSettings() {
+  try {
+    const own = localStorage.getItem(STORAGE_KEY);
+    if (own) return JSON.parse(own);
+    // Настройки версии с одной вкладкой переезжают в первую вкладку один раз.
+    if (WS_ID === 'ws1' && !localStorage.getItem(LEGACY_IMPORTED_KEY)) {
+      const legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || 'null');
+      localStorage.setItem(LEGACY_IMPORTED_KEY, '1');
+      if (legacy) return { ...legacy, resourceUsage: 'max', parallelJobs: 'auto' };
+    }
+  } catch (err) {
+    /* повреждённые настройки — начинаем с чистых */
+  }
+  return null;
 }
 
 function restoreSettings() {
-  let saved = null;
-  try {
-    saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-  } catch (err) {
-    saved = null;
-  }
+  const saved = readSavedSettings();
   if (!saved) return;
 
   el.sourceDir.value = saved.sourceDir || '';
@@ -468,6 +558,11 @@ function restoreSettings() {
     else if (saved.accel === 'gpu') el.resourceUsage.value = 'high';
     else if (saved.accel === 'cpu') el.resourceUsage.value = 'low';
     else el.resourceUsage.value = 'balanced';
+    if (!el.resourceUsage.value) el.resourceUsage.value = 'max';
+  }
+  if (el.parallelJobs && saved.parallelJobs != null) {
+    el.parallelJobs.value = String(saved.parallelJobs);
+    if (!el.parallelJobs.value) el.parallelJobs.value = 'auto';
   }
   el.frame.value = saved.frame && saved.frame !== 'source' ? saved.frame : 'square1080';
   if (saved.fit) el.fit.value = saved.fit;
@@ -700,8 +795,16 @@ el.stop.addEventListener('click', async () => {
 });
 
 el.start.addEventListener('click', async () => {
-  if (state.running) return;
+  if (state.running || state.starting) return;
+  state.starting = true;
+  try {
+    await startProcessing();
+  } finally {
+    state.starting = false;
+  }
+});
 
+async function startProcessing() {
   const settings = collectSettings();
   const problems = [];
   if (!settings.sourceDir) problems.push('Не выбрана папка с исходными видео.');
@@ -710,6 +813,11 @@ el.start.addEventListener('click', async () => {
   if (settings.useOverlay && !settings.overlayFile) problems.push('Включён оверлей, но файл не выбран.');
   if (settings.useSplit && !settings.closeupFile) {
     problems.push('Включён сплит-скрин, но видео для правой половины не выбрано.');
+  }
+  await reportFolders();
+  const conflict = conflictFor('sourceDir', 'outputDir');
+  if (conflict) {
+    problems.push(`Папка «${conflict.path}» занята вкладкой ${conflict.otherName}. Выберите для этой вкладки свою папку.`);
   }
   if (problems.length) {
     problems.forEach((message) => appendLog('error', message));
@@ -726,17 +834,29 @@ el.start.addEventListener('click', async () => {
   el.counterFailed.textContent = '0';
   el.counterTotal.textContent = '0';
   el.status.textContent = 'Готовим очередь…';
-  appendLog('info', '— Запуск обработки —');
+  appendLog('info', `— Запуск обработки (${state.workspace.flag} ${state.workspace.name}, файлы ${state.workspace.code}N) —`);
 
-  await window.api.startProcessing(settings);
-});
+  const result = await window.api.startProcessing(settings);
+  if (result && !result.ok && !result.reported) {
+    setRunning(false);
+    setBadge('Ошибка', 'error');
+    el.status.textContent = result.error || 'Не удалось запустить обработку.';
+    appendLog('error', result.error || 'Не удалось запустить обработку.');
+  }
+}
 
 // ---------------------------------------------------------- Подписки на main
 
 window.api.onLog(({ level, message }) => appendLog(level, message));
 
-window.api.onProgress((progress) => {
+function applyRenderProgress(progress) {
+  if (!progress) return;
   setProgress(progress.filePercent, progress.overallPercent);
+  if (el.fileLabel && Number.isFinite(progress.active)) {
+    el.fileLabel.textContent = progress.active > 1
+      ? `Текущие файлы (${progress.active} одновременно, среднее)`
+      : 'Текущий файл';
+  }
   if (progress.status) el.status.textContent = progress.status;
   if (Number.isFinite(progress.total)) el.counterTotal.textContent = String(progress.total);
   if (Number.isFinite(progress.done)) el.counterDone.textContent = String(progress.done);
@@ -751,13 +871,16 @@ window.api.onProgress((progress) => {
     ].filter(Boolean);
     if (bits.length) el.encodeMeta.textContent = bits.join(' · ');
   }
-});
+}
+
+window.api.onProgress(applyRenderProgress);
 
 window.api.onState(({ running }) => setRunning(running));
 
 window.api.onDone((payload) => {
   setRunning(false);
   el.openOutput.disabled = !el.outputDir.value.trim();
+  if (el.fileLabel) el.fileLabel.textContent = 'Текущий файл';
 
   if (!payload.ok) {
     setBadge('Ошибка', 'error');
@@ -792,13 +915,59 @@ window.api.onDone((payload) => {
 
 // ----------------------------------------------------------------- Старт UI
 
+function describeHardware(hardware) {
+  if (!hardware || !hardware.ok) return 'Не удалось проверить видеокарту — будет software-кодирование.';
+  if (hardware.gpu) {
+    return `Hardware Encoder: ${hardware.gpu}. Склейка на CPU (${hardware.cores} ядер), кодирование на GPU.`;
+  }
+  if (hardware.compiledGpu && hardware.compiledGpu.length) {
+    return `FFmpeg видит ${hardware.compiledGpu.join(', ')}, но тест кадра не прошёл` +
+      (hardware.probeError ? ` (${hardware.probeError})` : '') +
+      `. Будет software-кодирование на ${hardware.cores} ядрах.`;
+  }
+  return `Видеокарта недоступна — software-кодирование на ${hardware.cores} ядрах.`;
+}
+
+function applyWorkspaceInfo(workspace) {
+  if (!workspace) return;
+  state.workspace = { ...state.workspace, ...workspace };
+  const { name, code, flag } = state.workspace;
+  document.title = `${flag} ${name} — Shorts Inserter`;
+  el.wsTitle.textContent = `${flag} ${name}`;
+  el.wsSubtitle.textContent =
+    `Вкладка ${state.workspace.index + 1} из 5 · свои папки, очереди и настройки · готовые ролики: ${code}1.mp4, ${code}2.mp4…`;
+  if (el.exportHint) el.exportHint.textContent = `Результат: ${code}1.mp4, ${code}2.mp4, …`;
+  if (el.wsFoldersExample) el.wsFoldersExample.textContent = `${code}/download`;
+  if (el.wsFoldersExampleOut) el.wsFoldersExampleOut.textContent = `${code}/montage`;
+  if (document.activeElement !== el.wsName) el.wsName.value = name;
+  if (document.activeElement !== el.wsFlag) el.wsFlag.value = flag;
+  if (document.activeElement !== el.wsCode) el.wsCode.value = code;
+}
+
+/** Вкладка могла перезагрузиться посреди работы — забираем текущее состояние из main. */
+function applyRuntimeState(runtimeState) {
+  if (!runtimeState) return;
+  if (runtimeState.rendering) {
+    setRunning(true);
+    setBadge('Обработка', 'running');
+    applyRenderProgress(runtimeState.lastRender);
+  }
+  if (runtimeState.downloading) {
+    setDownloadRunning(true, runtimeState.downloadPaused);
+    el.dlBadge.textContent = runtimeState.downloadPaused ? 'Пауза' : 'Скачивание';
+    el.dlBadge.className = `badge ${runtimeState.downloadPaused ? 'badge--error' : 'badge--running'}`;
+    if (runtimeState.lastDownload) applyDownloadProgress(runtimeState.lastDownload);
+  }
+}
+
 (async function init() {
   clearLog();
   updateScheme();
   updateOverlayState();
   updateSplitState();
 
-  const info = await window.api.getAppInfo();
+  const [info, wsInfo] = await Promise.all([window.api.getAppInfo(), window.api.getWorkspace()]);
+  if (wsInfo && wsInfo.ok) applyWorkspaceInfo(wsInfo.workspace);
 
   const fillSelect = (node, items) => {
     items.forEach((item) => {
@@ -812,32 +981,22 @@ window.api.onDone((payload) => {
   fillSelect(el.encoder, info.encoders);
   if (el.exportMode) fillSelect(el.exportMode, info.exportModes || []);
   if (el.resourceUsage) fillSelect(el.resourceUsage, info.resourceModes || []);
+  if (el.parallelJobs) fillSelect(el.parallelJobs, info.parallelModes || []);
   fillSelect(el.frame, info.frames);
   fillSelect(el.fit, info.fits);
 
   el.encoder.value = info.defaults.encoder;
   if (el.exportMode) el.exportMode.value = info.defaults.exportMode || 'auto';
-  if (el.resourceUsage) el.resourceUsage.value = info.defaults.resourceUsage || 'balanced';
+  if (el.resourceUsage) el.resourceUsage.value = info.defaults.resourceUsage || 'max';
+  if (el.parallelJobs) el.parallelJobs.value = String(info.defaults.parallelJobs || 'auto');
   el.frame.value = info.defaults.frame;
   el.fit.value = info.defaults.fit;
   el.percent.value = info.defaults.percent;
   el.percentRange.value = info.defaults.percent;
 
-  const hardware = info.hardware || {};
-  if (el.accelNote) {
-    if (hardware.gpu) {
-      el.accelNote.textContent =
-        `Hardware Encoder: ${hardware.gpu}. Склейка на CPU, кодирование на GPU, один ffmpeg на файл.`;
-    } else if (hardware.compiledGpu && hardware.compiledGpu.length) {
-      el.accelNote.textContent =
-        `FFmpeg видит ${hardware.compiledGpu.join(', ')}, но тест кадра не прошёл` +
-        (hardware.probeError ? ` (${hardware.probeError})` : '') +
-        `. Будет software veryfast, не все ядра.`;
-    } else {
-      el.accelNote.textContent =
-        'Видеокарта недоступна — software veryfast на нескольких потоках, без 100% всех ядер.';
-    }
-  }
+  window.api.getHardware().then((hardware) => {
+    if (el.accelNote) el.accelNote.textContent = describeHardware(hardware);
+  });
 
   const splitDefaults = info.defaults.split || {};
   el.leftShare.value = splitDefaults.leftShare;
@@ -864,14 +1023,107 @@ window.api.onDone((payload) => {
   updateScheme();
 
   el.openOutput.disabled = !el.outputDir.value.trim();
-  refreshAllInfo();
+  bindWorkspaceUi();
   bindDownloadUi();
   bindRenameUi();
   bindQueueCleanupUi();
+  await reportFolders();
+  refreshAllInfo();
+  applyRuntimeState(wsInfo && wsInfo.state);
   await refreshDownloadQueue();
 
-  appendLog('info', 'Приложение готово. Выберите папки и файлы, затем нажмите «Начать обработку».');
+  appendLog(
+    'info',
+    `Вкладка ${state.workspace.flag} ${state.workspace.name} готова. Выберите папки и файлы, затем нажмите «Начать обработку».`
+  );
 })();
+
+// ------------------------------------------------------- Настройки вкладки
+
+function bindWorkspaceUi() {
+  window.api.onWorkspaceInfo(applyWorkspaceInfo);
+  window.api.onWorkspaceConflicts(applyConflicts);
+
+  el.wsSettingsToggle.addEventListener('click', () => {
+    const open = el.wsSettings.hidden;
+    el.wsSettings.hidden = !open;
+    el.wsSettingsToggle.setAttribute('aria-expanded', String(open));
+  });
+
+  el.wsSave.addEventListener('click', async () => {
+    const result = await window.api.updateWorkspace({
+      name: el.wsName.value,
+      flag: el.wsFlag.value,
+      code: el.wsCode.value
+    });
+    if (!result || !result.ok) {
+      el.wsSettingsNote.textContent = (result && result.error) || 'Не удалось сохранить.';
+      el.wsSettingsNote.className = 'field__note field__note--error';
+      return;
+    }
+    applyWorkspaceInfo(result.workspace);
+    el.wsSettingsNote.textContent =
+      `Сохранено. Готовые ролики этой вкладки: ${result.workspace.code}1.mp4, ${result.workspace.code}2.mp4…`;
+    el.wsSettingsNote.className = 'field__note field__note--ok';
+    refreshSourceInfo();
+  });
+
+  el.wsMakeFolders.addEventListener('click', async () => {
+    const result = await window.api.makeWorkspaceFolders();
+    if (!result || !result.ok) {
+      if (result && result.error) {
+        el.wsSettingsNote.textContent = result.error;
+        el.wsSettingsNote.className = 'field__note field__note--error';
+      }
+      return;
+    }
+    const { folders } = result;
+    if (!state.running) {
+      el.sourceDir.value = folders.sourceDir;
+      el.outputDir.value = folders.outputDir;
+    }
+    if (!state.downloading) el.dlDir.value = folders.downloadDir;
+    el.rnDir.value = folders.renameDir;
+    const titles = await window.api.detectRenameTxt(folders.renameDir);
+    el.rnTxt.value = titles && titles.ok ? titles.file : '';
+    saveSettings();
+    await reportFolders();
+    el.openOutput.disabled = !el.outputDir.value.trim();
+    el.rnOpenDir.disabled = false;
+    refreshAllInfo();
+    await refreshDownloadQueue();
+    el.wsSettingsNote.textContent =
+      `Папки вкладки готовы: скачивание, переименование и исходники — ${folders.downloadDir}; ` +
+      `готовые ролики — ${folders.outputDir}.`;
+    el.wsSettingsNote.className = 'field__note field__note--ok';
+  });
+
+  el.wsReset.addEventListener('click', async () => {
+    if (state.running || state.downloading) {
+      el.wsSettingsNote.textContent = 'Сначала остановите монтаж и скачивание в этой вкладке.';
+      el.wsSettingsNote.className = 'field__note field__note--error';
+      return;
+    }
+    const ok = window.confirm(
+      `Очистить вкладку «${state.workspace.name}»? Сбросятся пути, список ссылок и настройки только этой вкладки. ` +
+        'Видео и файлы на диске не удаляются, другие вкладки не затрагиваются.'
+    );
+    if (!ok) return;
+    const result = await window.api.resetWorkspace();
+    if (!result || !result.ok) {
+      el.wsSettingsNote.textContent = (result && result.error) || 'Не удалось очистить вкладку.';
+      el.wsSettingsNote.className = 'field__note field__note--error';
+      return;
+    }
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      if (WS_ID === 'ws1') localStorage.setItem(LEGACY_IMPORTED_KEY, '1');
+    } catch (err) {
+      /* storage недоступен — перезагрузка всё равно сбросит интерфейс */
+    }
+    window.location.reload();
+  });
+}
 
 // ------------------------------------------------------- Скачивание YouTube
 
@@ -970,9 +1222,32 @@ function syncSelectAllCheckbox() {
   el.dlSelectAll.indeterminate = picked > 0 && picked < total;
 }
 
+function downloadTableSignature(items) {
+  return JSON.stringify((items || []).map((item) => [
+    item.number, item.status, item.title, item.url, item.audioLang, item.audioLanguages,
+    item.audioMissing, item.audioChecked, item.quality, item.attempts, item.lastError,
+    state.audioLangByNumber[String(item.number)] || null
+  ]));
+}
+
+/**
+ * Прогресс скачивания приходит несколько раз в секунду. Таблица на сотни
+ * строк с выпадающими списками пересобирается только если в ней что-то
+ * поменялось — иначе интерфейс подтормаживал на длинных очередях.
+ */
+function renderDownloadTableIfChanged(items) {
+  const signature = downloadTableSignature(items);
+  if (signature === state.downloadTableSignature) {
+    state.downloadItems = Array.isArray(items) ? items : [];
+    return;
+  }
+  renderDownloadTable(items);
+}
+
 function renderDownloadTable(items) {
   el.dlTableBody.innerHTML = '';
   state.downloadItems = Array.isArray(items) ? items : [];
+  state.downloadTableSignature = downloadTableSignature(state.downloadItems);
   const known = new Set(state.downloadItems.map((item) => Number(item.number)));
   Array.from(state.dlSelection).forEach((number) => {
     if (!known.has(number)) state.dlSelection.delete(number);
@@ -1132,8 +1407,12 @@ function applyDownloadProgress(progress) {
       `${lastOk.videoCodec || ''} / ${lastOk.audioCodec || ''}  ` +
       `${lastOk.fileSize ? `${Math.round(lastOk.fileSize / 1024 / 1024 * 10) / 10} MB` : ''}`.replace(/\s+/g, ' ').trim();
   }
-  renderDownloadTable(progress.items);
-  renderDownloadErrors(progress.errors);
+  renderDownloadTableIfChanged(progress.items);
+  const errorsSignature = JSON.stringify(progress.errors || []);
+  if (errorsSignature !== state.downloadErrorsSignature) {
+    state.downloadErrorsSignature = errorsSignature;
+    renderDownloadErrors(progress.errors);
+  }
 }
 
 async function refreshDownloadQueue() {
@@ -1141,7 +1420,10 @@ async function refreshDownloadQueue() {
   el.dlOpen.disabled = !folder;
   if (!folder || !window.api.loadDownloadQueue) return;
   const result = await window.api.loadDownloadQueue(folder);
-  if (!result || !result.ok) return;
+  if (!result || !result.ok) {
+    if (result && result.error) el.dlDirNote.textContent = result.error;
+    return;
+  }
   if (result.note) el.dlDirNote.textContent = result.note;
   if (result.urls && result.urls.length && !el.dlLinks.value.trim()) {
     el.dlLinks.value = result.urls.join('\n');
@@ -1292,6 +1574,16 @@ function bindDownloadUi() {
   });
 
   el.dlStart.addEventListener('click', async () => {
+    if (state.downloading || state.dlStarting) return;
+    state.dlStarting = true;
+    try {
+      await startDownload();
+    } finally {
+      state.dlStarting = false;
+    }
+  });
+
+  async function startDownload() {
     const outputDir = el.dlDir.value.trim();
     const text = el.dlLinks.value;
     if (!outputDir) {
@@ -1305,6 +1597,14 @@ function bindDownloadUi() {
       return;
     }
     saveSettings();
+    await reportFolders();
+    const conflict = conflictFor('downloadDir');
+    if (conflict) {
+      const message = `Папка «${conflict.path}» занята вкладкой ${conflict.otherName}. Выберите для этой вкладки свою папку.`;
+      el.dlStatus.textContent = message;
+      appendDownloadLog('error', message);
+      return;
+    }
     setDownloadRunning(true, false);
     el.dlBadge.textContent = 'Скачивание';
     el.dlBadge.className = 'badge badge--running';
@@ -1316,23 +1616,26 @@ function bindDownloadUi() {
       defaultAudioLang: currentDefaultAudioLang(),
       audioLangs: state.audioLangByNumber
     });
-    if (!result.ok) {
+    if (result && !result.ok && !result.reported) {
       setDownloadRunning(false, false);
       el.dlBadge.textContent = 'Ошибка';
       el.dlBadge.className = 'badge badge--error';
       el.dlStatus.textContent = result.error || 'Не удалось запустить очередь.';
       appendDownloadLog('error', result.error || 'Не удалось запустить очередь.');
     }
-  });
+  }
 
   el.dlPause.addEventListener('click', async () => {
-    await window.api.pauseDownload();
+    const result = await window.api.pauseDownload();
+    if (!result || !result.ok) return;
     setDownloadRunning(true, true);
     el.dlBadge.textContent = 'Пауза';
+    el.dlBadge.className = 'badge badge--error';
   });
 
   el.dlResume.addEventListener('click', async () => {
-    await window.api.resumeDownload();
+    const result = await window.api.resumeDownload();
+    if (!result || !result.ok) return;
     setDownloadRunning(true, false);
     el.dlBadge.textContent = 'Скачивание';
     el.dlBadge.className = 'badge badge--running';
@@ -1460,7 +1763,7 @@ function bindRenameUi() {
     updateMin();
     saveSettings();
   });
-  [el.rnRemove, el.rnReports, el.rnKeepTxt].filter(Boolean).forEach((node) => {
+  [el.rnRemove, el.rnReports, el.rnKeepTxt, el.rnDir, el.rnTxt].filter(Boolean).forEach((node) => {
     node.addEventListener('change', saveSettings);
   });
 

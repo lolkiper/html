@@ -11,6 +11,16 @@ function subscribe(channel, callback) {
 
 contextBridge.exposeInMainWorld('api', {
   getAppInfo: () => ipcRenderer.invoke('app:info'),
+  getHardware: () => ipcRenderer.invoke('app:hardware'),
+
+  getWorkspace: () => ipcRenderer.invoke('workspace:get'),
+  getWorkspaceState: () => ipcRenderer.invoke('workspace:state'),
+  updateWorkspace: (payload) => ipcRenderer.invoke('workspace:update', payload),
+  setWorkspaceFolders: (payload) => ipcRenderer.invoke('workspace:set-folders', payload),
+  resetWorkspace: () => ipcRenderer.invoke('workspace:reset'),
+  makeWorkspaceFolders: () => ipcRenderer.invoke('workspace:make-folders'),
+  onWorkspaceInfo: (callback) => subscribe('workspace:info', callback),
+  onWorkspaceConflicts: (callback) => subscribe('workspace:conflicts', callback),
 
   pickDirectory: (options) => ipcRenderer.invoke('dialog:pick-directory', options),
   pickVideo: (options) => ipcRenderer.invoke('dialog:pick-video', options),

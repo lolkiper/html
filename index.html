@@ -14,9 +14,10 @@
       <header class="topbar">
         <div class="brand">
           <div class="brand__text">
-            <h1>Shorts Inserter</h1>
-            <p>Вставка Shorts, скачивание YouTube и умное переименование</p>
+            <h1 id="ws-title">Shorts Inserter</h1>
+            <p id="ws-subtitle">Своя папка, своя очередь и свои настройки у каждой вкладки</p>
           </div>
+          <button type="button" class="btn btn--mini" id="ws-settings-toggle" aria-expanded="false">Настройки вкладки</button>
         </div>
         <div class="topbar__meta">
           <span class="chip" id="chip-version">v—</span>
@@ -24,6 +25,39 @@
           <span class="chip chip--muted" id="chip-ytdlp" title="Путь к yt-dlp">yt-dlp: —</span>
         </div>
       </header>
+
+      <section class="card ws-settings" id="ws-settings" hidden>
+        <div class="ws-settings__row">
+          <div class="field">
+            <label for="ws-name">Название вкладки</label>
+            <input type="text" id="ws-name" maxlength="32" spellcheck="false" />
+          </div>
+          <div class="field field--narrow">
+            <label for="ws-flag">Флаг / значок</label>
+            <input type="text" id="ws-flag" maxlength="8" spellcheck="false" />
+          </div>
+          <div class="field field--narrow">
+            <label for="ws-code">Код (префикс файлов)</label>
+            <input type="text" id="ws-code" maxlength="8" spellcheck="false" />
+          </div>
+          <div class="ws-settings__actions">
+            <button type="button" class="btn btn--primary" id="ws-save">Сохранить</button>
+          </div>
+        </div>
+        <p class="field__note" id="ws-settings-note">
+          Код задаёт имена готовых роликов: es → es1.mp4, es2.mp4… Коды вкладок не должны совпадать.
+        </p>
+        <div class="actions actions--inline">
+          <button type="button" class="btn btn--ghost" id="ws-make-folders">Создать папки вкладки…</button>
+          <button type="button" class="btn btn--danger" id="ws-reset">Очистить вкладку</button>
+        </div>
+        <p class="field__note">
+          «Создать папки вкладки» — выберите общую папку проекта, внутри появится
+          <b id="ws-folders-example">es/download</b> (скачивание, переименование и исходники монтажа) и
+          <b id="ws-folders-example-out">es/montage</b> (готовые ролики). «Очистить вкладку» сбрасывает настройки,
+          списки ссылок и пути только этой вкладки — файлы на диске не удаляются.
+        </p>
+      </section>
 
       <nav class="tabs" id="app-tabs" aria-label="Разделы">
         <button type="button" class="tab is-active" data-view="insert">Вставка Shorts</button>
@@ -47,6 +81,7 @@
                 <button class="btn btn--ghost" data-pick="source-dir">Обзор…</button>
               </div>
               <p class="field__note" id="source-dir-note">Выберите папку — покажем количество найденных видео.</p>
+              <p class="field__note field__note--error" id="conflict-sourceDir" hidden></p>
             </div>
 
             <div class="field">
@@ -161,7 +196,7 @@
           <article class="card">
             <div class="card__head">
               <h2>4. Экспорт</h2>
-              <span class="card__hint">Результат: es1.mp4, es2.mp4, …</span>
+              <span class="card__hint" id="export-hint">Результат: es1.mp4, es2.mp4, …</span>
             </div>
 
             <div class="field">
@@ -170,6 +205,7 @@
                 <input type="text" id="output-dir" placeholder="Не выбрана" spellcheck="false" />
                 <button class="btn btn--ghost" data-pick="output-dir">Обзор…</button>
               </div>
+              <p class="field__note field__note--error" id="conflict-outputDir" hidden></p>
             </div>
 
             <div class="grid-2">
@@ -206,9 +242,22 @@
                 <select id="export-mode"></select>
               </div>
               <div class="field">
-                <label for="resource-usage">Нагрузка на ПК</label>
+                <label for="resource-usage">Скорость / нагрузка на ПК</label>
                 <select id="resource-usage"></select>
-                <p class="field__note" id="accel-note">Hardware encoder если есть. Один файл — один ffmpeg.</p>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="field">
+                <label for="parallel-jobs">Файлов одновременно</label>
+                <select id="parallel-jobs"></select>
+              </div>
+              <div class="field">
+                <p class="field__note" id="accel-note">Проверяем видеокарту…</p>
+                <p class="field__note" id="speed-note">
+                  «Максимум скорости»: без ограничения чтения и пауз между файлами, несколько файлов сразу.
+                  Лимит рендеров общий для всех вкладок, поэтому вкладки не душат друг друга.
+                </p>
               </div>
             </div>
 
@@ -248,7 +297,7 @@
 
             <div class="progress">
               <div class="progress__label">
-                <span>Текущий файл</span>
+                <span id="file-label">Текущий файл</span>
                 <span id="file-percent">0%</span>
               </div>
               <div class="progress__track"><div class="progress__fill" id="file-bar"></div></div>
@@ -316,6 +365,7 @@
               <p class="field__note" id="dl-dir-note">
                 В папке появятся видео, nazvaniya.txt, download_queue.json и download_log.txt. Отдельная папка на ролик не создаётся.
               </p>
+              <p class="field__note field__note--error" id="conflict-downloadDir" hidden></p>
             </div>
           </article>
 
@@ -483,6 +533,7 @@
                 <button class="btn btn--ghost" id="rn-pick-dir">Выбрать папку</button>
               </div>
               <p class="field__note" id="rn-dir-note">Видео найдено: —</p>
+              <p class="field__note field__note--error" id="conflict-renameDir" hidden></p>
             </div>
             <div class="field">
               <label for="rn-txt">Файл названий (nazvaniya.txt)</label>

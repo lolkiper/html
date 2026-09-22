@@ -1,8 +1,8 @@
 {
   "name": "shorts-inserter",
   "productName": "Shorts Inserter",
-  "version": "1.9.3",
-  "description": "Batch tool that inserts Shorts, mass-downloads YouTube, and smart-renames videos, with clearable download and render queues.",
+  "version": "2.0.0",
+  "description": "Batch tool that inserts Shorts, mass-downloads YouTube, and smart-renames videos in five isolated language workspaces.",
   "main": "main.js",
   "author": "Shorts Inserter",
   "license": "MIT",
@@ -38,6 +38,10 @@
     "files": [
       "main.js",
       "preload.js",
+      "shell-preload.js",
+      "shell.html",
+      "shell.js",
+      "shell.css",
       "processor.js",
       "downloader.js",
       "renamer.js",
