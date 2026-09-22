@@ -367,6 +367,21 @@
               </p>
               <p class="field__note field__note--error" id="conflict-downloadDir" hidden></p>
             </div>
+            <div class="field">
+              <label for="dl-parallel">Сколько видео качать одновременно</label>
+              <select id="dl-parallel">
+                <option value="1">1 — по одному</option>
+                <option value="2">2 потока</option>
+                <option value="3" selected>3 потока (рекомендуется)</option>
+                <option value="4">4 потока</option>
+                <option value="5">5 потоков</option>
+                <option value="6">6 потоков</option>
+              </select>
+              <p class="field__note">
+                Каждое видео качается своим процессом на 8 соединений. Больше 4 имеет смысл только на быстром интернете:
+                YouTube может начать отвечать ошибками 403/429 — такие ссылки повторятся автоматически.
+              </p>
+            </div>
           </article>
 
           <article class="card">

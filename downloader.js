@@ -3,17 +3,24 @@
 /**
  * downloader.js — массовое скачивание YouTube / Shorts с умной очередью.
  *
- * Одновременно качается только одно видео. Ошибка одной ссылки не останавливает
- * остальные: ссылка уходит в конец очереди и повторяется с нарастающей паузой.
+ * Одновременно качается до `concurrency` видео (каждое — своим yt-dlp с aria2c
+ * на несколько соединений). Ошибка одной ссылки не останавливает остальные:
+ * ссылка уходит в конец очереди и повторяется с нарастающей паузой.
  * Модуль не зависит от Electron (см. scripts/download-smoke-test.js).
  */
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawn, execFileSync } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 
+/** Значение по умолчанию для библиотеки; приложение передаёт выбор из интерфейса. */
 const MAX_CONCURRENT_DOWNLOADS = 1;
+/** Больше 6 параллельных yt-dlp YouTube начинает отвечать 403/429. */
+const MAX_PARALLEL_DOWNLOADS = 6;
+const DEFAULT_PARALLEL_DOWNLOADS = 3;
+/** Фрагменты DASH/HLS, которые yt-dlp качает сам (без aria2c). */
+const CONCURRENT_FRAGMENTS = 4;
 const QUEUE_FILE = 'download_queue.json';
 const TITLES_FILE = 'nazvaniya.txt';
 const LOG_FILE = 'download_log.txt';
@@ -178,14 +185,21 @@ function resolveJsRuntimeArgs(ytdlpPath) {
   return [];
 }
 
-function defaultCookieBrowser() {
-  if (process.platform === 'win32') return 'edge';
-  if (process.platform === 'darwin') return 'chrome';
-  return 'chrome';
+function cookieBrowserCandidates() {
+  if (process.platform === 'win32') return ['edge', 'chrome', 'firefox'];
+  if (process.platform === 'darwin') return ['chrome', 'safari', 'firefox'];
+  return ['chrome', 'firefox', 'chromium'];
 }
 
 function isBotCheckError(message) {
   return /sign in to confirm you.re not a bot|not a bot|use --cookies/i.test(String(message || ''));
+}
+
+/** Браузер не установлен, запущен и держит базу cookies, или её не расшифровать. */
+function isCookieError(message) {
+  return /cookies? database|could not copy .*cookie|failed to decrypt|could not find .*(cookie|profile)|unsupported browser|keyring|cookies from browser/i.test(
+    String(message || '')
+  );
 }
 
 function shortYtError(message) {
@@ -753,6 +767,8 @@ function buildYtDlpDownloadArgs({
     '8',
     '--http-chunk-size',
     HTTP_CHUNK_SIZE,
+    '--concurrent-fragments',
+    String(CONCURRENT_FRAGMENTS),
     '--no-check-formats',
     '--write-info-json',
     '-f',
@@ -768,6 +784,49 @@ function buildYtDlpDownloadArgs({
   if (preferMp4) args.push('--merge-output-format', 'mp4');
   args.push(url);
   return args;
+}
+
+function normalizeConcurrency(value, fallback = MAX_CONCURRENT_DOWNLOADS) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(MAX_PARALLEL_DOWNLOADS, n);
+}
+
+/** Асинхронный execFile: ffmpeg/ffprobe не должны блокировать главный процесс Electron. */
+function runFile(bin, args, timeout) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      bin,
+      args,
+      { encoding: 'utf8', timeout, windowsHide: true, maxBuffer: 64 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          err.stdout = stdout;
+          err.stderr = stderr;
+          reject(err);
+          return;
+        }
+        resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+      }
+    );
+  });
+}
+
+const SPEED_UNITS = { B: 1, K: 1024, M: 1024 ** 2, G: 1024 ** 3 };
+
+/** «8.40MiB/s», «1.2MiB», «850KiB/s» → байт/с. */
+function parseSpeedBytes(text) {
+  const match = String(text || '').match(/([\d.]+)\s*([KMG]?)i?B/i);
+  if (!match) return 0;
+  const value = Number(match[1]);
+  const unit = SPEED_UNITS[(match[2] || 'B').toUpperCase()] || 1;
+  return Number.isFinite(value) ? value * unit : 0;
+}
+
+function formatSpeed(bytes) {
+  if (!bytes) return '';
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(2)}MiB/s`;
+  return `${Math.round(bytes / 1024)}KiB/s`;
 }
 
 function renameToPrettyFilename(outputFile, item, safeTitle) {
@@ -989,10 +1048,13 @@ class DownloadQueue {
     this.running = false;
     this.paused = false;
     this.stopped = false;
+    this.concurrency = normalizeConcurrency(options.concurrency);
     this.activeDownloads = 0;
-    this.currentChild = null;
-    this.currentItem = null;
+    /** item → { percent, speed, eta } для каждой идущей загрузки. */
+    this.activeItems = new Map();
+    this.children = new Set();
     this.cookiesFromBrowser = options.cookiesFromBrowser || null;
+    this.failedCookieBrowsers = new Set();
     this.defaultAudioLang = normalizeAudioLang(options.defaultAudioLang || DEFAULT_AUDIO_LANG);
   }
 
@@ -1011,26 +1073,30 @@ class DownloadQueue {
   emitProgress(extra = {}) {
     if (typeof this.hooks.onProgress !== 'function') return;
     const counts = summarizeItems(this.items);
-    const current = this.currentItem;
+    const active = Array.from(this.activeItems.entries())
+      .sort(([a], [b]) => a.number - b.number)
+      .map(([item, live]) => ({
+        number: item.number,
+        title: item.title || item.url,
+        url: item.url,
+        percent: Number(live.percent) || 0,
+        speed: live.speed || '',
+        eta: live.eta || '',
+        quality: item.quality || 'AUTO',
+        audioLang: item.audioLang || DEFAULT_AUDIO_LANG,
+        audioLangText: describeAudioLang(item.audioLang || DEFAULT_AUDIO_LANG),
+        resolution: item.resolution || null,
+        fps: item.fps || null,
+        status: item.status
+      }));
+    const totalSpeed = active.reduce((sum, entry) => sum + parseSpeedBytes(entry.speed), 0);
     this.hooks.onProgress({
       ...counts,
       overallPercent: counts.total ? (counts.completed / counts.total) * 100 : 0,
-      current: current
-        ? {
-            number: current.number,
-            title: current.title || current.url,
-            url: current.url,
-            percent: Number.isFinite(Number(extra.filePercent)) ? Number(extra.filePercent) : 0,
-            speed: extra.speed || '',
-            eta: extra.eta || '',
-            quality: current.quality || 'AUTO',
-            audioLang: current.audioLang || DEFAULT_AUDIO_LANG,
-            audioLangText: describeAudioLang(current.audioLang || DEFAULT_AUDIO_LANG),
-            resolution: current.resolution || null,
-            fps: current.fps || null,
-            status: current.status
-          }
-        : null,
+      current: active[0] || null,
+      active,
+      concurrency: this.concurrency,
+      totalSpeed: formatSpeed(totalSpeed),
       items: this.items.map((item) => ({
         number: item.number,
         url: item.url,
@@ -1122,7 +1188,7 @@ class DownloadQueue {
   clearQueue(options = {}) {
     if (this.running) throw new Error('Сначала остановите очередь.');
     this.items = [];
-    this.currentItem = null;
+    this.activeItems.clear();
     const result = clearQueueFiles(this.outputDir, options);
     this.emitProgress({ status: 'Очередь очищена' });
     return result;
@@ -1139,19 +1205,21 @@ class DownloadQueue {
   }
 
   stopCurrentProcess() {
-    const child = this.currentChild;
-    this.currentChild = null;
-    if (!child || child.killed) return;
-    try {
-      child.kill('SIGKILL');
-    } catch {
-      /* процесс мог уже завершиться */
-    }
+    const children = Array.from(this.children);
+    this.children.clear();
+    children.forEach((child) => {
+      if (!child || child.killed) return;
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* процесс мог уже завершиться */
+      }
+    });
   }
 
   pause() {
     this.paused = true;
-    this.log('warn', 'PAUSE — новые загрузки не стартуют, текущая останавливается');
+    this.log('warn', 'PAUSE — новые загрузки не стартуют, текущие останавливаются');
     this.stopCurrentProcess();
     this.persist();
     this.emitProgress({ status: 'Пауза' });
@@ -1228,7 +1296,7 @@ class DownloadQueue {
           PYTHONIOENCODING: 'utf-8'
         }
       });
-      this.currentChild = child;
+      this.children.add(child);
       let stdout = '';
       let stderr = '';
       let leftover = '';
@@ -1240,7 +1308,7 @@ class DownloadQueue {
         if (settled) return;
         settled = true;
         clearInterval(stallTimer);
-        if (this.currentChild === child) this.currentChild = null;
+        this.children.delete(child);
         fn(value);
       };
 
@@ -1359,7 +1427,7 @@ class DownloadQueue {
   async probeOutput(file) {
     if (this.ffprobePath) {
       try {
-        return this.probeOutputWithFfprobe(file);
+        return await this.probeOutputWithFfprobe(file);
       } catch (err) {
         this.log(
           'warn',
@@ -1372,7 +1440,7 @@ class DownloadQueue {
   }
 
   /** Резервное чтение файла без ffprobe. */
-  probeOutputWithFfmpeg(file) {
+  async probeOutputWithFfmpeg(file) {
     const unknown = {
       hasVideo: true,
       hasAudio: true,
@@ -1387,13 +1455,8 @@ class DownloadQueue {
     if (!this.ffmpegPath) return unknown;
     let text = '';
     try {
-      text = String(
-        execFileSync(this.ffmpegPath, ['-hide_banner', '-i', file], {
-          encoding: 'utf8',
-          timeout: 60000,
-          stdio: ['ignore', 'pipe', 'pipe']
-        }) || ''
-      );
+      const { stdout, stderr } = await runFile(this.ffmpegPath, ['-hide_banner', '-i', file], 60000);
+      text = `${stderr}${stdout}`;
     } catch (err) {
       text = `${(err && err.stderr) || ''}${(err && err.stdout) || ''}`;
     }
@@ -1401,11 +1464,11 @@ class DownloadQueue {
     return parseFfmpegStreamInfo(text);
   }
 
-  probeOutputWithFfprobe(file) {
-    const raw = execFileSync(
+  async probeOutputWithFfprobe(file) {
+    const { stdout: raw } = await runFile(
       this.ffprobePath,
       ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file],
-      { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] }
+      20000
     );
     const info = JSON.parse(raw);
     const streams = info.streams || [];
@@ -1456,7 +1519,7 @@ class DownloadQueue {
     if (iso3) args.push('-metadata:s:a:0', `language=${iso3}`);
     args.push('-movflags', '+faststart', tmpFile);
     try {
-      execFileSync(this.ffmpegPath, args, { timeout: 900000, stdio: ['ignore', 'ignore', 'pipe'] });
+      await runFile(this.ffmpegPath, args, 900000);
       if (fileLooksComplete(tmpFile)) {
         safeUnlink(file);
         fs.renameSync(tmpFile, file);
@@ -1484,10 +1547,10 @@ class DownloadQueue {
     if (/\.mp4$/i.test(inputFile)) return inputFile;
     const outFile = inputFile.replace(/\.[^.]+$/, '.mp4');
     try {
-      execFileSync(
+      await runFile(
         this.ffmpegPath,
         ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputFile, '-c', 'copy', '-movflags', '+faststart', outFile],
-        { timeout: 120000, stdio: ['ignore', 'ignore', 'pipe'] }
+        120000
       );
       if (fileLooksComplete(outFile)) {
         if (outFile !== inputFile) safeUnlink(inputFile);
@@ -1672,7 +1735,7 @@ class DownloadQueue {
     this.log('info', `#${item.number} START ${item.url}`);
     if (!item.title) item.title = `video-${item.videoId || item.number}`;
     this.persist();
-    this.emitProgress({ status: `Downloading #${item.number}` });
+    this.emitProgress({ status: this.activeStatus() });
 
     // Получение информации → проверка аудио → скачивание (для «Авто» проба не делается).
     const audioPlan = await this.prepareAudio(item);
@@ -1691,21 +1754,18 @@ class DownloadQueue {
     });
 
     this.log('info', `#${item.number} DOWNLOAD START`);
-    this.emitProgress({
-      filePercent: 0,
-      status: `Downloading #${item.number} — подготовка потока`
-    });
+    const live = this.activeItems.get(item) || { percent: 0, speed: '', eta: '' };
+    this.activeItems.set(item, live);
+    this.emitProgress({ status: this.activeStatus() });
 
     let lastLogged = '';
     const onLine = (line) => {
       const progress = parseProgressLine(line);
       if (progress) {
-        this.emitProgress({
-          filePercent: progress.percent,
-          speed: progress.speed,
-          eta: progress.eta,
-          status: `Downloading #${item.number} — ${progress.percent}%`
-        });
+        live.percent = progress.percent;
+        live.speed = progress.speed;
+        live.eta = progress.eta;
+        this.emitProgress({ status: this.activeStatus() });
         return;
       }
       if (shouldLogYtDlpLine(line) && line !== lastLogged) {
@@ -1715,17 +1775,16 @@ class DownloadQueue {
       }
     };
 
-    try {
-      await this.runYtDlp(makeArgs(this.cookiesFromBrowser), onLine);
-    } catch (err) {
-      if (err && err.cancelled) throw err;
-      if (!this.cookiesFromBrowser && isBotCheckError(err && err.message)) {
-        const browser = defaultCookieBrowser();
-        this.log('warn', `#${item.number} YouTube просит вход — пробую cookies из ${browser}`);
-        this.cookiesFromBrowser = browser;
-        await this.runYtDlp(makeArgs(browser), onLine);
-      } else {
-        throw err;
+    let used = this.cookiesFromBrowser;
+    for (;;) {
+      try {
+        await this.runYtDlp(makeArgs(used), onLine);
+        break;
+      } catch (err) {
+        if (err && err.cancelled) throw err;
+        const next = this.nextCookieBrowser(item, used, err && err.message);
+        if (next === undefined) throw err;
+        used = next;
       }
     }
 
@@ -1765,6 +1824,43 @@ class DownloadQueue {
       this.log('info', `[${item.number}/${this.items.length}] Готово`);
     }
     return outputFile;
+  }
+
+  /**
+   * Что делать после ошибки yt-dlp: браузер для следующей попытки или
+   * undefined — сдаться (ссылка уйдёт в retry). Браузер без читаемых cookies
+   * исключается навсегда, иначе очередь вечно падала бы на его ошибке.
+   */
+  nextCookieBrowser(item, used, message) {
+    const untried = () =>
+      cookieBrowserCandidates().find((name) => !this.failedCookieBrowsers.has(name));
+    if (used && isCookieError(message)) {
+      const alreadyKnown = this.failedCookieBrowsers.has(used);
+      this.failedCookieBrowsers.add(used);
+      if (this.cookiesFromBrowser === used) this.cookiesFromBrowser = null;
+      const shared = this.cookiesFromBrowser;
+      if (alreadyKnown) return shared && !this.failedCookieBrowsers.has(shared) ? shared : null;
+      const next = untried();
+      this.log(
+        'warn',
+        `#${item.number} cookies из ${used} недоступны (${shortYtError(message)})` +
+          (next ? ` — пробую ${next}` : ' — продолжаю без cookies')
+      );
+      if (next) this.cookiesFromBrowser = next;
+      return next || null;
+    }
+    if (!used && isBotCheckError(message)) {
+      const shared = this.cookiesFromBrowser;
+      const next = shared && !this.failedCookieBrowsers.has(shared) ? shared : untried();
+      if (!next) {
+        this.log('warn', `#${item.number} YouTube просит вход, а cookies ни из одного браузера не читаются — войдите в YouTube в Firefox или закройте Edge/Chrome`);
+        return undefined;
+      }
+      if (next !== shared) this.log('warn', `#${item.number} YouTube просит вход — пробую cookies из ${next}`);
+      this.cookiesFromBrowser = next;
+      return next;
+    }
+    return undefined;
   }
 
   /** Сверяет язык аудиопотока в итоговом MP4 с тем, что выбрал пользователь. */
@@ -1824,16 +1920,42 @@ class DownloadQueue {
     item.completed = true;
     item.lastError = null;
     item.nextRetry = null;
-    if (item.title && !item.titleSaved) {
-      appendTitle(this.outputDir, item.title);
-      item.titleSaved = true;
-      this.log('info', `#${item.number} TITLE SAVED`);
-    }
+    const live = this.activeItems.get(item);
+    if (live) live.percent = 100;
+    this.flushTitles(false);
     this.persist();
     this.emitProgress({
-      filePercent: 100,
       status: `#${item.number} SUCCESS ${item.resolution || ''} ${item.fps ? `${item.fps} FPS` : ''}`.trim()
     });
+  }
+
+  /**
+   * nazvaniya.txt пишется в порядке очереди, а не в порядке завершения:
+   * при параллельной загрузке #3 может закончить раньше #2. Название ждёт,
+   * пока все видео перед ним не завершатся; force — в конце запуска.
+   */
+  flushTitles(force) {
+    // Повторы переезжают в конец this.items, поэтому порядок — по номеру ссылки.
+    const ordered = this.items.slice().sort((a, b) => a.number - b.number);
+    for (const item of ordered) {
+      if (item.titleSaved) continue;
+      if (item.status === STATUS.SUCCESS) {
+        if (item.title) {
+          appendTitle(this.outputDir, item.title);
+          item.titleSaved = true;
+          this.log('info', `#${item.number} TITLE SAVED`);
+        }
+        continue;
+      }
+      if (item.status === STATUS.PERMANENT_ERROR || item.status === STATUS.SKIPPED) continue;
+      if (!force) break;
+    }
+  }
+
+  activeStatus() {
+    const active = Array.from(this.activeItems.keys()).map((item) => `#${item.number}`);
+    if (!active.length) return 'Downloading';
+    return active.length === 1 ? `Downloading ${active[0]}` : `Downloading ${active.join(', ')} (${active.length} потока)`;
   }
 
   markFailure(item, err) {
@@ -1843,6 +1965,9 @@ class DownloadQueue {
       item.lastError = 'Остановлено пользователем';
       this.persist();
       return;
+    }
+    if (this.cookiesFromBrowser && isCookieError(err && err.message)) {
+      this.nextCookieBrowser(item, this.cookiesFromBrowser, err && err.message);
     }
     const kind = classifyError(err && err.message);
     item.attempts += 1;
@@ -1863,15 +1988,15 @@ class DownloadQueue {
   }
 
   async processOne(index) {
-    if (this.activeDownloads >= MAX_CONCURRENT_DOWNLOADS) {
-      throw new Error('Одновременно можно скачивать только одно видео');
+    if (this.activeItems.size >= this.concurrency) {
+      throw new Error(`Одновременно можно скачивать не больше ${this.concurrency} видео`);
     }
     const item = this.items[index];
-    this.activeDownloads = 1;
-    this.currentItem = item;
+    this.activeItems.set(item, { percent: 0, speed: '', eta: '' });
+    this.activeDownloads = this.activeItems.size;
     item.status = STATUS.DOWNLOADING;
     this.persist();
-    this.emitProgress({ status: `Downloading #${item.number}` });
+    this.emitProgress({ status: this.activeStatus() });
     try {
       await this.downloadItem(item);
       this.markSuccess(item);
@@ -1883,9 +2008,8 @@ class DownloadQueue {
         if (item.status === STATUS.RETRY) this.moveToEnd(this.items.indexOf(item));
       }
     } finally {
-      this.activeDownloads = 0;
-      this.currentItem = null;
-      this.currentChild = null;
+      this.activeItems.delete(item);
+      this.activeDownloads = this.activeItems.size;
     }
   }
 
@@ -1922,25 +2046,50 @@ class DownloadQueue {
         : 'aria2c не найден — качаем встроенным клиентом yt-dlp'
     );
 
+    this.log(
+      'info',
+      this.concurrency > 1
+        ? `Параллельно: до ${this.concurrency} видео одновременно`
+        : 'Параллельно: одно видео за раз'
+    );
+
+    const running = new Set();
+    const launch = (index) => {
+      const job = this.processOne(index).finally(() => running.delete(job));
+      running.add(job);
+    };
+
     try {
-      while (this.unfinished() && !this.stopped) {
+      while (!this.stopped) {
         if (this.paused) {
-          await this.sleep(250);
+          await (running.size ? Promise.race([...running, this.sleep(250)]) : this.sleep(250));
           continue;
         }
-        const index = this.pickReadyIndex();
-        if (index < 0) {
-          const nextAt = this.nearestRetryAt();
-          if (nextAt == null) break;
-          const wait = Math.max(250, Math.min(nextAt - this.now(), 1000));
-          this.emitProgress({
-            status: `${summarizeItems(this.items).retry} videos waiting for automatic retry...`
-          });
-          await this.sleep(wait);
+        while (running.size < this.concurrency && !this.paused && !this.stopped) {
+          const index = this.pickReadyIndex();
+          if (index < 0) break;
+          launch(index);
+        }
+        const nextAt = this.nearestRetryAt();
+        if (running.size) {
+          // Свободный слот при ожидающем retry — просыпаемся по таймеру, а не только по завершению загрузки.
+          const waitRetry = running.size < this.concurrency && nextAt != null;
+          await Promise.race(
+            waitRetry
+              ? [...running, this.sleep(Math.max(250, Math.min(nextAt - this.now(), 1000)))]
+              : [...running]
+          );
           continue;
         }
-        await this.processOne(index);
+        if (!this.unfinished() || nextAt == null) break;
+        const wait = Math.max(250, Math.min(nextAt - this.now(), 1000));
+        this.emitProgress({
+          status: `${summarizeItems(this.items).retry} videos waiting for automatic retry...`
+        });
+        await this.sleep(wait);
       }
+      await Promise.allSettled([...running]);
+      this.flushTitles(true);
 
       const counts = summarizeItems(this.items);
       const done = !this.unfinished();
@@ -1966,8 +2115,7 @@ class DownloadQueue {
     } finally {
       this.running = false;
       this.activeDownloads = 0;
-      this.currentItem = null;
-      this.currentChild = null;
+      this.activeItems.clear();
     }
   }
 }
@@ -1976,6 +2124,11 @@ module.exports = {
   DownloadQueue,
   clearQueueFiles,
   MAX_CONCURRENT_DOWNLOADS,
+  MAX_PARALLEL_DOWNLOADS,
+  DEFAULT_PARALLEL_DOWNLOADS,
+  CONCURRENT_FRAGMENTS,
+  normalizeConcurrency,
+  parseSpeedBytes,
   QUEUE_FILE,
   TITLES_FILE,
   LOG_FILE,
@@ -2008,6 +2161,8 @@ module.exports = {
   resolveJsRuntimeArgs,
   resolveAria2cPath,
   isBotCheckError,
+  isCookieError,
+  cookieBrowserCandidates,
   shortYtError,
   shouldLogYtDlpLine,
   YOUTUBE_EXTRACTOR_ARGS,

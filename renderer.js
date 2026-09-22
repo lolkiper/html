@@ -119,6 +119,7 @@ const el = {
   dlImport: document.getElementById('dl-import'),
   dlClear: document.getElementById('dl-clear'),
   dlDir: document.getElementById('dl-dir'),
+  dlParallel: document.getElementById('dl-parallel'),
   dlDirNote: document.getElementById('dl-dir-note'),
   dlPickDir: document.getElementById('dl-pick-dir'),
   dlStart: document.getElementById('dl-start'),
@@ -438,6 +439,7 @@ function collectSettings() {
     verbose: el.verbose.checked,
     downloadDir: el.dlDir.value.trim(),
     downloadLinks: el.dlLinks.value,
+    downloadParallel: el.dlParallel ? Number(el.dlParallel.value) : 3,
     downloadAudioLang: el.dlAudioLang ? el.dlAudioLang.value : 'auto',
     downloadAudioLangOther: el.dlAudioLangOther ? el.dlAudioLangOther.value.trim() : '',
     downloadAudioDetect: el.dlAudioDetect ? el.dlAudioDetect.checked : false,
@@ -568,6 +570,10 @@ function restoreSettings() {
   if (saved.fit) el.fit.value = saved.fit;
   if (saved.downloadDir) el.dlDir.value = saved.downloadDir;
   if (saved.downloadLinks) el.dlLinks.value = saved.downloadLinks;
+  if (el.dlParallel && saved.downloadParallel) {
+    const value = String(saved.downloadParallel);
+    if (Array.from(el.dlParallel.options).some((option) => option.value === value)) el.dlParallel.value = value;
+  }
   if (el.dlAudioLang && saved.downloadAudioLang) el.dlAudioLang.value = saved.downloadAudioLang;
   if (el.dlAudioLangOther && saved.downloadAudioLangOther) {
     el.dlAudioLangOther.value = saved.downloadAudioLangOther;
@@ -1135,6 +1141,7 @@ function setDownloadRunning(running, paused = false) {
   el.dlStop.disabled = !running;
   el.dlImport.disabled = running;
   el.dlPickDir.disabled = running;
+  if (el.dlParallel) el.dlParallel.disabled = running;
 }
 
 function appendDownloadLog(level, message) {
@@ -1387,8 +1394,18 @@ function applyDownloadProgress(progress) {
   const done = progress.completed || 0;
   el.dlOverallPercent.textContent = `${done} / ${total}`;
   el.dlOverallBar.style.width = `${total ? Math.min(100, (done / total) * 100) : 0}%`;
+  const active = Array.isArray(progress.active) ? progress.active : [];
   const current = progress.current;
-  if (current) {
+  if (active.length > 1) {
+    const avg = active.reduce((sum, entry) => sum + (Number(entry.percent) || 0), 0) / active.length;
+    el.dlCurrentLabel.textContent =
+      `Качается ${active.length}: ` +
+      active.map((entry) => `#${entry.number} ${Math.round(entry.percent || 0)}%`).join(' · ');
+    el.dlFilePercent.textContent = `${Math.round(avg)}%`;
+    el.dlFileBar.style.width = `${Math.min(100, avg)}%`;
+    el.dlSpeedNote.textContent =
+      `Скорость: ${progress.totalSpeed || '—'} суммарно · потоков ${active.length} из ${progress.concurrency || active.length}`;
+  } else if (current) {
     el.dlCurrentLabel.textContent = `Downloading #${current.number}  ${current.title || ''}`;
     el.dlFilePercent.textContent = `${Math.round(current.percent || 0)}%`;
     el.dlFileBar.style.width = `${Math.min(100, current.percent || 0)}%`;
@@ -1468,6 +1485,7 @@ function bindDownloadUi() {
   }
   if (el.dlAudioLangOther) el.dlAudioLangOther.addEventListener('change', saveSettings);
   if (el.dlAudioDetect) el.dlAudioDetect.addEventListener('change', saveSettings);
+  if (el.dlParallel) el.dlParallel.addEventListener('change', saveSettings);
 
   if (el.dlAudioDetectNow) {
     el.dlAudioDetectNow.addEventListener('click', async () => {
@@ -1614,7 +1632,8 @@ function bindDownloadUi() {
       outputDir,
       text,
       defaultAudioLang: currentDefaultAudioLang(),
-      audioLangs: state.audioLangByNumber
+      audioLangs: state.audioLangByNumber,
+      concurrency: el.dlParallel ? Number(el.dlParallel.value) : 3
     });
     if (result && !result.ok && !result.reported) {
       setDownloadRunning(false, false);

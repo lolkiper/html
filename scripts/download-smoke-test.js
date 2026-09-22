@@ -13,6 +13,9 @@ const path = require('path');
 const {
   DownloadQueue,
   MAX_CONCURRENT_DOWNLOADS,
+  MAX_PARALLEL_DOWNLOADS,
+  normalizeConcurrency,
+  parseSpeedBytes,
   parseLinkList,
   extractVideoId,
   retryDelayMs,
@@ -25,6 +28,8 @@ const {
   buildAria2cDownloaderArgs,
   resolveJsRuntimeArgs,
   isBotCheckError,
+  isCookieError,
+  cookieBrowserCandidates,
   shouldLogYtDlpLine,
   mergeUrlsIntoQueue,
   YOUTUBE_EXTRACTOR_ARGS,
@@ -98,6 +103,8 @@ function createMockRunner(options = {}) {
         failOnce.delete(id);
         throw new Error('Connection reset by peer');
       }
+      const delay = options.delays && options.delays[id];
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
       const outFlag = args.indexOf('-o');
       const template = outFlag >= 0 ? args[outFlag + 1] : path.join(options.outputDir, `${id}.mp4`);
       const file = String(template).replace('%(ext)s', 'mp4');
@@ -400,6 +407,147 @@ async function main() {
   check(!skipLogs.some((line) => /FORMAT CHECK/i.test(line)), 'в логе нет FORMAT CHECK — очередь не молчит на пробе');
   const skipTitles = fs.readFileSync(path.join(skipDir, 'nazvaniya.txt'), 'utf8');
   check(skipTitles.includes('После проверки формата'), 'название взято из info.json после скачивания');
+
+  console.log('\n6) Многопоточная загрузка…');
+  check(normalizeConcurrency(0) === 1 && normalizeConcurrency(99) === MAX_PARALLEL_DOWNLOADS, 'число потоков ограничено 1…6');
+  check(dlArgs.includes('--concurrent-fragments'), 'yt-dlp качает фрагменты DASH/HLS в несколько потоков');
+  check(Math.round(parseSpeedBytes('8.40MiB/s') / 1024 / 1024 * 10) === 84, 'скорость yt-dlp разбирается для суммы');
+  const parDir = path.join(ROOT, 'parallel');
+  fs.mkdirSync(parDir, { recursive: true });
+  const parIds = ['PAR00000001', 'PAR00000002', 'PAR00000003', 'PAR00000004', 'PAR00000005', 'PAR00000006', 'PAR00000007'];
+  const parRunner = createMockRunner({
+    outputDir: parDir,
+    failOnce: ['PAR00000002'],
+    // #1 самый долгий: остальные заканчивают раньше, но название #1 всё равно первое.
+    delays: { PAR00000001: 300, PAR00000002: 40, PAR00000003: 60, PAR00000004: 30, PAR00000005: 50, PAR00000006: 20, PAR00000007: 10 },
+    titles: Object.fromEntries(parIds.map((id, i) => [id, `Видео ${i + 1}`]))
+  });
+  let parClock = 5_000_000;
+  let sawParallelProgress = false;
+  const parSuccessOrder = [];
+  const parQueue = new DownloadQueue({
+    outputDir: parDir,
+    ffmpegPath: 'ffmpeg',
+    ffprobePath: null,
+    runner: parRunner,
+    concurrency: 3,
+    now: () => parClock,
+    sleep: async (ms) => {
+      parClock += ms;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    },
+    hooks: {
+      onLog: (_level, message) => {
+        const match = String(message).match(/^#(\d+) DOWNLOAD SUCCESS/);
+        if (match) parSuccessOrder.push(Number(match[1]));
+      },
+      onProgress: (state) => {
+        if (state && Array.isArray(state.active) && state.active.length > 1) sawParallelProgress = true;
+      }
+    }
+  });
+  // Заглушки не настоящие видео — без этого каждая загрузка уходила бы в retry.
+  parQueue.probeOutput = async () => ({ hasVideo: true, hasAudio: true });
+  parQueue.setLinks(parIds.map((id) => `https://youtube.com/shorts/${id}`).join('\n'));
+  const t0 = Date.now();
+  const parSummary = await parQueue.run();
+  const parMs = Date.now() - t0;
+  check(parRunner.stats().maxActive === 3, 'одновременно качаются ровно 3 видео', `max=${parRunner.stats().maxActive}`);
+  check(parSummary.completed === parIds.length, 'все видео скачаны, включая retry', `completed=${parSummary.completed}`);
+  check(sawParallelProgress, 'в интерфейс приходит прогресс нескольких загрузок сразу');
+  const firstDone = parSuccessOrder.slice(0, 3);
+  check(
+    !firstDone.includes(1) && parSuccessOrder.length === parIds.length,
+    'пока долгое #1 качается, остальные уже скачиваются параллельно',
+    `${parSuccessOrder.join(',')} · ${parMs} мс`
+  );
+  const parTitles = fs.readFileSync(path.join(parDir, 'nazvaniya.txt'), 'utf8').split(/\r?\n/).filter(Boolean);
+  check(parTitles.length === parIds.length, 'в nazvaniya.txt все названия без дублей', parTitles.join(' | '));
+  check(parTitles[0] === 'Видео 1', 'nazvaniya.txt в порядке очереди, а не в порядке завершения', parTitles.join(' | '));
+  const parSaved = JSON.parse(fs.readFileSync(path.join(parDir, 'download_queue.json'), 'utf8'));
+  check(parSaved.items.every((item) => item.status === STATUS.SUCCESS), 'в download_queue.json нет зависших DOWNLOADING');
+
+  const stopDir = path.join(ROOT, 'parallel-stop');
+  fs.mkdirSync(stopDir, { recursive: true });
+  const stopRunner = createMockRunner({
+    outputDir: stopDir,
+    delays: { STOP0000001: 200, STOP0000002: 200, STOP0000003: 200, STOP0000004: 200 }
+  });
+  let stopQueue = null;
+  let stopped = false;
+  stopQueue = new DownloadQueue({
+    outputDir: stopDir,
+    ffmpegPath: 'ffmpeg',
+    ffprobePath: null,
+    concurrency: 2,
+    runner: async (args, onLine) => {
+      if (!stopped && !args.includes('-J')) {
+        setTimeout(() => { stopped = true; stopQueue.stop(); }, 20);
+      }
+      return stopRunner(args, onLine);
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 20)))
+  });
+  stopQueue.setLinks(['STOP0000001', 'STOP0000002', 'STOP0000003', 'STOP0000004'].map((id) => `https://youtube.com/shorts/${id}`).join('\n'));
+  const stopSummary = await stopQueue.run();
+  check(stopSummary.cancelled === true, 'STOP во время параллельной загрузки останавливает очередь');
+  check(stopRunner.stats().started.length === 2, 'после STOP новые видео не стартуют', `started=${stopRunner.stats().started.length}`);
+
+  console.log('\n7) YouTube просит вход, а cookies браузера не читаются…');
+  check(isCookieError('ERROR: could not find chrome cookies database in "/home/u/.config/google-chrome"'), 'ошибка базы cookies распознаётся');
+  check(isCookieError('ERROR: Could not copy Chrome cookie database'), 'занятая база cookies (браузер открыт) распознаётся');
+  check(!isCookieError('HTTP Error 503'), 'обычная сетевая ошибка не считается ошибкой cookies');
+  const cookieDir = path.join(ROOT, 'cookies');
+  fs.mkdirSync(cookieDir, { recursive: true });
+  const browsers = cookieBrowserCandidates();
+  const workingBrowser = browsers[browsers.length - 1];
+  const cookieCalls = [];
+  const cookieBase = createMockRunner({ outputDir: cookieDir });
+  const cookieQueue = new DownloadQueue({
+    outputDir: cookieDir,
+    ffmpegPath: 'ffmpeg',
+    ffprobePath: null,
+    concurrency: 2,
+    runner: async (args, onLine) => {
+      const i = args.indexOf('--cookies-from-browser');
+      const browser = i >= 0 ? args[i + 1] : null;
+      cookieCalls.push(browser);
+      if (!browser) throw new Error('ERROR: [youtube] x: Sign in to confirm you’re not a bot. Use --cookies-from-browser');
+      if (browser !== workingBrowser) throw new Error(`ERROR: could not find ${browser} cookies database`);
+      return cookieBase(args, onLine);
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5)))
+  });
+  cookieQueue.probeOutput = async () => ({ hasVideo: true, hasAudio: true });
+  cookieQueue.setLinks('https://youtube.com/shorts/COOKIE00001\nhttps://youtube.com/shorts/COOKIE00002');
+  const cookieSummary = await cookieQueue.run();
+  check(cookieSummary.completed === 2, `после отказа браузеров cookies взяты из ${workingBrowser}`, `completed=${cookieSummary.completed} calls=${cookieCalls.join(',')}`);
+  check(cookieCalls.length <= 2 * (browsers.length + 1), 'нерабочие браузеры не пробуются по кругу', cookieCalls.join(','));
+
+  const noCookieDir = path.join(ROOT, 'no-cookies');
+  fs.mkdirSync(noCookieDir, { recursive: true });
+  let noCookieCalls = 0;
+  let noCookieClock = 9_000_000;
+  const noCookieQueue = new DownloadQueue({
+    outputDir: noCookieDir,
+    ffmpegPath: 'ffmpeg',
+    ffprobePath: null,
+    runner: async (args) => {
+      noCookieCalls += 1;
+      if (noCookieCalls > 50) noCookieQueue.stop();
+      const i = args.indexOf('--cookies-from-browser');
+      if (i < 0) throw new Error('ERROR: [youtube] x: Sign in to confirm you’re not a bot');
+      throw new Error(`ERROR: could not find ${args[i + 1]} cookies database`);
+    },
+    now: () => noCookieClock,
+    sleep: async (ms) => {
+      noCookieClock += ms;
+      if (noCookieClock > 9_000_000 + 700_000) noCookieQueue.stop();
+    }
+  });
+  noCookieQueue.setLinks('https://youtube.com/shorts/NOCOOKIE001');
+  await noCookieQueue.run();
+  check(noCookieCalls <= browsers.length + 6, 'без cookies ссылка уходит в retry, а не крутится в бесконечном цикле', `calls=${noCookieCalls}`);
 
   fs.rmSync(ROOT, { recursive: true, force: true });
   console.log(`\nИтог: ${failures ? `${failures} проверок провалено` : 'все проверки очереди пройдены'}`);

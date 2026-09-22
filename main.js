@@ -35,6 +35,8 @@ const {
   clearQueueFiles,
   AUDIO_LANGUAGE_OPTIONS,
   DEFAULT_AUDIO_LANG,
+  DEFAULT_PARALLEL_DOWNLOADS,
+  normalizeConcurrency,
   normalizeAudioLang
 } = require('./downloader');
 
@@ -754,6 +756,7 @@ function queueSnapshot(queue, status = null) {
     ...counts,
     overallPercent: counts.total ? (counts.completed / counts.total) * 100 : 0,
     current: null,
+    active: [],
     items: queue.items,
     errors: queue.items.filter(
       (item) => item.status === 'RETRY' || item.status === 'PERMANENT_ERROR' || item.status === 'SKIPPED'
@@ -856,7 +859,14 @@ handle('download:start', async (ws, payload, rt) => {
     return { ok: false, error: `Не удалось создать папку: ${err.message}` };
   }
 
-  const queue = new DownloadQueue({ outputDir, ffmpegPath, ffprobePath, ytdlpPath, hooks: downloadHooks(ws.id) });
+  const queue = new DownloadQueue({
+    outputDir,
+    ffmpegPath,
+    ffprobePath,
+    ytdlpPath,
+    concurrency: normalizeConcurrency(payload.concurrency, DEFAULT_PARALLEL_DOWNLOADS),
+    hooks: downloadHooks(ws.id)
+  });
   // «Язык аудио по умолчанию» применяется только к новым ссылкам.
   queue.setLinks(text, { defaultAudioLang: payload.defaultAudioLang || DEFAULT_AUDIO_LANG });
   if (!queue.items.length) return { ok: false, error: 'В списке нет распознанных ссылок YouTube.' };
