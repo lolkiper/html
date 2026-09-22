@@ -16,7 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 const ffmpeg = require('fluent-ffmpeg');
 
 const VIDEO_EXTENSIONS = [
@@ -41,8 +41,14 @@ const MAX_KEEP_FPS = 120;
 const ENCODE_PACE_SPEED = 3;
 const GPU_PACE_BALANCED = 10;
 const GPU_PACE_HIGH = 16;
-/** Один файл = один ffmpeg. Следующий стартует только после exit процесса. */
+/**
+ * Один файл = один ffmpeg. В режимах low/balanced/high файлы идут строго по
+ * одному; в режиме max — до MAX_PARALLEL_JOBS одновременно на вкладку.
+ */
 const MAX_EXPORT_JOBS = 1;
+const MAX_PARALLEL_JOBS = 4;
+/** Сколько файлов одной папки читается ffprobe одновременно при подготовке очереди. */
+const PROBE_CONCURRENCY = 4;
 const CPU_HANDOFF_MS = 80;
 const GPU_HANDOFF_MS = 380;
 const INTER_FILE_DELAY_MS = GPU_HANDOFF_MS;
@@ -68,6 +74,10 @@ function withPlayerCompatibleTags(encoderKey, videoOptions) {
   return opts;
 }
 
+function isMaxSpeed(resourceUsage) {
+  return resourceUsage === 'max';
+}
+
 function encodePaceSpeed(plan) {
   const usage = (plan && plan.resourceUsage) || 'low';
   if (plan && plan.usingGpu) {
@@ -86,6 +96,7 @@ function paceGlobalArgs(plan) {
 }
 
 function handoffDelayMs(plan) {
+  if (plan && isMaxSpeed(plan.resourceUsage)) return 0;
   return plan && plan.usingGpu ? GPU_HANDOFF_MS : CPU_HANDOFF_MS;
 }
 
@@ -159,9 +170,19 @@ const EXPORT_MODES = {
 };
 
 const RESOURCE_MODES = {
-  low: { label: 'Низкая — минимум нагрузки, стабильность' },
+  max: { label: 'Максимум скорости — без ограничений, несколько файлов сразу' },
+  high: { label: 'Высокая — быстрее фильтры, всё ещё 1 encode' },
   balanced: { label: 'Баланс — один encode, умеренные потоки' },
-  high: { label: 'Высокая — быстрее фильтры, всё ещё 1 encode' }
+  low: { label: 'Низкая — минимум нагрузки, стабильность' }
+};
+
+/** Сколько файлов одной вкладки кодируется одновременно. */
+const PARALLEL_MODES = {
+  auto: { label: 'Авто — по числу ядер (в режиме «Максимум»)' },
+  1: { label: '1 файл за раз' },
+  2: { label: '2 файла одновременно' },
+  3: { label: '3 файла одновременно' },
+  4: { label: '4 файла одновременно' }
 };
 
 /** Размер итогового кадра. */
@@ -195,7 +216,8 @@ const DEFAULTS = {
   percent: 90,
   encoder: 'auto',
   exportMode: 'auto',
-  resourceUsage: 'balanced',
+  resourceUsage: 'max',
+  parallelJobs: 'auto',
   accel: 'hybrid',
   overlayOpacity: 100,
   outputPrefix: 'es',
@@ -402,7 +424,84 @@ function pickGpuEncoder(candidates, compiledIds) {
   return { encoder: null, error: lastError };
 }
 
+function ffmpegCliAsync(args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffmpegPath,
+      args,
+      { encoding: 'utf8', timeout: options.timeout || 15000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+      (err, stdout, stderr) => {
+        if (err) {
+          err.combined = `${stdout || ''}\n${stderr || ''}`.trim();
+          reject(err);
+          return;
+        }
+        resolve(String(stdout || ''));
+      }
+    );
+  });
+}
+
+async function probeEncoderAsync(id, extra) {
+  const tmp = path.join(os.tmpdir(), `shorts-gpu-probe-${process.pid}-${id}.mp4`);
+  try {
+    await ffmpegCliAsync(
+      [
+        '-hide_banner', '-loglevel', 'error', '-y',
+        '-f', 'lavfi', '-i', 'color=c=black:s=256x256:r=15:d=0.4',
+        '-pix_fmt', 'yuv420p',
+        '-c:v', id, ...(extra || []),
+        '-frames:v', '4',
+        tmp
+      ],
+      { timeout: 12000 }
+    );
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: shortenFfmpegError(err.combined || err.message) };
+  } finally {
+    safeUnlink(tmp);
+  }
+}
+
+async function pickGpuEncoderAsync(candidates, compiledIds) {
+  let lastError = null;
+  for (const candidate of candidates) {
+    if (!compiledIds.has(candidate.id)) continue;
+    const extras = candidate.extras && candidate.extras.length ? candidate.extras : [[]];
+    for (const extra of extras) {
+      const probe = await probeEncoderAsync(candidate.id, extra);
+      if (probe.ok) {
+        return { encoder: { id: candidate.id, vendor: candidate.vendor, extra }, error: null };
+      }
+      lastError = `${candidate.id}: ${probe.error}`;
+    }
+  }
+  return { encoder: null, error: lastError };
+}
+
 let hardwareCache = null;
+let hardwarePromise = null;
+
+function buildHardwareInfo({ encoderText, accelText, h264, h265 }) {
+  const ids = parseEncoderIds(encoderText);
+  const accels = parseHwaccels(accelText);
+  const wanted = [...GPU_H264, ...GPU_H265].map((item) => item.id);
+  const preferredAccel = {
+    win32: ['d3d11va', 'cuda', 'dxva2', 'qsv'],
+    linux: ['vaapi', 'cuda', 'vdpau'],
+    darwin: ['videotoolbox']
+  }[process.platform] || [];
+  return {
+    h264: h264.encoder,
+    h265: h265.encoder,
+    hwaccel: preferredAccel.find((name) => accels.includes(name)) || null,
+    accels,
+    compiledGpu: wanted.filter((id) => ids.has(id)),
+    probeError: (h264.encoder ? null : h264.error) || (h265.encoder ? null : h265.error) || null,
+    cores: Math.max(1, (os.cpus() || []).length || 4)
+  };
+}
 
 /**
  * Какие GPU-кодеки реально отвечают на тестовый кадр, а не просто
@@ -424,35 +523,52 @@ function detectHardware() {
   } catch (err) {
     accelText = err.combined || '';
   }
-
   const ids = parseEncoderIds(encoderText);
-  const accels = parseHwaccels(accelText);
-  const wanted = [...GPU_H264, ...GPU_H265].map((item) => item.id);
-  const compiledGpu = wanted.filter((id) => ids.has(id));
-
-  const h264 = pickGpuEncoder(GPU_H264, ids);
-  const h265 = pickGpuEncoder(GPU_H265, ids);
-
-  const preferredAccel = {
-    win32: ['d3d11va', 'cuda', 'dxva2', 'qsv'],
-    linux: ['vaapi', 'cuda', 'vdpau'],
-    darwin: ['videotoolbox']
-  }[process.platform] || [];
-
-  hardwareCache = {
-    h264: h264.encoder,
-    h265: h265.encoder,
-    hwaccel: preferredAccel.find((name) => accels.includes(name)) || null,
-    accels,
-    compiledGpu,
-    probeError: (h264.encoder ? null : h264.error) || (h265.encoder ? null : h265.error) || null,
-    cores: Math.max(1, (os.cpus() || []).length || 4)
-  };
+  hardwareCache = buildHardwareInfo({
+    encoderText,
+    accelText,
+    h264: pickGpuEncoder(GPU_H264, ids),
+    h265: pickGpuEncoder(GPU_H265, ids)
+  });
   return hardwareCache;
 }
 
-function threadBudget(resourceUsage, coreCount, usingGpu) {
+/**
+ * То же, что detectHardware, но не блокирует процесс: main-процесс Electron
+ * при синхронной проверке замораживал окно на несколько секунд. Результат
+ * общий для всех вкладок — проверка выполняется один раз.
+ */
+function detectHardwareAsync() {
+  if (hardwareCache) return Promise.resolve(hardwareCache);
+  if (hardwarePromise) return hardwarePromise;
+  hardwarePromise = (async () => {
+    const [encoderText, accelText] = await Promise.all([
+      ffmpegCliAsync(['-hide_banner', '-encoders']).catch((err) => err.combined || ''),
+      ffmpegCliAsync(['-hide_banner', '-hwaccels']).catch((err) => err.combined || '')
+    ]);
+    const ids = parseEncoderIds(encoderText);
+    const h264 = await pickGpuEncoderAsync(GPU_H264, ids);
+    const h265 = await pickGpuEncoderAsync(GPU_H265, ids);
+    if (!hardwareCache) hardwareCache = buildHardwareInfo({ encoderText, accelText, h264, h265 });
+    return hardwareCache;
+  })().catch((err) => {
+    hardwarePromise = null;
+    throw err;
+  });
+  return hardwarePromise;
+}
+
+function threadBudget(resourceUsage, coreCount, usingGpu, jobs = 1) {
   const cores = Math.max(1, coreCount || (os.cpus() || []).length || 4);
+  if (isMaxSpeed(resourceUsage)) {
+    // Ядра делятся между параллельными файлами вкладки, а не отдаются каждому целиком.
+    const share = Math.max(1, Math.floor(cores / Math.max(1, jobs)));
+    if (usingGpu) {
+      const n = clamp(Math.floor(share / 2), 2, 4);
+      return { cores, filterThreads: n, encodeThreads: n };
+    }
+    return { cores, filterThreads: clamp(Math.floor(share / 2), 1, 4), encodeThreads: clamp(share, 2, 16) };
+  }
   if (resourceUsage === 'low' || resourceUsage === 'cpu') {
     return { cores, filterThreads: 1, encodeThreads: resourceUsage === 'cpu' ? Math.max(1, Math.min(4, Math.ceil(cores / 3))) : 1 };
   }
@@ -480,6 +596,20 @@ function normalizeResourceUsage(value) {
   return mapAccelToResource(value);
 }
 
+/**
+ * Число параллельных файлов на вкладку. Явное число пользователя соблюдается
+ * всегда; «Авто» даёт параллельность только в режиме «Максимум скорости».
+ */
+function resolveParallelJobs(value, { resourceUsage, usingGpu, encoderKey, cores } = {}) {
+  const explicit = Number(value);
+  if (Number.isInteger(explicit) && explicit >= 1) return Math.min(MAX_PARALLEL_JOBS, explicit);
+  if (!isMaxSpeed(resourceUsage)) return MAX_EXPORT_JOBS;
+  const n = Math.max(1, Number(cores) || (os.cpus() || []).length || 4);
+  if (encoderKey === 'prores') return n >= 12 ? 2 : 1;
+  if (usingGpu) return n >= 16 ? 3 : n >= 6 ? 2 : 1;
+  return n >= 12 ? 3 : n >= 6 ? 2 : 1;
+}
+
 function normalizeExportOptions(accelOrOptions) {
   if (accelOrOptions && typeof accelOrOptions === 'object' && !Array.isArray(accelOrOptions)) {
     const accel = accelOrOptions.accel;
@@ -487,7 +617,8 @@ function normalizeExportOptions(accelOrOptions) {
       exportMode: normalizeExportMode(accelOrOptions.exportMode),
       resourceUsage: normalizeResourceUsage(accelOrOptions.resourceUsage || accel),
       forceCpu: Boolean(accelOrOptions.forceCpu) || accel === 'cpu',
-      target: accelOrOptions.target || null
+      target: accelOrOptions.target || null,
+      jobs: Math.max(1, Number(accelOrOptions.jobs) || 1)
     };
   }
   const accel = String(accelOrOptions || DEFAULTS.accel);
@@ -495,7 +626,8 @@ function normalizeExportOptions(accelOrOptions) {
     exportMode: DEFAULTS.exportMode,
     resourceUsage: mapAccelToResource(accel),
     forceCpu: accel === 'cpu',
-    target: null
+    target: null,
+    jobs: 1
   };
 }
 
@@ -641,7 +773,7 @@ function resolveEncodePlan(encoderKey, accelOrOptions, hardware) {
   const wantGpu = !options.forceCpu && family !== 'prores';
   const gpu = family === 'h265' ? hw.h265 : family === 'h264' ? hw.h264 : null;
   const usingGpu = Boolean(wantGpu && gpu);
-  const threads = threadBudget(options.resourceUsage, hw.cores, usingGpu);
+  const threads = threadBudget(options.resourceUsage, hw.cores, usingGpu, options.jobs);
   const width = options.target && options.target.width;
   const height = options.target && options.target.height;
   const cq = perceptualCq(family, options.exportMode, width, height);
@@ -649,7 +781,8 @@ function resolveEncodePlan(encoderKey, accelOrOptions, hardware) {
     ? ENCODERS.prores.audioOptions
     : ['-c:a', 'aac', '-b:a', audioBitrateForMode(options.exportMode)];
   const extraOptions = (cpu.extraOptions && cpu.extraOptions.length) ? cpu.extraOptions : ['-movflags', '+faststart'];
-  const pace = family !== 'prores' && (options.resourceUsage === 'low' || usingGpu);
+  const pace = family !== 'prores' && !isMaxSpeed(options.resourceUsage) &&
+    (options.resourceUsage === 'low' || usingGpu);
 
   if (family === 'prores') {
     return {
@@ -1095,7 +1228,10 @@ function evenRound(value) {
 
 /**
  * Мягкая граница split-screen. Raised-cosine на полном кадре маски.
- * Без loop/eval: на ffmpeg 6.1 `geq=...:eval=init` ломает разбор опций.
+ * Маска статична, поэтому geq считается на одном кадре, а дальше этот кадр
+ * повторяется через loop — раньше geq пересчитывал каждый пиксель на каждом
+ * кадре и был самым медленным местом сплита. Без eval: на ffmpeg 6.1
+ * `geq=...:eval=init` ломает разбор опций.
  */
 function buildFeatherMaskFilter({ width, height, fps, duration, feather, outputLabel }) {
   const denom = Math.max(1, feather - 1).toFixed(1);
@@ -1103,8 +1239,9 @@ function buildFeatherMaskFilter({ width, height, fps, duration, feather, outputL
   const maskDuration = Math.max(1, duration + 1).toFixed(3);
   const rate = Number.isFinite(fps) && fps > 0 ? fps : MAX_OUTPUT_FPS;
   return (
-    `color=c=black:s=${width}x${height}:r=${rate}:d=${maskDuration},` +
-      `format=gray,geq=lum='255*(${ease})'[${outputLabel}]`
+    `color=c=black:s=${width}x${height}:r=${rate}:d=1,trim=end_frame=1,` +
+      `format=gray,geq=lum='255*(${ease})',` +
+      `loop=loop=-1:size=1:start=0,setpts=N/(${rate}*TB),trim=duration=${maskDuration}[${outputLabel}]`
   );
 }
 
@@ -1536,6 +1673,15 @@ function resolveSplitAt(source, percent) {
  * и на 6.1 даёт «Error splitting the argument list: Option not found» на каждом файле.
  * Короткий граф — обычный -filter_complex. Длинный — -filter_complex_script (есть с 1.x).
  */
+/** Скрипты графов, которые сейчас читает какой-то ffmpeg (любой вкладки). */
+const activeFilterScripts = new Set();
+
+function releaseFilterScript(script) {
+  if (!script) return;
+  activeFilterScripts.delete(script);
+  safeUnlink(script);
+}
+
 function attachFilterGraph(command, filters) {
   const text = Array.isArray(filters) ? filters.filter(Boolean).join(';') : String(filters || '');
   if (text.length < FILTER_SCRIPT_THRESHOLD) {
@@ -1547,6 +1693,7 @@ function attachFilterGraph(command, filters) {
     `shorts-fc-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.ffilter`
   );
   fs.writeFileSync(script, text, 'utf8');
+  activeFilterScripts.add(script);
   command._complexFilters('-filter_complex_script', script);
   command._filterScriptPath = script;
   return script;
@@ -1574,7 +1721,7 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
   return new Promise((resolve, reject) => {
     let settled = false;
     let lastEmit = 0;
-    const cleanup = () => safeUnlink(command._filterScriptPath);
+    const cleanup = () => releaseFilterScript(command._filterScriptPath);
     const finish = (handler) => (value) => {
       if (settled) return;
       settled = true;
@@ -1803,6 +1950,7 @@ function clearRenderArtifacts(options = {}) {
     fs.readdirSync(temp).forEach((name) => {
       if (!/^shorts-fc-.*\.ffilter$/i.test(name)) return;
       const file = path.join(temp, name);
+      if (activeFilterScripts.has(file)) return;
       safeUnlink(file);
       if (!fs.existsSync(file)) removed.push(name);
     });
@@ -1817,6 +1965,100 @@ function clearRenderArtifacts(options = {}) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Общий на всё приложение лимит одновременных ffmpeg-кодирований.
+ *
+ * Вкладки работают независимо, но процессор и видеокарта у них одни: без
+ * общего лимита пять вкладок по несколько файлов забивали бы машину так, что
+ * суммарно выходило бы медленнее. Слот выдаётся по очереди (FIFO), GPU-сессии
+ * считаются отдельно — у потребительских карт NVIDIA их число ограничено.
+ */
+class EncodeSlots {
+  constructor(cores = (os.cpus() || []).length || 4) {
+    this.total = clamp(Math.floor(Math.max(1, cores) / 2), 3, 8);
+    this.gpuCap = 3;
+    this.active = 0;
+    this.gpuActive = 0;
+    this.waiters = [];
+  }
+
+  canRun(gpu) {
+    return this.active < this.total && (!gpu || this.gpuActive < this.gpuCap);
+  }
+
+  grant(gpu) {
+    this.active += 1;
+    if (gpu) this.gpuActive += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active -= 1;
+      if (gpu) this.gpuActive -= 1;
+      this.drain();
+    };
+  }
+
+  drain() {
+    for (let i = 0; i < this.waiters.length;) {
+      const waiter = this.waiters[i];
+      if (this.canRun(waiter.gpu)) {
+        this.waiters.splice(i, 1);
+        waiter.resolve(this.grant(waiter.gpu));
+      } else {
+        i += 1;
+      }
+    }
+  }
+
+  /**
+   * Возвращает функцию освобождения слота. drain() срабатывает на каждом
+   * освобождении, поэтому в очереди стоят только те, кому сейчас нельзя, —
+   * новый запрос, которому можно (например, CPU-файл при занятых GPU-сессиях),
+   * получает слот сразу.
+   */
+  acquire(owner, gpu) {
+    if (this.canRun(gpu)) return Promise.resolve(this.grant(gpu));
+    return new Promise((resolve, reject) => {
+      this.waiters.push({ owner, gpu: Boolean(gpu), resolve, reject });
+    });
+  }
+
+  wouldWait(gpu) {
+    return !this.canRun(gpu);
+  }
+
+  cancel(owner) {
+    this.waiters = this.waiters.filter((waiter) => {
+      if (waiter.owner !== owner) return true;
+      waiter.reject(new ProcessingCancelledError());
+      return false;
+    });
+  }
+
+  /** Видеокарта отказала при нескольких сессиях сразу — дальше держим их меньше. */
+  lowerGpuCap(othersActive) {
+    this.gpuCap = Math.max(1, Math.min(this.gpuCap - 1, othersActive));
+  }
+}
+
+const encodeSlots = new EncodeSlots();
+
+/** Promise.all с ограничением параллельности; порядок результатов сохраняется. */
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await fn(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return results;
+}
+
+/**
  * Управляет очередью файлов: ошибка на одном ролике не останавливает остальные.
  *
  * hooks: { onLog(level, message), onProgress(state), onFileDone(info) }
@@ -1826,8 +2068,7 @@ class BatchProcessor {
     this.settings = settings;
     this.hooks = hooks;
     this.cancelled = false;
-    this.currentCommand = null;
-    this.currentOutput = null;
+    this.activeCommands = new Set();
     this.running = false;
   }
 
@@ -1842,14 +2083,15 @@ class BatchProcessor {
   stop() {
     if (!this.running || this.cancelled) return;
     this.cancelled = true;
-    this.log('warn', 'Получен запрос на остановку. Завершаем текущий файл…');
-    if (this.currentCommand) {
+    this.log('warn', 'Получен запрос на остановку. Прерываем текущие файлы…');
+    encodeSlots.cancel(this);
+    this.activeCommands.forEach((command) => {
       try {
-        this.currentCommand.kill('SIGKILL');
+        command.kill('SIGKILL');
       } catch (err) {
         this.log('error', `Не удалось остановить FFmpeg: ${err.message}`);
       }
-    }
+    });
   }
 
   validate() {
@@ -1890,16 +2132,16 @@ class BatchProcessor {
 
       const s = this.settings;
       const percent = clamp(Number(s.percent), 50, 99);
-      const hardware = detectHardware();
+      const hardware = await detectHardwareAsync();
       const exportOptions = {
         exportMode: normalizeExportMode(s.exportMode),
-        resourceUsage: normalizeResourceUsage(s.resourceUsage || s.accel),
-        forceCpu: s.accel === 'cpu' || s.forceCpu === true
+        resourceUsage: normalizeResourceUsage(s.resourceUsage || s.accel || DEFAULTS.resourceUsage),
+        forceCpu: s.accel === 'cpu' || s.forceCpu === true,
+        jobs: 1
       };
       const encoder = resolveEncoderKey(s.encoder, hardware);
       const prefix = s.outputPrefix || DEFAULTS.outputPrefix;
       const overlayOpacity = Number.isFinite(Number(s.overlayOpacity)) ? Number(s.overlayOpacity) : 100;
-      const plan = resolveEncodePlan(encoder, exportOptions, hardware);
 
       fs.mkdirSync(s.outputDir, { recursive: true });
 
@@ -1911,6 +2153,19 @@ class BatchProcessor {
         throw new Error('В выбранной папке нет видеофайлов.');
       }
 
+      const seedPlan = resolveEncodePlan(encoder, exportOptions, hardware);
+      const parallel = Math.min(
+        sources.length,
+        resolveParallelJobs(s.parallelJobs, {
+          resourceUsage: exportOptions.resourceUsage,
+          usingGpu: seedPlan.usingGpu,
+          encoderKey: seedPlan.encoderKey,
+          cores: hardware.cores
+        })
+      );
+      exportOptions.jobs = parallel;
+      const plan = resolveEncodePlan(encoder, exportOptions, hardware);
+
       const frame = FRAME_PRESETS[s.frame] ? s.frame : DEFAULTS.frame;
       const fit = FIT_MODES[s.fit] ? s.fit : DEFAULTS.fit;
 
@@ -1918,7 +2173,10 @@ class BatchProcessor {
       this.log('info', `FFmpeg: ${ffmpegPath}`);
       this.log(
         'info',
-        `Экспорт: ${plan.label}; обрезка ${percent}%; один процесс (MAX_EXPORT_JOBS=${MAX_EXPORT_JOBS})`
+        `Экспорт: ${plan.label}; обрезка ${percent}%; ` +
+          (parallel > 1
+            ? `параллельно ${parallel} файла (по одному ffmpeg на файл)`
+            : `один процесс (MAX_EXPORT_JOBS=${MAX_EXPORT_JOBS})`)
       );
       if (plan.encoderKey === 'prores') {
         this.log('info', `ProRes на CPU, ${plan.threads.encodeThreads} из ${plan.threads.cores} потоков`);
@@ -1998,8 +2256,25 @@ class BatchProcessor {
         );
       }
 
+      this.emitProgress({
+        fileIndex: 0,
+        total: sources.length,
+        filePercent: 0,
+        overallPercent: 0,
+        status: `Читаем ${sources.length} файлов…`,
+        done: 0,
+        failed: 0
+      });
+      const probes = await mapLimit(sources, PROBE_CONCURRENCY, (file) => (
+        this.cancelled
+          ? Promise.resolve({ ok: false, error: new ProcessingCancelledError() })
+          : probeMedia(file).then((info) => ({ ok: true, info }), (error) => ({ ok: false, error }))
+      ));
+
       let closeupHead = 0;
       const jobs = [];
+      /** Файлы, которые уже в конечном состоянии (готово или ошибка). */
+      let settled = 0;
 
       for (let i = 0; i < sources.length; i += 1) {
         if (this.cancelled) break;
@@ -2010,7 +2285,8 @@ class BatchProcessor {
         const humanIndex = `${i + 1}/${sources.length}`;
 
         try {
-          const source = await probeMedia(sourceFile);
+          if (!probes[i].ok) throw probes[i].error;
+          const source = probes[i].info;
           if (source.duration <= 0.2) {
             throw new Error('Слишком короткое или повреждённое видео.');
           }
@@ -2086,10 +2362,12 @@ class BatchProcessor {
           });
           // Playhead двигаем по плану этого ролика, не по фактическому хвосту.
           // Иначе 20% текущего файла оседают как «остаток» следующего Shorts.
+          // Позиция считается заранее, поэтому порядок параллельного рендера на неё не влияет.
           if (closeup) closeupHead += timeline.duration;
         } catch (err) {
           if (this.cancelled) break;
           summary.failed += 1;
+          settled += 1;
           this.log('error', `[${humanIndex}] Ошибка на файле ${fileName}: ${shortenFfmpegError(err.message)}`);
           safeUnlink(outputFile);
           this.emitProgress({
@@ -2097,7 +2375,7 @@ class BatchProcessor {
             total: sources.length,
             fileName,
             filePercent: 0,
-            overallPercent: ((i + 1) / sources.length) * 100,
+            overallPercent: (settled / sources.length) * 100,
             status: `Ошибка ${humanIndex}: ${fileName}`,
             done: summary.done,
             failed: summary.failed
@@ -2105,31 +2383,43 @@ class BatchProcessor {
         }
       }
 
-      const bindCommand = (command) => {
-        this.currentCommand = command;
-        if (this.cancelled) {
-          try {
-            command.kill('SIGKILL');
-          } catch (err) {
-            /* процесс мог ещё не стартовать */
-          }
-        }
-      };
+      /** Прогресс файлов, которые кодируются прямо сейчас: index → { percent, fps, eta }. */
+      const active = new Map();
 
       const emitJobProgress = (job, filePercent, status, extra = {}) => {
         const encodePlan = extra.plan || job.plan || plan;
+        if (active.has(job.index)) {
+          active.set(job.index, { percent: filePercent, fps: extra.fps || 0, eta: extra.eta });
+        }
+        let sum = 0;
+        let fps = 0;
+        let eta = null;
+        active.forEach((value) => {
+          sum += value.percent;
+          fps += value.fps || 0;
+          if (Number.isFinite(value.eta)) eta = eta == null ? value.eta : Math.max(eta, value.eta);
+        });
+        const running = active.size;
+        const shownPercent = running > 1 ? sum / running : filePercent;
+        const runningNames = running > 1
+          ? Array.from(active.keys()).sort((a, b) => a - b).map((index) => `${index + 1}`).join(', ')
+          : null;
         this.emitProgress({
           fileIndex: job.index,
           total: sources.length,
           fileName: job.fileName,
           outputName: path.basename(job.outputFile),
-          filePercent,
-          overallPercent: ((job.index + filePercent / 100) / sources.length) * 100,
-          status: status || `Rendering ${job.humanIndex}: ${job.fileName} — ${Math.round(filePercent)}%`,
+          filePercent: shownPercent,
+          overallPercent: clamp(((settled + sum / 100) / sources.length) * 100, 0, 100),
+          status: status || (runningNames
+            ? `Рендер файлов ${runningNames} из ${sources.length} — ${Math.round(shownPercent)}%`
+            : `Rendering ${job.humanIndex}: ${job.fileName} — ${Math.round(filePercent)}%`),
           done: summary.done,
           failed: summary.failed,
-          fps: extra.fps || 0,
-          eta: extra.eta != null ? formatEta(extra.eta) : '—',
+          active: running,
+          parallel,
+          fps,
+          eta: eta != null ? formatEta(eta) : '—',
           encoderName: encodePlan.encoderName || encodePlan.label,
           vendor: encodePlan.vendor || (encodePlan.usingGpu ? 'GPU' : 'CPU'),
           resolution: job.target ? `${job.target.width}x${job.target.height}` : '',
@@ -2158,104 +2448,175 @@ class BatchProcessor {
             `(${(verified.size / 1024 / 1024).toFixed(1)} МБ, ${verified.info.width}x${verified.info.height}, ` +
             `${verified.info.fps} fps)`
         );
-        emitJobProgress(job, 100, `Завершено ${job.index + 1} из ${sources.length}`);
         return true;
       };
 
       const encodeOne = async (job, encodePlan) => {
-        this.currentOutput = job.outputFile;
-        emitJobProgress(job, 0, `Обработка ${job.humanIndex}: ${job.fileName}`);
-        await renderVideo({
-          source: job.source,
-          shorts,
-          overlay,
-          closeup,
-          closeupStart: job.closeupStart,
-          splitAt: job.splitAt,
-          duration: job.duration,
-          split,
-          outputFile: job.outputFile,
-          percent: job.percent,
-          encoder,
-          plan: encodePlan,
-          hardware,
-          frame,
-          fit,
-          overlayOpacity,
-          onCommand: bindCommand,
-          onDebug: (line) => {
-            if (this.settings.verbose) this.log('debug', line);
-          },
-          onProgress: (filePercent, meta = {}) => emitJobProgress(job, filePercent, null, {
+        let own = null;
+        try {
+          await renderVideo({
+            source: job.source,
+            shorts,
+            overlay,
+            closeup,
+            closeupStart: job.closeupStart,
+            splitAt: job.splitAt,
+            duration: job.duration,
+            split,
+            outputFile: job.outputFile,
+            percent: job.percent,
+            encoder,
             plan: encodePlan,
-            fps: meta.fps,
-            eta: meta.eta
-          })
-        });
+            hardware,
+            frame,
+            fit,
+            overlayOpacity,
+            onCommand: (command) => {
+              own = command;
+              this.activeCommands.add(command);
+              if (this.cancelled) {
+                try {
+                  command.kill('SIGKILL');
+                } catch (err) {
+                  /* процесс мог ещё не стартовать */
+                }
+              }
+            },
+            onDebug: (line) => {
+              if (this.settings.verbose) this.log('debug', line);
+            },
+            onProgress: (filePercent, meta = {}) => emitJobProgress(job, filePercent, null, {
+              plan: encodePlan,
+              fps: meta.fps,
+              eta: meta.eta
+            })
+          });
+        } finally {
+          if (own) this.activeCommands.delete(own);
+        }
       };
 
-      let encodePlan = plan;
-      let encodedAny = false;
-      let previousPlan = null;
+      const cpuPlanFor = (job) => resolveEncodePlan(
+        encoder,
+        { ...exportOptions, forceCpu: true, target: job.target },
+        hardware
+      );
+      /** Видеокарта признана нерабочей: следующие файлы сразу идут на процессор. */
+      let gpuGaveUp = false;
 
-      for (const job of jobs) {
-        if (this.cancelled) break;
-        if (encodedAny) await sleep(handoffDelayMs(previousPlan || encodePlan));
-        if (this.cancelled) break;
-        encodedAny = true;
-        let activePlan = job.plan || encodePlan;
+      const acquireSlot = async (job, encodePlan) => {
+        if (encodeSlots.wouldWait(encodePlan.usingGpu)) {
+          this.emitProgress({
+            fileIndex: job.index,
+            total: sources.length,
+            fileName: job.fileName,
+            filePercent: 0,
+            overallPercent: clamp((settled / sources.length) * 100, 0, 100),
+            status: `Ждём свободный слот рендера (заняты другими файлами или вкладками)…`,
+            done: summary.done,
+            failed: summary.failed
+          });
+        }
+        return encodeSlots.acquire(this, encodePlan.usingGpu);
+      };
 
-        try {
+      /**
+       * Кодирует файл с откатами: при отказе GPU на фоне других сессий —
+       * повтор на GPU с меньшим числом сессий, иначе повтор на CPU. Видеокарта
+       * считается нерабочей, только если CPU справился с тем же файлом, —
+       * битый исходник больше не переводит всю очередь на медленный CPU.
+       */
+      const encodeWithFallback = async (job) => {
+        let encodePlan = gpuGaveUp ? cpuPlanFor(job) : job.plan;
+        let gpuRetryLeft = true;
+        let gpuFailure = null;
+        for (;;) {
+          if (this.cancelled) throw new ProcessingCancelledError();
+          const release = await acquireSlot(job, encodePlan);
           try {
-            await encodeOne(job, activePlan);
-          } catch (err) {
-            if (this.cancelled) throw err;
-            if (err && err.gpuFallback && activePlan.usingGpu) {
+            if (this.cancelled) throw new ProcessingCancelledError();
+            active.set(job.index, { percent: 0, fps: 0, eta: null });
+            emitJobProgress(job, 0, `Обработка ${job.humanIndex}: ${job.fileName}`, { plan: encodePlan });
+            await encodeOne(job, encodePlan);
+            if (gpuFailure && !encodePlan.usingGpu && !gpuGaveUp) {
+              gpuGaveUp = true;
               this.log(
                 'warn',
-                `Видеокарта не приняла кадр (${shortenFfmpegError(err.message)}), дальше кодируем на процессоре`
+                `Видеокарта не приняла кадр (${shortenFfmpegError(gpuFailure.message)}), дальше кодируем на процессоре`
               );
-              safeUnlink(job.outputFile);
-              await sleep(handoffDelayMs(activePlan));
-              encodePlan = resolveEncodePlan(encoder, { ...exportOptions, forceCpu: true, target: job.target }, hardware);
-              activePlan = encodePlan;
-              await encodeOne(job, activePlan);
-            } else {
-              throw err;
             }
-          }
-          if (this.cancelled) {
+            return encodePlan;
+          } catch (err) {
+            if (this.cancelled || !(err && err.gpuFallback && encodePlan.usingGpu)) throw err;
             safeUnlink(job.outputFile);
-            break;
+            const othersOnGpu = encodeSlots.gpuActive - 1;
+            if (gpuRetryLeft && othersOnGpu > 0) {
+              gpuRetryLeft = false;
+              encodeSlots.lowerGpuCap(othersOnGpu);
+              this.log(
+                'warn',
+                `[${job.humanIndex}] Видеокарта отказала при ${othersOnGpu + 1} одновременных файлах — ` +
+                  `повторяю на GPU, дальше не больше ${encodeSlots.gpuCap} сразу`
+              );
+            } else {
+              gpuFailure = err;
+              this.log('warn', `[${job.humanIndex}] GPU не справился, повторяю файл на процессоре`);
+              encodePlan = cpuPlanFor(job);
+            }
+          } finally {
+            active.delete(job.index);
+            release();
           }
-          if (!(await markJobDone(job))) {
-            throw new Error(`Файл не записался: ${path.basename(job.outputFile)}`);
-          }
-        } catch (err) {
-          if (this.cancelled) {
-            safeUnlink(job.outputFile);
-            break;
-          }
-          summary.failed += 1;
-          this.log(
-            'error',
-            `[${job.humanIndex}] Ошибка на файле ${job.fileName}: ${shortenFfmpegError(err.message)}`
-          );
-          safeUnlink(job.outputFile);
-          emitJobProgress(job, 0, `Ошибка ${job.humanIndex}: ${job.fileName}`);
-        } finally {
-          previousPlan = activePlan;
-          this.currentCommand = null;
-          this.currentOutput = null;
         }
-      }
+      };
+
+      let cursor = 0;
+      const worker = async () => {
+        let previousPlan = null;
+        while (!this.cancelled) {
+          const job = jobs[cursor];
+          if (!job) return;
+          cursor += 1;
+          if (previousPlan) await sleep(handoffDelayMs(previousPlan));
+          if (this.cancelled) return;
+          try {
+            previousPlan = await encodeWithFallback(job);
+            if (this.cancelled) {
+              safeUnlink(job.outputFile);
+              return;
+            }
+            if (!(await markJobDone(job))) {
+              throw new Error(`Файл не записался: ${path.basename(job.outputFile)}`);
+            }
+            settled += 1;
+            emitJobProgress(job, 100, `Завершено ${summary.done + summary.failed} из ${sources.length}`);
+          } catch (err) {
+            if (this.cancelled) {
+              safeUnlink(job.outputFile);
+              return;
+            }
+            previousPlan = previousPlan || job.plan;
+            summary.failed += 1;
+            settled += 1;
+            this.log(
+              'error',
+              `[${job.humanIndex}] Ошибка на файле ${job.fileName}: ${shortenFfmpegError(err.message)}`
+            );
+            safeUnlink(job.outputFile);
+            emitJobProgress(job, 0, `Ошибка ${job.humanIndex}: ${job.fileName}`);
+          }
+        }
+      };
+
+      await Promise.all(Array.from({ length: Math.max(1, Math.min(parallel, jobs.length)) }, worker));
 
       summary.cancelled = this.cancelled;
       summary.elapsedMs = Date.now() - startedAt;
       return summary;
     } finally {
+      encodeSlots.cancel(this);
       this.running = false;
-      this.currentCommand = null;
+      this.activeCommands.clear();
     }
   }
 }
@@ -2267,6 +2628,7 @@ module.exports = {
   ENCODERS,
   EXPORT_MODES,
   RESOURCE_MODES,
+  PARALLEL_MODES,
   ACCEL_MODES,
   FRAME_PRESETS,
   FIT_MODES,
@@ -2279,7 +2641,12 @@ module.exports = {
   ffmpegPath,
   ffprobePath,
   detectHardware,
+  detectHardwareAsync,
   resolveEncodePlan,
+  resolveParallelJobs,
+  threadBudget,
+  EncodeSlots,
+  encodeSlots,
   resolveEncoderKey,
   perceptualCq,
   estimateOutputBytes,
@@ -2306,6 +2673,7 @@ module.exports = {
   GPU_PACE_BALANCED,
   GPU_PACE_HIGH,
   MAX_EXPORT_JOBS,
+  MAX_PARALLEL_JOBS,
   INTER_FILE_DELAY_MS,
   CPU_HANDOFF_MS,
   GPU_HANDOFF_MS,
