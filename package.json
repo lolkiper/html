@@ -58,7 +58,8 @@
     "win": {
       "files": [
         "!node_modules/ffprobe-static/bin/darwin/**",
-        "!node_modules/ffprobe-static/bin/linux/**"
+        "!node_modules/ffprobe-static/bin/linux/**",
+        "!node_modules/ffprobe-static/bin/win32/ia32/**"
       ],
       "target": [
         {
