@@ -680,6 +680,19 @@ handle('processing:start', async (ws, settings, rt) => {
   if (rt.batch) return { ok: false, error: 'Монтаж в этой вкладке уже запущен' };
   const conflicts = findFolderConflicts(ws.id, { sourceDir: settings.sourceDir, outputDir: settings.outputDir });
   if (conflicts.length) return { ok: false, error: conflictMessage(conflicts[0]) };
+  const requiredFiles = [
+    ['shortsFile', 'Shorts', true],
+    ['overlayFile', 'оверлея', settings.useOverlay],
+    ['closeupFile', 'крупного плана', settings.useSplit]
+  ];
+  for (const [key, label, used] of requiredFiles) {
+    const file = settings[key];
+    if (!used || !file) continue;
+    let stat = null;
+    try { stat = fs.statSync(file); } catch (_) {}
+    if (!stat) return { ok: false, error: `Файл ${label} не найден: ${file}` };
+    if (!stat.isFile()) return { ok: false, error: `Для ${label} нужно выбрать видеофайл, а не папку: ${file}` };
+  }
 
   const batch = new BatchProcessor({ ...settings, outputPrefix: ws.code }, {
     onLog: (level, message) => send(ws.id, 'processing:log', { level, message, time: Date.now() }),

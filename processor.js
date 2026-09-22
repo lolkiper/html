@@ -2176,7 +2176,9 @@ class BatchProcessor {
         `Экспорт: ${plan.label}; обрезка ${percent}%; ` +
           (parallel > 1
             ? `параллельно ${parallel} файла (по одному ffmpeg на файл)`
-            : `один процесс (MAX_EXPORT_JOBS=${MAX_EXPORT_JOBS})`)
+            : isMaxSpeed(exportOptions.resourceUsage) || sources.length === 1
+              ? 'по одному файлу'
+              : 'по одному файлу (параллельно — в режиме «Максимальная скорость»)')
       );
       if (plan.encoderKey === 'prores') {
         this.log('info', `ProRes на CPU, ${plan.threads.encodeThreads} из ${plan.threads.cores} потоков`);

@@ -381,7 +381,7 @@ async function main() {
     'счётчики Готово/Ошибок обновляются во время очереди, а не только в конце'
   );
   check(
-    logs.some((line) => line.includes('один процесс') || line.includes('MAX_EXPORT_JOBS')) &&
+    logs.some((line) => line.includes('по одному файлу')) &&
       logs.some((line) => line.includes('esN') || line.includes('сразу')),
     'в логе есть один encode-процесс и сохранение каждого файла сразу'
   );
