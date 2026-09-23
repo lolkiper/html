@@ -344,6 +344,8 @@ class GpuUnavailableError extends Error {
     super(cause && cause.message ? cause.message : 'GPU-кодирование недоступно');
     this.name = 'GpuUnavailableError';
     this.gpuFallback = true;
+    this.ffmpegStderr = cause && cause.ffmpegStderr;
+    this.ffmpegCommand = cause && cause.ffmpegCommand;
   }
 }
 
@@ -900,6 +902,33 @@ function parseFrameRate(value, fallback = 30) {
   return Math.round(fps * 1000) / 1000;
 }
 
+/**
+ * У VFR-роликов с телефона r_frame_rate — это тикрейт контейнера (120, 90000),
+ * а не частота кадров: по нему итог получал лишние дубли кадров. Когда
+ * r_frame_rate заметно выше средней частоты, верим avg_frame_rate.
+ */
+function streamFrameRate(stream) {
+  const real = parseFrameRate(stream.r_frame_rate, NaN);
+  const avg = parseFrameRate(stream.avg_frame_rate, NaN);
+  if (Number.isFinite(avg) && (!Number.isFinite(real) || real >= avg * 1.9)) return avg;
+  return Number.isFinite(real) ? real : 30;
+}
+
+function isVariableFrameRate(stream) {
+  const real = parseFrameRate(stream.r_frame_rate, NaN);
+  const avg = parseFrameRate(stream.avg_frame_rate, NaN);
+  return Number.isFinite(real) && Number.isFinite(avg) && Math.abs(real - avg) / avg > 0.02;
+}
+
+/** Селектор потока для графа: точный индекс дорожки, которую выбрал probe. */
+function videoStreamSpec(inputIndex, media) {
+  return media && Number.isInteger(media.videoIndex) ? `${inputIndex}:${media.videoIndex}` : `${inputIndex}:v:0`;
+}
+
+function audioStreamSpec(inputIndex, media) {
+  return media && Number.isInteger(media.audioIndex) ? `${inputIndex}:${media.audioIndex}` : `${inputIndex}:a:0`;
+}
+
 function readRotation(stream) {
   let rotation = 0;
   if (stream.tags && stream.tags.rotate !== undefined) rotation = Number(stream.tags.rotate);
@@ -929,8 +958,13 @@ function shortenFfmpegError(message) {
 /** Разбор вывода `ffmpeg -i file` — резерв на случай отсутствия ffprobe. */
 function parseFfmpegProbe(text) {
   const lines = String(text || '').split(/\r?\n/);
-  const videoLine = lines.find((line) => /:\s*Video:/.test(line)) || '';
+  const videoLine =
+    lines.find((line) => /:\s*Video:/.test(line) && !/attached pic/i.test(line)) || '';
   const audioLine = lines.find((line) => /:\s*Audio:/.test(line)) || '';
+  const streamIndex = (line) => {
+    const match = line.match(/Stream #\d+:(\d+)/);
+    return match ? Number(match[1]) : null;
+  };
   const durationMatch = String(text || '').match(/Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)/);
   const duration = durationMatch
     ? Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3])
@@ -954,33 +988,35 @@ function parseFfmpegProbe(text) {
     rotation: ((Math.round(rotation) % 360) + 360) % 360,
     duration: Number.isFinite(duration) ? duration : 0,
     fps: fpsMatch ? Number(fpsMatch[1]) : null,
+    videoIndex: videoLine ? streamIndex(videoLine) : null,
+    audioIndex: audioLine ? streamIndex(audioLine) : null,
     videoCodec,
     audioCodec,
     audioLanguage: langMatch && langMatch[1].toLowerCase() !== 'und' ? langMatch[1].toLowerCase() : null
   };
 }
 
+/** `ffmpeg -i` без выхода всегда завершается с кодом 1 — нужен только его stderr. */
 function runFfmpegProbe(file) {
-  try {
-    return String(
-      execFileSync(ffmpegPath, ['-hide_banner', '-i', file], {
-        encoding: 'utf8',
-        timeout: 60000,
-        stdio: ['ignore', 'pipe', 'pipe']
-      }) || ''
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffmpegPath,
+      ['-hide_banner', '-i', file],
+      { encoding: 'utf8', timeout: 60000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const text = `${stderr || ''}${stdout || ''}`;
+        if (text.trim()) resolve(text);
+        else reject(err || new Error('ffmpeg не вернул информацию о файле'));
+      }
     );
-  } catch (err) {
-    const text = `${(err && err.stderr) || ''}${(err && err.stdout) || ''}`;
-    if (text.trim()) return text;
-    throw err;
-  }
+  });
 }
 
 /** То же, что probeMedia, но без ffprobe — только силами ffmpeg. */
 async function probeMediaViaFfmpeg(file) {
   let text = '';
   try {
-    text = runFfmpegProbe(file);
+    text = await runFfmpegProbe(file);
   } catch (err) {
     throw new Error(
       `Не удалось прочитать файл (${path.basename(file)}): ${shortenFfmpegError(err && err.message)}`
@@ -1004,6 +1040,8 @@ async function probeMediaViaFfmpeg(file) {
     duration: parsed.duration,
     fps: parsed.fps && parsed.fps > 0 && parsed.fps <= 240 ? Math.round(parsed.fps * 1000) / 1000 : 30,
     hasAudio: parsed.hasAudio,
+    videoIndex: parsed.videoIndex,
+    audioIndex: parsed.audioIndex,
     videoCodec: parsed.videoCodec || 'unknown',
     codecTag: '',
     audioCodec: parsed.hasAudio ? parsed.audioCodec || 'unknown' : null
@@ -1043,7 +1081,9 @@ function probeMediaWithFfprobe(file) {
       const videoStream = streams.find(
         (s) => s.codec_type === 'video' && !(s.disposition && s.disposition.attached_pic)
       );
-      const audioStream = streams.find((s) => s.codec_type === 'audio');
+      const audioStream = streams.find(
+        (s) => s.codec_type === 'audio' && Number(s.channels) !== 0 && Number(s.sample_rate) !== 0
+      ) || streams.find((s) => s.codec_type === 'audio');
 
       if (!videoStream) {
         reject(new Error(`В файле нет видеодорожки: ${path.basename(file)}`));
@@ -1071,8 +1111,16 @@ function probeMediaWithFfprobe(file) {
         height: Math.floor(height / 2) * 2,
         rotation,
         duration: Number.isFinite(duration) ? duration : 0,
-        fps: parseFrameRate(videoStream.r_frame_rate, 30),
+        fps: streamFrameRate(videoStream),
+        vfr: isVariableFrameRate(videoStream),
         hasAudio: Boolean(audioStream),
+        videoIndex: Number.isInteger(videoStream.index) ? videoStream.index : null,
+        audioIndex: audioStream && Number.isInteger(audioStream.index) ? audioStream.index : null,
+        videoDuration: Number(videoStream.duration) || null,
+        audioDuration: audioStream ? Number(audioStream.duration) || null : null,
+        sampleRate: audioStream ? Number(audioStream.sample_rate) || null : null,
+        channels: audioStream ? Number(audioStream.channels) || null : null,
+        pixelFormat: videoStream.pix_fmt || null,
         videoCodec: videoStream.codec_name || 'unknown',
         codecTag: videoStream.codec_tag_string || '',
         audioCodec: audioStream ? audioStream.codec_name || 'unknown' : null
@@ -1088,6 +1136,39 @@ function formatDuration(seconds) {
   const mm = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
   const ss = String(total % 60).padStart(2, '0');
   return `${hh}:${mm}:${ss}`;
+}
+
+/** 32 -> "00:32.000", 3725.5 -> "62:05.500" */
+function formatClock(seconds) {
+  const ms = Math.round((Number.isFinite(seconds) && seconds > 0 ? seconds : 0) * 1000);
+  const mm = String(Math.floor(ms / 60000)).padStart(2, '0');
+  const ss = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+  return `${mm}:${ss}.${String(ms % 1000).padStart(3, '0')}`;
+}
+
+/**
+ * Момент и длина Overlay на сетке кадров итогового fps: стоп-кадр держится
+ * целое число кадров, а T попадает ровно на кадр. Меньше кадра от начала — 0,
+ * меньше кадра до конца — сам конец ролика.
+ */
+function planFreeze({ at, media, size, sourceDuration, fps }) {
+  const rate = Number(fps) > 0 ? Number(fps) : 30;
+  const frame = 1 / rate;
+  const requested = Number.isFinite(Number(at)) ? Number(at) : 0;
+  let snapped = clamp(Math.round(clamp(requested, 0, sourceDuration) * rate) / rate, 0, sourceDuration);
+  if (snapped < frame) snapped = 0;
+  if (snapped > sourceDuration - frame) snapped = sourceDuration;
+  const frames = Math.max(1, Math.round(media.duration * rate));
+  return {
+    at: snapped,
+    requested,
+    clamped: requested > sourceDuration,
+    frameIndex: Math.round(snapped * rate),
+    frames,
+    duration: frames / rate,
+    media,
+    size: clamp(Number(size) || 100, 10, 100)
+  };
 }
 
 /** "00:01:23.45" -> 83.45 */
@@ -1366,7 +1447,8 @@ function planCloseupInputs(closeup, startSec, neededSec) {
   };
 }
 
-function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeupFps, prefix = '', remaining = 0 }) {
+function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeupFps, closeupMedia = null, prefix = '', remaining = 0 }) {
+  const spec = (index) => videoStreamSpec(index, closeupMedia);
   const fps = needsFpsConvert(target.fps, closeupFps) ? `fps=${target.fps},` : '';
   const tail = prefixed(prefix, 'cu_tail');
   const loop = prefixed(prefix, 'cu_loop');
@@ -1377,8 +1459,8 @@ function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeup
     const loopDur = Math.max(0.05, dur - Number(tailDur)).toFixed(3);
     return {
       filters: [
-        `[${closeupIndex}:v:0]trim=duration=${tailDur},setpts=PTS-STARTPTS[${tail}]`,
-        `[${closeupIndex + 1}:v:0]trim=duration=${loopDur},setpts=PTS-STARTPTS[${loop}]`,
+        `[${spec(closeupIndex)}]trim=duration=${tailDur},setpts=PTS-STARTPTS[${tail}]`,
+        `[${spec(closeupIndex + 1)}]trim=duration=${loopDur},setpts=PTS-STARTPTS[${loop}]`,
         `[${tail}][${loop}]concat=n=2:v=1:a=0,` +
           `trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,${fps}setsar=1[${src}]`
       ],
@@ -1390,7 +1472,7 @@ function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeup
 
   return {
     filters: [],
-    prep: `[${closeupIndex}:v:0]trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,${fps}setsar=1`
+    prep: `[${spec(closeupIndex)}]trim=duration=${dur.toFixed(3)},setpts=PTS-STARTPTS,${fps}setsar=1`
   };
 }
 
@@ -1435,6 +1517,7 @@ function buildSplitFilters({
     target,
     duration,
     closeupFps: closeup.fps,
+    closeupMedia: closeup,
     prefix,
     remaining: closeupRemaining
   });
@@ -1496,6 +1579,141 @@ function buildSplitFilters({
 }
 
 /**
+ * Куски исходника между точками вставки (Shorts и/или Overlay). Каждый кусок —
+ * свой вход с -ss/-t. Overlay не режет таймлайн: он цепляется к куску,
+ * который начинается в момент T (стоп-кадр = первый кадр куска), а если T
+ * совпадает с концом ролика — к хвосту предыдущего куска.
+ */
+function planInsertSegments({ source, shorts, splitAt, freeze, fps, inputs, inputBase }) {
+  const frame = 1 / (Number(fps) > 0 ? Number(fps) : 30);
+  const end = source.duration;
+  const cuts = [];
+  if (shorts) cuts.push(splitAt);
+  let freezeAt = freeze ? clamp(Number(freeze.at) || 0, 0, end) : null;
+  if (freeze && shorts && Math.abs(freezeAt - splitAt) < frame) freezeAt = splitAt;
+  if (freeze && freezeAt > 0 && freezeAt < end && !cuts.includes(freezeAt)) cuts.push(freezeAt);
+  cuts.sort((a, b) => a - b);
+
+  const bounds = [0, ...cuts, end];
+  const segments = [];
+  let freezeInput = -1;
+  if (freeze) {
+    freezeInput = inputBase + inputs.length;
+    inputs.push({ file: freeze.media.file, options: segmentInputOptions(0, freeze.duration) });
+  }
+  let shortsInput = -1;
+  if (shorts) {
+    shortsInput = inputBase + inputs.length;
+    inputs.push({ file: shorts.file, options: segmentInputOptions(0, shorts.duration) });
+  }
+
+  const freezeInfo = (mode, offset) => ({
+    mode,
+    offset,
+    inputIndex: freezeInput,
+    media: freeze.media,
+    duration: freeze.duration,
+    size: freeze.size
+  });
+
+  for (let i = 0; i < bounds.length - 1; i += 1) {
+    const start = bounds[i];
+    const stop = bounds[i + 1];
+    const length = stop - start;
+    if (length > 1e-6) {
+      const index = inputBase + inputs.length;
+      inputs.push({ file: source.file, options: segmentInputOptions(start, length) });
+      const piece = {
+        videoInput: index,
+        media: source,
+        audioSource: source,
+        audioInput: index,
+        duration: length,
+        fps: source.fps,
+        width: source.width,
+        height: source.height
+      };
+      if (freeze && Math.abs(start - freezeAt) < 1e-6) piece.freeze = freezeInfo('start', 0);
+      else if (freeze && freezeAt >= end && i === bounds.length - 2) piece.freeze = freezeInfo('stop', length);
+      segments.push(piece);
+    }
+    if (shorts && Math.abs(stop - splitAt) < 1e-6 && stop < end) {
+      segments.push({
+        videoInput: shortsInput,
+        media: shorts,
+        audioSource: shorts,
+        audioInput: shortsInput,
+        duration: shorts.duration,
+        fps: shorts.fps,
+        width: shorts.width,
+        height: shorts.height
+      });
+    }
+  }
+  if (freeze && !segments.some((segment) => segment.freeze)) {
+    throw new Error('Overlay: не удалось привязать момент вставки к ролику');
+  }
+  return segments;
+}
+
+/**
+ * Стоп-кадр + overlay поверх него. Главное видео держит кадр момента T ровно
+ * D секунд (tpad clone), overlay рисуется выше по Z-порядку по центру кадра.
+ * Звук идёт строго последовательно через concat: главный звук на паузе,
+ * пока играет overlay, без amix и без наложения.
+ */
+function buildFreezeFilters({ segment, montage, videoIn, audioIn, videoOut, audioOut, label }) {
+  const info = segment.freeze;
+  const D = info.duration.toFixed(6);
+  const H = segment.duration.toFixed(6);
+  const size = clamp(Number(info.size) || 100, 10, 100) / 100;
+  const boxW = evenRound(montage.width * size);
+  const boxH = evenRound(montage.height * size);
+  const filters = [];
+
+  // Кусок сначала добивается до точной длины H (если видеопоток в файле
+  // короче контейнера), потом стоп-кадр держится ровно D. tpad считает кадры
+  // по частоте канала, а setpts её сбрасывает — поэтому впереди fps.
+  const pad = info.mode === 'start' ? `tpad=start_mode=clone:start_duration=${D}` : `tpad=stop_mode=clone:stop_duration=${D}`;
+  const hold = `fps=${montage.fps},tpad=stop_mode=clone:stop_duration=${H},trim=duration=${H},${pad}`;
+  filters.push(`[${videoIn}]${hold}[${label('fzbg')}]`);
+
+  const shift = info.mode === 'start' ? 'PTS-STARTPTS' : `PTS-STARTPTS+${H}/TB`;
+  filters.push(
+    `[${videoStreamSpec(info.inputIndex, info.media)}]${filterChain(
+      `trim=duration=${D}`,
+      'setpts=PTS-STARTPTS',
+      info.media.vfr || needsFpsConvert(montage.fps, info.media.fps) ? `fps=${montage.fps}` : '',
+      `scale=${boxW}:${boxH}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${SCALE_FLAGS}`,
+      'setsar=1',
+      `tpad=stop_mode=clone:stop_duration=${D}`,
+      `trim=duration=${D}`,
+      `setpts=${shift}`
+    )}[${label('fzfg')}]`
+  );
+  filters.push(
+    `[${label('fzbg')}][${label('fzfg')}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:format=auto,` +
+      `setsar=1,format=${montage.pixelFormat}[${videoOut}]`
+  );
+
+  filters.push(`[${audioIn}]apad=whole_dur=${H},atrim=duration=${H},asetpts=PTS-STARTPTS[${label('fzma')}]`);
+  if (info.media.hasAudio) {
+    filters.push(
+      `[${audioStreamSpec(info.inputIndex, info.media)}]atrim=duration=${D},asetpts=PTS-STARTPTS,` +
+        `aresample=${AUDIO_SAMPLE_RATE}:first_pts=0,${AUDIO_FORMAT_FILTER},` +
+        `apad=whole_dur=${D},atrim=duration=${D},asetpts=PTS-STARTPTS[${label('fzoa')}]`
+    );
+  } else {
+    filters.push(silentSegmentFilter(label('fzoa'), info.duration));
+  }
+  const order = info.mode === 'start'
+    ? `[${label('fzoa')}][${label('fzma')}]`
+    : `[${label('fzma')}][${label('fzoa')}]`;
+  filters.push(`${order}concat=n=2:v=0:a=1[${audioOut}]`);
+  return filters;
+}
+
+/**
  * Собирает список входов, граф фильтров и карту потоков для одного файла.
  *
  * Исходник подключается двумя отдельными входами (голова и хвост) вместо
@@ -1505,6 +1723,7 @@ function buildSplitFilters({
 function buildGraph({
   source,
   shorts,
+  freeze = null,
   overlay,
   closeup,
   closeupStart,
@@ -1536,12 +1755,22 @@ function buildGraph({
       }
     : target;
 
-  const headIndex = inputBase + inputs.length;
-  inputs.push({ file: source.file, options: segmentInputOptions(0, headDuration) });
-  const tailIndex = inputBase + inputs.length;
-  inputs.push({ file: source.file, options: segmentInputOptions(splitAt, tailDuration) });
-  const shortsIndex = inputBase + inputs.length;
-  inputs.push({ file: shorts.file, options: segmentInputOptions(0, shorts.duration) });
+  let segments;
+  if (shorts && !freeze) {
+    const headIndex = inputBase + inputs.length;
+    inputs.push({ file: source.file, options: segmentInputOptions(0, headDuration) });
+    const tailIndex = inputBase + inputs.length;
+    inputs.push({ file: source.file, options: segmentInputOptions(splitAt, tailDuration) });
+    const shortsIndex = inputBase + inputs.length;
+    inputs.push({ file: shorts.file, options: segmentInputOptions(0, shorts.duration) });
+    segments = [
+      { videoInput: headIndex, media: source, audioSource: source, audioInput: headIndex, duration: headDuration, fps: source.fps, width: source.width, height: source.height },
+      { videoInput: shortsIndex, media: shorts, audioSource: shorts, audioInput: shortsIndex, duration: shorts.duration, fps: shorts.fps, width: shorts.width, height: shorts.height },
+      { videoInput: tailIndex, media: source, audioSource: source, audioInput: tailIndex, duration: tailDuration, fps: source.fps, width: source.width, height: source.height }
+    ];
+  } else {
+    segments = planInsertSegments({ source, shorts, splitAt, freeze, fps: montage.fps, inputs, inputBase });
+  }
 
   let overlayIndex = -1;
   if (overlay) {
@@ -1565,31 +1794,42 @@ function buildGraph({
     planned.inputs.forEach((input) => inputs.push({ ...input, pace: false }));
   }
 
-  const segments = [
-    { videoInput: headIndex, audioSource: source, audioInput: headIndex, duration: headDuration, fps: source.fps, width: source.width, height: source.height },
-    { videoInput: shortsIndex, audioSource: shorts, audioInput: shortsIndex, duration: shorts.duration, fps: shorts.fps, width: shorts.width, height: shorts.height },
-    { videoInput: tailIndex, audioSource: source, audioInput: tailIndex, duration: tailDuration, fps: source.fps, width: source.width, height: source.height }
-  ];
-
   const concatLabels = [];
   segments.forEach((segment, i) => {
     const videoLabel = L(`v${i}`);
     const audioLabel = L(`a${i}`);
+    const rawVideo = segment.freeze ? L(`v${i}raw`) : videoLabel;
+    const rawAudio = segment.freeze ? L(`a${i}raw`) : audioLabel;
 
+    // У VFR длительность последнего кадра куска теряется, и -vsync cfr
+    // подтягивает следующий кусок на кадр раньше звука: такой кусок всегда
+    // ставится на сетку итогового fps.
     filters.push(videoSegmentFilter(
-      `${segment.videoInput}:v:0`,
-      videoLabel,
+      videoStreamSpec(segment.videoInput, segment.media),
+      rawVideo,
       montage,
-      segment.fps,
+      segment.media && segment.media.vfr ? NaN : segment.fps,
       { width: segment.width, height: segment.height },
       segment.duration
     ));
 
     // Сегмент без звука заменяется тишиной, иначе concat не соберёт дорожку.
     if (segment.audioSource.hasAudio) {
-      filters.push(audioSegmentFilter(`${segment.audioInput}:a:0`, audioLabel, segment.duration));
+      filters.push(audioSegmentFilter(audioStreamSpec(segment.audioInput, segment.audioSource), rawAudio, segment.duration));
     } else {
-      filters.push(silentSegmentFilter(audioLabel, segment.duration));
+      filters.push(silentSegmentFilter(rawAudio, segment.duration));
+    }
+
+    if (segment.freeze) {
+      filters.push(...buildFreezeFilters({
+        segment,
+        montage,
+        videoIn: rawVideo,
+        audioIn: rawAudio,
+        videoOut: videoLabel,
+        audioOut: audioLabel,
+        label: (name) => L(`${name}${i}`)
+      }));
     }
 
     concatLabels.push(`[${videoLabel}][${audioLabel}]`);
@@ -1627,7 +1867,7 @@ function buildGraph({
       ? 'format=rgba'
       : `format=rgba,colorchannelmixer=aa=${opacity.toFixed(3)}`;
     filters.push(
-      `[${overlayIndex}:v:0]setpts=PTS-STARTPTS,${overlayFps}` +
+      `[${videoStreamSpec(overlayIndex, overlay)}]setpts=PTS-STARTPTS,${overlayFps}` +
         `scale=${target.width}:${target.height}:force_original_aspect_ratio=increase:flags=${SCALE_FLAGS},` +
         `crop=${target.width}:${target.height},setsar=1,${overlayAlpha}[${L('ovl')}]`
     );
@@ -1735,6 +1975,7 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
 
     command.on('start', (commandLine) => {
       command._startedAt = Date.now();
+      command._commandLine = commandLine;
       lowerFfmpegPriority(command);
       if (typeof onCommand === 'function') onCommand(command);
       if (typeof onDebug === 'function') onDebug(commandLine);
@@ -1761,7 +2002,14 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
         timemark: progress.timemark
       });
     });
-    command.on('error', finish((err) => {
+    command.on('error', (err, stdout, stderr) => {
+      if (err && typeof err === 'object') {
+        err.ffmpegStderr = String(stderr || '');
+        err.ffmpegCommand = command._commandLine || '';
+      }
+      handleError(err);
+    });
+    const handleError = finish((err) => {
       if (isCommandTooLong(err) || isUnknownFfmpegOption(err)) {
         reject(err);
         return;
@@ -1771,7 +2019,7 @@ function runCommand(command, { plan, totalDuration, onProgress, onCommand, onDeb
         return;
       }
       reject(err);
-    }));
+    });
     command.on('end', finish(() => resolve()));
     try {
       command.run();
@@ -1828,14 +2076,17 @@ function renderVideo(params) {
       forceCpu: params.forceCpu,
       target
     }, hardware);
+  const freeze = params.freeze || null;
   const timeline = isolateJobTimeline({
     closeupStart: params.closeupStart,
-    splitAt: Number.isFinite(Number(params.splitAt)) && Number(params.splitAt) > 0
-      ? Number(params.splitAt)
-      : resolveSplitAt(source, percent),
+    splitAt: !shorts
+      ? NaN
+      : Number.isFinite(Number(params.splitAt)) && Number(params.splitAt) > 0
+        ? Number(params.splitAt)
+        : resolveSplitAt(source, percent),
     duration: Number.isFinite(Number(params.duration)) && Number(params.duration) > 0
       ? Number(params.duration)
-      : source.duration + shorts.duration,
+      : source.duration + (shorts ? shorts.duration : 0) + (freeze ? freeze.duration : 0),
     percent
   });
   const splitAt = timeline.splitAt;
@@ -1844,6 +2095,7 @@ function renderVideo(params) {
   const { inputs, filters, videoOut, audioOut, layout, pace } = buildGraph({
     source,
     shorts,
+    freeze,
     overlay,
     closeup,
     closeupStart: timeline.closeupStart,
@@ -1913,7 +2165,15 @@ async function verifyOutputFile(file, expected = {}) {
   if (Number.isFinite(expected.duration) && Math.abs(info.duration - expected.duration) > 0.55) {
     throw new Error(`длительность ${info.duration.toFixed(2)}с вместо ${expected.duration.toFixed(2)}с`);
   }
-  return { info, size };
+  const warnings = [];
+  if (Number.isFinite(expected.duration)) {
+    [['видеопоток', info.videoDuration], ['аудиопоток', info.audioDuration]].forEach(([name, value]) => {
+      if (Number.isFinite(value) && value > 0 && Math.abs(value - expected.duration) > 0.55) {
+        warnings.push(`${name} ${value.toFixed(2)}с при ожидаемых ${expected.duration.toFixed(2)}с`);
+      }
+    });
+  }
+  return { info, size, warnings };
 }
 
 /** Минимальный размер готового результата: всё меньше считаем незавершённым. */
@@ -2076,6 +2336,31 @@ class BatchProcessor {
     if (typeof this.hooks.onLog === 'function') this.hooks.onLog(level, message);
   }
 
+  /**
+   * Ошибка файла: короткая строка в лог плюс полный stderr ffmpeg (если он был)
+   * в лог программы и в ffmpeg_errors.log рядом с результатами.
+   */
+  logFileFailure(humanIndex, fileName, err) {
+    const message = err && err.message ? err.message : String(err);
+    this.log('error', `[${humanIndex}] Ошибка на файле ${fileName}: ${shortenFfmpegError(message)} — файл пропущен`);
+    const stderr = err && err.ffmpegStderr ? String(err.ffmpegStderr).trim() : '';
+    if (!stderr) return;
+    const command = err.ffmpegCommand ? `Команда: ${err.ffmpegCommand}\n` : '';
+    this.log('error', `[${humanIndex}] Полный stderr FFmpeg для ${fileName}:\n${command}${stderr}`);
+    const outputDir = this.settings && this.settings.outputDir;
+    if (!outputDir) return;
+    try {
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.appendFileSync(
+        path.join(outputDir, 'ffmpeg_errors.log'),
+        `===== ${new Date().toISOString()} [${humanIndex}] ${fileName}\n${message}\n${command}${stderr}\n\n`,
+        'utf8'
+      );
+    } catch (writeErr) {
+      this.log('warn', `Не удалось записать ffmpeg_errors.log: ${writeErr.message}`);
+    }
+  }
+
   emitProgress(state) {
     if (typeof this.hooks.onProgress === 'function') this.hooks.onProgress(state);
   }
@@ -2099,7 +2384,18 @@ class BatchProcessor {
     const errors = [];
 
     if (!s.sourceDir || !fs.existsSync(s.sourceDir)) errors.push('Папка с исходными видео не найдена.');
-    if (!s.shortsFile || !fs.existsSync(s.shortsFile)) errors.push('Файл Shorts не найден.');
+    const useShorts = s.useShorts !== false;
+    if (useShorts && (!s.shortsFile || !fs.existsSync(s.shortsFile))) errors.push('Файл Shorts не найден.');
+    if (s.useFreeze) {
+      const freezeFile = s.freezeFile || s.shortsFile;
+      if (!freezeFile || !fs.existsSync(freezeFile)) {
+        errors.push('Overlay-вставка включена, но видео для неё не выбрано или не найдено.');
+      }
+      const at = Number(s.freezeAt);
+      if (s.freezeAt != null && s.freezeAt !== '' && (!Number.isFinite(at) || at < 0)) {
+        errors.push('Момент Overlay должен быть временем от 0 секунд.');
+      }
+    }
     if (s.useOverlay && (!s.overlayFile || !fs.existsSync(s.overlayFile))) {
       errors.push('Оверлей включён, но файл не выбран или не найден.');
     }
@@ -2220,12 +2516,30 @@ class BatchProcessor {
         `Кадр: ${FRAME_PRESETS[frame].label}, ${FIT_MODES[fit].label.toLowerCase()}`
       );
 
-      const shorts = await probeMedia(s.shortsFile);
-      this.log(
-        'info',
-        `Shorts: ${path.basename(shorts.file)} — ${shorts.width}x${shorts.height}, ` +
-          `${formatDuration(shorts.duration)}${shorts.hasAudio ? '' : ', без звука'}`
-      );
+      let shorts = null;
+      if (s.useShorts !== false) {
+        shorts = await probeMedia(s.shortsFile);
+        this.log(
+          'info',
+          `Shorts: ${path.basename(shorts.file)} — ${shorts.width}x${shorts.height}, ` +
+            `${formatDuration(shorts.duration)}${shorts.hasAudio ? '' : ', без звука'}`
+        );
+      } else {
+        this.log('info', 'Shorts: выключен — ролики собираются без вставки Shorts');
+      }
+
+      let freezeMedia = null;
+      if (s.useFreeze) {
+        freezeMedia = await probeMedia(s.freezeFile || s.shortsFile);
+        if (!(freezeMedia.duration > 0)) throw new Error('Overlay-видео пустое или повреждено.');
+        this.log(
+          'info',
+          `Overlay-вставка: ${path.basename(freezeMedia.file)} — ${freezeMedia.width}x${freezeMedia.height}, ` +
+            `${freezeMedia.fps} fps, ${formatDuration(freezeMedia.duration)}` +
+            `${freezeMedia.hasAudio ? '' : ', без звука (на время вставки — тишина)'}; ` +
+            `момент ${formatClock(Number(s.freezeAt) || 0)}, размер ${clamp(Number(s.freezeSize) || 100, 10, 100)}%`
+        );
+      }
 
       let overlay = null;
       if (s.useOverlay) {
@@ -2298,13 +2612,32 @@ class BatchProcessor {
             `[${humanIndex}] ${fileName} — ${source.width}x${source.height}, ${source.fps} fps, ` +
               `${formatDuration(source.duration)}${source.hasAudio ? '' : ', без звука'}`
           );
-          this.log(
-            'info',
-            `[${humanIndex}] Точка вставки: ${formatDuration((source.duration * percent) / 100)} ` +
-              `(${percent}%) → ${path.basename(outputFile)}`
-          );
+          if (shorts) {
+            this.log(
+              'info',
+              `[${humanIndex}] Точка вставки: ${formatDuration((source.duration * percent) / 100)} ` +
+                `(${percent}%) → ${path.basename(outputFile)}`
+            );
+          }
 
           const target = resolveTarget(frame, fit, source, plan);
+          const freeze = freezeMedia
+            ? planFreeze({
+              at: s.freezeAt,
+              media: freezeMedia,
+              size: s.freezeSize,
+              sourceDuration: source.duration,
+              fps: target.fps
+            })
+            : null;
+          if (freeze) {
+            this.log(
+              'info',
+              `[${humanIndex}] Overlay: стоп-кадр на ${formatClock(freeze.at)} (кадр ${freeze.frameIndex} при ${target.fps} fps` +
+                `${freeze.clamped ? `, ${formatClock(freeze.requested)} длиннее ролика — ограничено концом` : ''}), ` +
+                `пауза ${formatClock(freeze.duration)} (${freeze.frames} кадров) → ${path.basename(outputFile)}`
+            );
+          }
           const jobPlan = resolveEncodePlan(encoder, { ...exportOptions, target }, hardware);
           if (i === 0) {
             const work = describeEncodeWork({ overlay, closeup, source, shorts, target });
@@ -2319,7 +2652,7 @@ class BatchProcessor {
             width: target.width,
             height: target.height,
             fps: target.fps,
-            duration: source.duration + shorts.duration,
+            duration: source.duration + (shorts ? shorts.duration : 0) + (freeze ? freeze.duration : 0),
             encoderKey: encoder,
             exportMode: exportOptions.exportMode
           });
@@ -2328,8 +2661,8 @@ class BatchProcessor {
             `[${humanIndex}] ${target.width}x${target.height} ${target.fps} fps · ${jobPlan.encoderName}` +
               `${jobPlan.cq != null ? ` CQ/CRF ${jobPlan.cq}` : ''} · оценка ~${(estimated / 1024 / 1024).toFixed(1)} МБ`
           );
-          const splitAt = resolveSplitAt(source, percent);
-          const duration = source.duration + shorts.duration;
+          const splitAt = shorts ? resolveSplitAt(source, percent) : NaN;
+          const duration = source.duration + (shorts ? shorts.duration : 0) + (freeze ? freeze.duration : 0);
           const timeline = isolateJobTimeline({
             closeupStart: closeup ? wrapCloseupOffset(closeupHead, closeup.duration) : 0,
             splitAt,
@@ -2355,6 +2688,7 @@ class BatchProcessor {
             splitAt: timeline.splitAt,
             duration: timeline.duration,
             percent: timeline.percent,
+            freeze,
             encoder,
             hardware,
             frame,
@@ -2370,7 +2704,7 @@ class BatchProcessor {
           if (this.cancelled) break;
           summary.failed += 1;
           settled += 1;
-          this.log('error', `[${humanIndex}] Ошибка на файле ${fileName}: ${shortenFfmpegError(err.message)}`);
+          this.logFileFailure(humanIndex, fileName, err);
           safeUnlink(outputFile);
           this.emitProgress({
             fileIndex: i,
@@ -2441,6 +2775,7 @@ class BatchProcessor {
           height: job.target && job.target.height,
           duration: job.duration
         });
+        verified.warnings.forEach((warning) => this.log('warn', `[${job.humanIndex}] Проверка результата: ${warning}`));
         finished.add(job.outputFile);
         summary.done += 1;
         summary.results.push({ source: job.source.file, output: job.outputFile, size: verified.size });
@@ -2464,6 +2799,7 @@ class BatchProcessor {
             closeupStart: job.closeupStart,
             splitAt: job.splitAt,
             duration: job.duration,
+            freeze: job.freeze,
             split,
             outputFile: job.outputFile,
             percent: job.percent,
@@ -2600,10 +2936,7 @@ class BatchProcessor {
             previousPlan = previousPlan || job.plan;
             summary.failed += 1;
             settled += 1;
-            this.log(
-              'error',
-              `[${job.humanIndex}] Ошибка на файле ${job.fileName}: ${shortenFfmpegError(err.message)}`
-            );
+            this.logFileFailure(job.humanIndex, job.fileName, err);
             safeUnlink(job.outputFile);
             emitJobProgress(job, 0, `Ошибка ${job.humanIndex}: ${job.fileName}`);
           }
@@ -2686,5 +3019,9 @@ module.exports = {
   attachFilterGraph,
   isUnknownFfmpegOption,
   fitStep,
-  videoSegmentFilter
+  videoSegmentFilter,
+  formatClock,
+  planFreeze,
+  planInsertSegments,
+  verifyOutputFile
 };
