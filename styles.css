@@ -507,16 +507,21 @@ input[type='range']:disabled {
   margin-bottom: 8px;
 }
 
-.time-input {
+.percent-row input.time-input {
   width: 110px;
-  flex: 0 0 auto;
+  flex: 0 0 110px;
   text-align: center;
   font-weight: 700;
   font-family: var(--mono);
 }
 
+.percent-row input[type='range'] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .time-input[aria-invalid='true'] {
-  border-color: var(--red, #ef4444);
+  border-color: var(--danger);
 }
 
 /* ---------------------------------------------------------- Сплит-скрин */
@@ -648,7 +653,8 @@ input[type='range']:disabled {
   opacity: 0.3;
 }
 
-.scheme__part--shorts[data-off='true'] {
+.scheme__part--shorts[data-off='true'],
+.scheme__part[hidden] {
   display: none;
 }
 
