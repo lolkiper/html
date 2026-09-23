@@ -445,9 +445,10 @@ function updateScheme() {
   // Shorts на схеме занимает фиксированную долю, остальное делится по проценту.
   const shortsShare = shortsOn ? 22 : 0;
   const headShare = ((100 - shortsShare) * percent) / 100;
-  el.schemeHead.style.flexBasis = `${headShare}%`;
-  el.schemeHead.textContent = `Исходник ${percent}%`;
+  el.schemeHead.style.flexBasis = shortsOn ? `${headShare}%` : '100%';
+  el.schemeHead.textContent = shortsOn ? `Исходник ${percent}%` : 'Исходник целиком';
   el.schemeTail.textContent = `${100 - percent}%`;
+  el.schemeTail.hidden = !shortsOn;
   el.schemeShorts.dataset.off = String(!shortsOn);
 
   const ref = state.reference;
