@@ -49,6 +49,21 @@ const el = {
   sourceDirNote: document.getElementById('source-dir-note'),
   shortsFile: document.getElementById('shorts-file'),
   shortsFileNote: document.getElementById('shorts-file-note'),
+  useShorts: document.getElementById('use-shorts'),
+  shortsBody: document.getElementById('shorts-body'),
+  percentField: document.getElementById('percent-field'),
+  percentTime: document.getElementById('percent-time'),
+
+  useFreeze: document.getElementById('use-freeze'),
+  freezeBody: document.getElementById('freeze-body'),
+  freezeFile: document.getElementById('freeze-file'),
+  freezeFileNote: document.getElementById('freeze-file-note'),
+  freezeAt: document.getElementById('freeze-at'),
+  freezeAtRange: document.getElementById('freeze-at-range'),
+  freezeAtValue: document.getElementById('freeze-at-value'),
+  freezeAtNote: document.getElementById('freeze-at-note'),
+  freezeSize: document.getElementById('freeze-size'),
+  freezeSizeValue: document.getElementById('freeze-size-value'),
 
   useOverlay: document.getElementById('use-overlay'),
   overlayBody: document.getElementById('overlay-body'),
@@ -92,6 +107,8 @@ const el = {
   schemeHead: document.getElementById('scheme-head'),
   schemeTail: document.getElementById('scheme-tail'),
   schemeOverlay: document.getElementById('scheme-overlay'),
+  schemeShorts: document.getElementById('scheme-shorts'),
+  schemeFreeze: document.getElementById('scheme-freeze'),
 
   start: document.getElementById('start'),
   stop: document.getElementById('stop'),
@@ -202,8 +219,30 @@ const state = {
   dlSelection: new Set(),
   audioLangByNumber: {},
   renamePreview: null,
-  renameReport: null
+  renameReport: null,
+  /** Первый ролик папки — шкала ползунков момента Shorts и Overlay. */
+  reference: null,
+  freezeAt: 0
 };
+
+const FREEZE_FILE_HINT = 'Любой видеофайл; без звука — на время вставки тишина.';
+
+/** 32 -> "00:32.000" */
+function formatClock(seconds) {
+  const ms = Math.round((Number.isFinite(seconds) && seconds > 0 ? seconds : 0) * 1000);
+  const mm = String(Math.floor(ms / 60000)).padStart(2, '0');
+  const ss = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+  return `${mm}:${ss}.${String(ms % 1000).padStart(3, '0')}`;
+}
+
+/** "00:32.000", "1:02:03.5", "32.5", "32,5" -> секунды; иначе NaN. */
+function parseClock(text) {
+  const value = String(text || '').trim().replace(',', '.');
+  if (!value) return NaN;
+  const parts = value.split(':');
+  if (parts.length > 3 || parts.some((part) => !/^\d+(\.\d+)?$/.test(part))) return NaN;
+  return parts.reduce((total, part) => total * 60 + Number(part), 0);
+}
 
 const CLOSEUP_HINT = 'Для каждого следующего ролика крупный план продолжается с того места, где закончился предыдущий. Если видео кончится — начнётся сначала. Звук берётся из основного ролика.';
 const OVERLAY_HINT = 'Короткий оверлей зациклится, длинный — обрежется по длине результата.';
@@ -348,6 +387,7 @@ function setRunning(running) {
     el.percent, el.percentRange, el.encoder, el.exportMode, el.resourceUsage, el.parallelJobs,
     el.frame, el.fit, el.useOverlay,
     el.overlayOpacity, el.verbose,
+    el.useShorts, el.useFreeze, el.freezeFile, el.freezeAt, el.freezeAtRange, el.freezeSize,
     el.useSplit, el.closeupFile, el.leftShare, el.feather,
     el.leftZoom, el.leftOffset, el.rightZoom, el.rightOffset
   ];
@@ -401,12 +441,63 @@ function updateSplitControls() {
 
 function updateScheme() {
   const percent = clamp(Number(el.percent.value) || 90, 50, 99);
+  const shortsOn = el.useShorts.checked;
   // Shorts на схеме занимает фиксированную долю, остальное делится по проценту.
-  const shortsShare = 22;
+  const shortsShare = shortsOn ? 22 : 0;
   const headShare = ((100 - shortsShare) * percent) / 100;
   el.schemeHead.style.flexBasis = `${headShare}%`;
   el.schemeHead.textContent = `Исходник ${percent}%`;
   el.schemeTail.textContent = `${100 - percent}%`;
+  el.schemeShorts.dataset.off = String(!shortsOn);
+
+  const ref = state.reference;
+  el.percentTime.textContent = ref && ref.duration > 0
+    ? `${formatClock((ref.duration * percent) / 100)} из ${formatClock(ref.duration)}`
+    : `${percent}%`;
+
+  el.schemeFreeze.dataset.off = String(!el.useFreeze.checked);
+  el.schemeFreeze.textContent = el.useFreeze.checked
+    ? `Overlay-вставка: стоп-кадр на ${formatClock(state.freezeAt)}, основное видео ждёт, затем продолжается`
+    : 'Overlay-вставка выключена';
+}
+
+function updateShortsState() {
+  const enabled = el.useShorts.checked;
+  el.shortsBody.dataset.disabled = String(!enabled);
+  el.percentField.dataset.disabled = String(!enabled);
+  updateScheme();
+}
+
+function updateFreezeState() {
+  el.freezeBody.dataset.disabled = String(!el.useFreeze.checked);
+  updateScheme();
+}
+
+function freezeMax() {
+  const ref = state.reference;
+  return ref && ref.duration > 0 ? ref.duration : null;
+}
+
+/** Ставит момент Overlay: ограничение 0..длина ролика, синхронизация ползунка, поля и подписи. */
+function setFreezeAt(seconds, { fromText = false } = {}) {
+  const max = freezeMax();
+  let value = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+  if (max != null) value = Math.min(value, max);
+  value = Math.round(value * 1000) / 1000;
+  state.freezeAt = value;
+  el.freezeAtRange.max = String(max != null ? max : Math.max(60, value));
+  el.freezeAtRange.value = String(value);
+  el.freezeAtValue.textContent = formatClock(value);
+  if (!fromText || document.activeElement !== el.freezeAt) el.freezeAt.value = formatClock(value);
+  el.freezeAt.removeAttribute('aria-invalid');
+  const ref = state.reference;
+  if (ref && ref.duration > 0) {
+    const frame = ref.fps > 0 ? ` · кадр ${Math.round(value * ref.fps)} при ${ref.fps} fps` : '';
+    el.freezeAtNote.textContent =
+      `Шкала — ${ref.name} (${formatClock(ref.duration)})${frame}. ` +
+      'У более коротких роликов момент ограничивается их концом.';
+  }
+  updateScheme();
 }
 
 // ------------------------------------------------------------- Сохранение
@@ -415,6 +506,11 @@ function collectSettings() {
   return {
     sourceDir: el.sourceDir.value.trim(),
     shortsFile: el.shortsFile.value.trim(),
+    useShorts: el.useShorts.checked,
+    useFreeze: el.useFreeze.checked,
+    freezeFile: el.freezeFile.value.trim(),
+    freezeAt: state.freezeAt,
+    freezeSize: Number(el.freezeSize.value),
     useOverlay: el.useOverlay.checked,
     overlayFile: el.overlayFile.value.trim(),
     overlayOpacity: Number(el.overlayOpacity.value),
@@ -527,6 +623,14 @@ function restoreSettings() {
   el.closeupFile.value = saved.closeupFile || '';
   el.outputDir.value = saved.outputDir || '';
   el.useOverlay.checked = Boolean(saved.useOverlay);
+  el.useShorts.checked = saved.useShorts !== false;
+  el.useFreeze.checked = Boolean(saved.useFreeze);
+  el.freezeFile.value = saved.freezeFile || '';
+  if (Number.isFinite(Number(saved.freezeAt))) setFreezeAt(Number(saved.freezeAt));
+  if (Number.isFinite(Number(saved.freezeSize))) {
+    el.freezeSize.value = clamp(Number(saved.freezeSize), 30, 100);
+  }
+  el.freezeSizeValue.textContent = `${el.freezeSize.value}%`;
   el.useSplit.checked = Boolean(saved.useSplit);
   el.verbose.checked = Boolean(saved.verbose);
 
@@ -605,6 +709,7 @@ async function refreshSourceInfo() {
   if (!directory) {
     el.sourceDirNote.textContent = 'Выберите папку — покажем количество найденных видео.';
     el.sourceDirNote.className = 'field__note';
+    setReference(null);
     return;
   }
 
@@ -612,6 +717,7 @@ async function refreshSourceInfo() {
     directory,
     outputDir: el.outputDir.value.trim()
   });
+  setReference(result && result.first && result.first.duration > 0 ? result.first : null);
 
   if (result.error) {
     el.sourceDirNote.textContent = result.error;
@@ -629,6 +735,15 @@ async function refreshSourceInfo() {
   const more = result.count > 3 ? ` и ещё ${result.count - 3}` : '';
   el.sourceDirNote.textContent = `Найдено видео: ${result.count} — ${preview}${more}`;
   el.sourceDirNote.className = 'field__note field__note--ok';
+}
+
+function setReference(first) {
+  state.reference = first;
+  if (!first) {
+    el.freezeAtNote.textContent =
+      'Шкала — длительность первого ролика в папке. Время вводится как 00:32.000 или 32.5.';
+  }
+  setFreezeAt(state.freezeAt);
 }
 
 async function refreshMediaInfo(inputNode, noteNode, fallbackText) {
@@ -661,6 +776,9 @@ function refreshAllInfo() {
   if (el.useSplit.checked) {
     refreshMediaInfo(el.closeupFile, el.closeupFileNote, CLOSEUP_HINT);
   }
+  if (el.useFreeze.checked) {
+    refreshMediaInfo(el.freezeFile, el.freezeFileNote, FREEZE_FILE_HINT);
+  }
 }
 
 // ------------------------------------------------------------------ События
@@ -685,6 +803,10 @@ const PICKERS = {
   'closeup-file': async () => window.api.pickVideo({
     title: 'Выберите видео для правой половины',
     defaultPath: el.closeupFile.value.trim()
+  }),
+  'freeze-file': async () => window.api.pickVideo({
+    title: 'Выберите overlay-видео',
+    defaultPath: el.freezeFile.value.trim() || el.shortsFile.value.trim()
   })
 };
 
@@ -710,10 +832,13 @@ document.querySelectorAll('[data-pick]').forEach((button) => {
     if (key === 'closeup-file') {
       refreshMediaInfo(el.closeupFile, el.closeupFileNote, CLOSEUP_HINT);
     }
+    if (key === 'freeze-file') {
+      refreshMediaInfo(el.freezeFile, el.freezeFileNote, FREEZE_FILE_HINT);
+    }
   });
 });
 
-['source-dir', 'output-dir', 'shorts-file', 'overlay-file', 'closeup-file'].forEach((id) => {
+['source-dir', 'output-dir', 'shorts-file', 'overlay-file', 'closeup-file', 'freeze-file'].forEach((id) => {
   document.getElementById(id).addEventListener('change', () => {
     saveSettings();
     refreshAllInfo();
@@ -728,6 +853,45 @@ el.useOverlay.addEventListener('change', () => {
     refreshMediaInfo(el.overlayFile, el.overlayFileNote, OVERLAY_HINT);
   }
 });
+
+el.useShorts.addEventListener('change', () => {
+  updateShortsState();
+  saveSettings();
+});
+
+el.useFreeze.addEventListener('change', () => {
+  updateFreezeState();
+  saveSettings();
+  if (el.useFreeze.checked) refreshMediaInfo(el.freezeFile, el.freezeFileNote, FREEZE_FILE_HINT);
+});
+
+el.freezeAtRange.addEventListener('input', () => setFreezeAt(Number(el.freezeAtRange.value)));
+el.freezeAtRange.addEventListener('change', saveSettings);
+
+el.freezeAt.addEventListener('input', () => {
+  const seconds = parseClock(el.freezeAt.value);
+  if (Number.isFinite(seconds)) setFreezeAt(seconds, { fromText: true });
+  else el.freezeAt.setAttribute('aria-invalid', 'true');
+});
+
+const commitFreezeText = () => {
+  const seconds = parseClock(el.freezeAt.value);
+  setFreezeAt(Number.isFinite(seconds) ? seconds : state.freezeAt);
+  el.freezeAt.value = formatClock(state.freezeAt);
+  saveSettings();
+};
+el.freezeAt.addEventListener('change', commitFreezeText);
+el.freezeAt.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    commitFreezeText();
+  }
+});
+
+el.freezeSize.addEventListener('input', () => {
+  el.freezeSizeValue.textContent = `${el.freezeSize.value}%`;
+});
+el.freezeSize.addEventListener('change', saveSettings);
 
 el.useSplit.addEventListener('change', () => {
   if (el.useSplit.checked) {
@@ -814,7 +978,10 @@ async function startProcessing() {
   const settings = collectSettings();
   const problems = [];
   if (!settings.sourceDir) problems.push('Не выбрана папка с исходными видео.');
-  if (!settings.shortsFile) problems.push('Не выбран файл Shorts.');
+  if (settings.useShorts && !settings.shortsFile) problems.push('Shorts включён, но файл Shorts не выбран.');
+  if (settings.useFreeze && !settings.freezeFile && !settings.shortsFile) {
+    problems.push('Overlay-вставка включена, но видео для неё не выбрано.');
+  }
   if (!settings.outputDir) problems.push('Не выбрана папка для сохранения.');
   if (settings.useOverlay && !settings.overlayFile) problems.push('Включён оверлей, но файл не выбран.');
   if (settings.useSplit && !settings.closeupFile) {
@@ -1024,6 +1191,8 @@ function applyRuntimeState(runtimeState) {
 
   restoreSettings();
   updateOverlayState();
+  updateShortsState();
+  updateFreezeState();
   updateSplitState();
   updateSplitControls();
   updateScheme();

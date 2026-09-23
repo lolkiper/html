@@ -85,12 +85,19 @@
             </div>
 
             <div class="field">
-              <label for="shorts-file">Файл Shorts (вставляется в середину)</label>
-              <div class="picker">
-                <input type="text" id="shorts-file" placeholder="Не выбран" spellcheck="false" />
-                <button class="btn btn--ghost" data-pick="shorts-file">Обзор…</button>
+              <label class="switch switch--field">
+                <input type="checkbox" id="use-shorts" checked />
+                <span class="switch__track"><span class="switch__thumb"></span></span>
+                <span class="switch__label">Вставлять Shorts</span>
+              </label>
+              <div class="shorts-body" id="shorts-body" data-disabled="false">
+                <label for="shorts-file">Файл Shorts (вставляется в середину)</label>
+                <div class="picker">
+                  <input type="text" id="shorts-file" placeholder="Не выбран" spellcheck="false" />
+                  <button class="btn btn--ghost" data-pick="shorts-file">Обзор…</button>
+                </div>
+                <p class="field__note" id="shorts-file-note">Один видеофайл любого формата.</p>
               </div>
-              <p class="field__note" id="shorts-file-note">Один видеофайл любого формата.</p>
             </div>
           </article>
 
@@ -195,6 +202,49 @@
 
           <article class="card">
             <div class="card__head">
+              <h2>3б. Overlay-вставка</h2>
+              <label class="switch">
+                <input type="checkbox" id="use-freeze" />
+                <span class="switch__track"><span class="switch__thumb"></span></span>
+                <span class="switch__label">Overlay</span>
+              </label>
+            </div>
+
+            <div class="freeze-body" id="freeze-body" data-disabled="true">
+              <p class="field__note">
+                В выбранный момент основное видео замирает на текущем кадре, его звук ставится на паузу.
+                Поверх стоп-кадра играет overlay-видео со своим звуком, затем основное видео продолжается
+                ровно с того же места. Итог длиннее на длину overlay.
+              </p>
+              <div class="field">
+                <label for="freeze-file">Overlay-видео (пусто — берётся файл Shorts)</label>
+                <div class="picker">
+                  <input type="text" id="freeze-file" placeholder="Как файл Shorts" spellcheck="false" />
+                  <button class="btn btn--ghost" data-pick="freeze-file">Обзор…</button>
+                </div>
+                <p class="field__note" id="freeze-file-note">Любой видеофайл; без звука — на время вставки тишина.</p>
+              </div>
+
+              <div class="field">
+                <label for="freeze-at-range">Вставить overlay на: <b id="freeze-at-value">00:00.000</b></label>
+                <div class="percent-row">
+                  <input type="text" id="freeze-at" class="time-input" value="00:00.000" spellcheck="false" />
+                  <input type="range" id="freeze-at-range" min="0" max="60" step="0.001" value="0" />
+                </div>
+                <p class="field__note" id="freeze-at-note">
+                  Шкала — длительность первого ролика в папке. Время вводится как 00:32.000 или 32.5.
+                </p>
+              </div>
+
+              <div class="field">
+                <label for="freeze-size">Размер overlay поверх кадра: <b id="freeze-size-value">100%</b></label>
+                <input type="range" id="freeze-size" min="30" max="100" step="5" value="100" />
+              </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
               <h2>4. Экспорт</h2>
               <span class="card__hint" id="export-hint">Результат: es1.mp4, es2.mp4, …</span>
             </div>
@@ -222,8 +272,8 @@
             </div>
 
             <div class="grid-2">
-              <div class="field">
-                <label for="percent">Процент обрезки (50–99)</label>
+              <div class="field shorts-body" id="percent-field" data-disabled="false">
+                <label for="percent">Момент Shorts, % (50–99): <b id="percent-time">—</b></label>
                 <div class="percent-row">
                   <input type="number" id="percent" min="50" max="99" step="1" value="90" />
                   <input type="range" id="percent-range" min="50" max="99" step="1" value="90" />
@@ -264,10 +314,11 @@
             <div class="scheme" aria-hidden="true">
               <div class="scheme__bar">
                 <span class="scheme__part scheme__part--head" id="scheme-head">Исходник 90%</span>
-                <span class="scheme__part scheme__part--shorts">Shorts</span>
+                <span class="scheme__part scheme__part--shorts" id="scheme-shorts">Shorts</span>
                 <span class="scheme__part scheme__part--tail" id="scheme-tail">10%</span>
               </div>
               <div class="scheme__overlay" id="scheme-overlay">Оверлей поверх всего хронометража</div>
+              <div class="scheme__overlay" id="scheme-freeze" data-off="true">Overlay-вставка: стоп-кадр на 00:00.000</div>
             </div>
 
             <label class="checkbox">
