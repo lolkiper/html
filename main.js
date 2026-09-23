@@ -645,7 +645,17 @@ handle('sources:scan', async (ws, payload) => {
   try {
     const sameDir = outputDir && path.resolve(outputDir) === path.resolve(directory);
     const files = listVideoFiles(directory, { skipOutputNames: Boolean(sameDir), outputPrefix: ws.code });
-    return { count: files.length, files: files.map((file) => path.basename(file)) };
+    // Первый ролик — шкала для ползунков момента Shorts и Overlay.
+    let first = null;
+    if (files.length) {
+      try {
+        const info = await probeMedia(files[0]);
+        first = { name: path.basename(files[0]), duration: info.duration, fps: info.fps };
+      } catch (_) {
+        first = null;
+      }
+    }
+    return { count: files.length, files: files.map((file) => path.basename(file)), first };
   } catch (err) {
     return { count: 0, files: [], error: err.message };
   }
@@ -683,7 +693,8 @@ handle('processing:start', async (ws, settings, rt) => {
   const conflicts = findFolderConflicts(ws.id, { sourceDir: settings.sourceDir, outputDir: settings.outputDir });
   if (conflicts.length) return { ok: false, error: conflictMessage(conflicts[0]) };
   const requiredFiles = [
-    ['shortsFile', 'Shorts', true],
+    ['shortsFile', 'Shorts', settings.useShorts !== false],
+    ['freezeFile', 'Overlay-вставки', settings.useFreeze],
     ['overlayFile', 'оверлея', settings.useOverlay],
     ['closeupFile', 'крупного плана', settings.useSplit]
   ];
