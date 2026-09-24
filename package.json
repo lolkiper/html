@@ -1,7 +1,7 @@
 {
   "name": "shorts-inserter",
   "productName": "Shorts Inserter",
-  "version": "2.3.2",
+  "version": "2.4.0",
   "description": "Batch tool that inserts Shorts, mass-downloads YouTube, and smart-renames videos in five isolated language workspaces.",
   "main": "main.js",
   "author": "Shorts Inserter",
@@ -47,8 +47,10 @@
       "downloader.js",
       "renamer.js",
       "renderer.js",
+      "decor.js",
       "index.html",
       "styles.css",
+      "fonts/**",
       "vendor/yt-dlp/**"
     ],
     "asarUnpack": [

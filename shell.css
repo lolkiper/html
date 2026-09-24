@@ -1,8 +1,24 @@
+@font-face {
+  font-family: 'Nunito';
+  src: url('fonts/nunito-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nunito';
+  src: url('fonts/nunito-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --bg: #05070c;
+  --bg: #141218;
   --panel: #0a0e18;
   --border: #182236;
-  --gold: #ffd000;
+  --gold: #f0b7c9;
   --text: #e6edf8;
   --dim: #7f8fa4;
   --faint: #505e75;
@@ -22,38 +38,29 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Nunito', 'Segoe UI', system-ui, sans-serif;
   font-size: 13px;
   overflow: hidden;
   user-select: none;
 }
 
 .ws-bar {
-  height: 44px;
+  height: 40px;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 0 16px;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #0b1020 0%, var(--bg) 100%);
-}
-
-.ws-bar__brand {
-  font-weight: 900;
-  font-size: 13px;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: var(--gold);
-  white-space: nowrap;
+  background: var(--bg);
 }
 
 .ws-bar__tabs {
   display: flex;
   gap: 6px;
-  flex: 1 1 auto;
+  margin-left: auto;
   min-width: 0;
-  height: 100%;
-  align-items: flex-end;
+  align-items: center;
 }
 
 .ws-bar__hint {
@@ -65,20 +72,25 @@ body {
 .ws-tab {
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 36px;
+  justify-content: center;
+  gap: 4px;
+  width: 34px;
+  height: 28px;
   min-width: 0;
-  max-width: 230px;
-  padding: 0 14px;
+  padding: 0;
   border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
+  border-radius: 8px;
   background: var(--panel);
   color: var(--dim);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background-color 0.12s;
+  transition: border-color 0.12s, background-color 0.12s;
+}
+
+.ws-tab__name,
+.ws-tab__code {
+  display: none;
 }
 
 .ws-tab:hover {
@@ -88,9 +100,8 @@ body {
 
 .ws-tab.is-active {
   color: var(--gold);
-  background: #141c2c;
+  background: #241c22;
   border-color: var(--gold);
-  box-shadow: 0 -4px 14px rgba(255, 208, 0, 0.12);
 }
 
 .ws-tab__flag {
