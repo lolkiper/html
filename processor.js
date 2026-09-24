@@ -1146,6 +1146,18 @@ function formatClock(seconds) {
   return `${mm}:${ss}.${String(ms % 1000).padStart(3, '0')}`;
 }
 
+function hasFreezePercent(settings) {
+  return settings.freezePercent != null && settings.freezePercent !== '';
+}
+
+/** Момент Overlay в секундах для ролика: процент длины (как у Shorts) или старое абсолютное время. */
+function freezeMomentFor(settings, sourceDuration) {
+  if (hasFreezePercent(settings)) {
+    return (sourceDuration * clamp(Number(settings.freezePercent) || 0, 0, 100)) / 100;
+  }
+  return Number(settings.freezeAt) || 0;
+}
+
 /**
  * Момент и длина Overlay на сетке кадров итогового fps: стоп-кадр держится
  * целое число кадров, а T попадает ровно на кадр. Меньше кадра от начала — 0,
@@ -2391,9 +2403,16 @@ class BatchProcessor {
       if (!freezeFile || !fs.existsSync(freezeFile)) {
         errors.push('Overlay-вставка включена, но видео для неё не выбрано или не найдено.');
       }
-      const at = Number(s.freezeAt);
-      if (s.freezeAt != null && s.freezeAt !== '' && (!Number.isFinite(at) || at < 0)) {
-        errors.push('Момент Overlay должен быть временем от 0 секунд.');
+      if (hasFreezePercent(s)) {
+        const pct = Number(s.freezePercent);
+        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+          errors.push('Момент Overlay должен быть процентом от 0 до 100.');
+        }
+      } else {
+        const at = Number(s.freezeAt);
+        if (s.freezeAt != null && s.freezeAt !== '' && (!Number.isFinite(at) || at < 0)) {
+          errors.push('Момент Overlay должен быть временем от 0 секунд.');
+        }
       }
     }
     if (s.useOverlay && (!s.overlayFile || !fs.existsSync(s.overlayFile))) {
@@ -2537,7 +2556,8 @@ class BatchProcessor {
           `Overlay-вставка: ${path.basename(freezeMedia.file)} — ${freezeMedia.width}x${freezeMedia.height}, ` +
             `${freezeMedia.fps} fps, ${formatDuration(freezeMedia.duration)}` +
             `${freezeMedia.hasAudio ? '' : ', без звука (на время вставки — тишина)'}; ` +
-            `момент ${formatClock(Number(s.freezeAt) || 0)}, размер ${clamp(Number(s.freezeSize) || 100, 10, 100)}%`
+            `момент ${hasFreezePercent(s) ? `${Number(s.freezePercent)}% каждого ролика` : formatClock(Number(s.freezeAt) || 0)}, ` +
+            `размер ${clamp(Number(s.freezeSize) || 100, 10, 100)}%`
         );
       }
 
@@ -2623,7 +2643,7 @@ class BatchProcessor {
           const target = resolveTarget(frame, fit, source, plan);
           const freeze = freezeMedia
             ? planFreeze({
-              at: s.freezeAt,
+              at: freezeMomentFor(s, source.duration),
               media: freezeMedia,
               size: s.freezeSize,
               sourceDuration: source.duration,
@@ -2633,7 +2653,8 @@ class BatchProcessor {
           if (freeze) {
             this.log(
               'info',
-              `[${humanIndex}] Overlay: стоп-кадр на ${formatClock(freeze.at)} (кадр ${freeze.frameIndex} при ${target.fps} fps` +
+              `[${humanIndex}] Overlay: стоп-кадр на ${formatClock(freeze.at)}` +
+                `${hasFreezePercent(s) ? ` (${Number(s.freezePercent)}%)` : ''} (кадр ${freeze.frameIndex} при ${target.fps} fps` +
                 `${freeze.clamped ? `, ${formatClock(freeze.requested)} длиннее ролика — ограничено концом` : ''}), ` +
                 `пауза ${formatClock(freeze.duration)} (${freeze.frames} кадров) → ${path.basename(outputFile)}`
             );
@@ -3022,6 +3043,7 @@ module.exports = {
   videoSegmentFilter,
   formatClock,
   planFreeze,
+  freezeMomentFor,
   planInsertSegments,
   verifyOutputFile
 };
