@@ -421,7 +421,9 @@ async function info(file) {
  * Один сценарий с одним исходником. Ожидаемый план считается независимо:
  * кадровая сетка = fps исходника, T и длина overlay — целыми кадрами.
  */
-async function scenario(label, { main, shorts = null, percent = 50, overlay = null, at = 0, exact = true, size = 70 }) {
+async function scenario(label, {
+  main, shorts = null, percent = 50, overlay = null, at = 0, freezePercent = null, exact = true, size = 70
+}) {
   const t0 = Date.now();
   const failuresBefore = failures;
   const mainInfo = await info(main);
@@ -432,9 +434,14 @@ async function scenario(label, { main, shorts = null, percent = 50, overlay = nu
     percent,
     useFreeze: Boolean(overlay),
     freezeFile: overlay || '',
-    freezeAt: at,
     freezeSize: size
   };
+  if (freezePercent != null) {
+    settings.freezePercent = freezePercent;
+    at = (mainInfo.duration * freezePercent) / 100;
+  } else {
+    settings.freezeAt = at;
+  }
   const run = await runBatch(label.replace(/[^a-z0-9]+/gi, '_'), [main], settings);
   const ok = check(run.summary.done === 1 && run.summary.failed === 0,
     `${label}: рендер не прошёл: ${run.logs.filter((l) => l.level === 'error').map((l) => l.message).join(' | ').slice(0, 800)}`);
@@ -506,7 +513,11 @@ async function main() {
     ['18 Shorts+Overlay: T после Shorts', { main: M.main30, shorts: M.shorts, percent: 50, overlay: M.ov2s, at: 7 }],
     ['19 Shorts+Overlay: T = точка Shorts', { main: M.main30, shorts: M.shorts, percent: 50, overlay: M.ov2s, at: 5 }],
     ['20 Shorts 80% + Overlay в начале, overlay без звука', { main: M.main30, shorts: M.shorts, percent: 80, overlay: M.ov1s, at: 0 }],
-    ['21 Shorts без звука + Overlay, main без звука', { main: M.main25, shorts: M.shortsQuiet, percent: 70, overlay: M.ov1s, at: 1 }]
+    ['21 Shorts без звука + Overlay, main без звука', { main: M.main25, shorts: M.shortsQuiet, percent: 70, overlay: M.ov1s, at: 1 }],
+    ['21b Overlay по проценту 30%', { main: M.main30, overlay: M.ov2s, freezePercent: 30 }],
+    ['21c Overlay 0% и Shorts 90%', { main: M.main30, shorts: M.shorts, percent: 90, overlay: M.ov1s, freezePercent: 0 }],
+    ['21d Overlay 100% (в конце)', { main: M.main24s, overlay: M.ov2s, freezePercent: 100 }],
+    ['21e Overlay 75% + Shorts 50%', { main: M.main25, shorts: M.shorts, percent: 50, overlay: M.ov2s, freezePercent: 75 }]
   ];
   const only = process.env.ONLY ? new RegExp(process.env.ONLY) : null;
   for (const [label, options] of list) {
@@ -523,7 +534,12 @@ async function main() {
     const t0 = Date.now();
     const before = failures;
     const run = await runBatch('multi', [M.main30, M.broken, M.main25, M.truncated, M.main24s], {
-      useShorts: true, useFreeze: true, freezeFile: M.ov2s, freezeAt: 2
+      useShorts: true, useFreeze: true, freezeFile: M.ov2s, freezePercent: 40
+    });
+    // Один процент на всю очередь: 40% от 10 с, 8 с и 6 с.
+    [['1/5', '00:04.000'], ['3/5', '00:03.200'], ['5/5', '00:02.400']].forEach(([index, clock]) => {
+      check(run.logs.some((l) => l.message.startsWith(`[${index}] Overlay: стоп-кадр на ${clock} (40%)`)),
+        `22 ролик ${index}: момент Overlay не ${clock} (40%)`);
     });
     check(run.summary.done === 3, `22 несколько файлов: готово ${run.summary.done} из 3`);
     check(run.summary.failed === 2, `22 несколько файлов: ошибок ${run.summary.failed} вместо 2`);
