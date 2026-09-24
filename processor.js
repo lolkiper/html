@@ -1716,6 +1716,38 @@ function planInsertSegments({ source, shorts, splitAt, freeze, fps, inputs, inpu
  * Звук идёт строго последовательно через concat: главный звук на паузе,
  * пока играет overlay, без amix и без наложения.
  */
+const FREEZE_BG_BLUR = 'gblur=sigma=4';
+
+/**
+ * Размывает только окно [at, at+duration) потока. До и после кадр остаётся резким.
+ * Один вход нельзя читать дважды, поэтому при нескольких кусках он делится через split.
+ */
+function blurHoldFilters(inputLabel, outputLabel, { at, duration, total, label }) {
+  const start = Math.max(0, Number(at) || 0);
+  const end = start + Number(duration);
+  const length = Number(total);
+  const cuts = [];
+  if (start > 0.001) cuts.push({ from: 0, to: start, blur: false });
+  cuts.push({ from: start, to: Math.min(end, length), blur: true });
+  if (length - end > 0.001) cuts.push({ from: end, to: length, blur: false });
+  if (cuts.length === 1) {
+    return [`[${inputLabel}]${FREEZE_BG_BLUR}[${outputLabel}]`];
+  }
+  const pads = cuts.map((_, i) => `[${label(`s${i}`)}]`);
+  const filters = [`[${inputLabel}]split=${cuts.length}${pads.join('')}`];
+  const outs = [];
+  cuts.forEach((cut, i) => {
+    const out = label(`c${i}`);
+    outs.push(`[${out}]`);
+    const blur = cut.blur ? `,${FREEZE_BG_BLUR}` : '';
+    filters.push(
+      `${pads[i]}trim=start=${cut.from.toFixed(6)}:end=${cut.to.toFixed(6)},setpts=PTS-STARTPTS${blur}[${out}]`
+    );
+  });
+  filters.push(`${outs.join('')}concat=n=${cuts.length}:v=1:a=0[${outputLabel}]`);
+  return filters;
+}
+
 function buildFreezeFilters({ segment, montage, videoIn, audioIn, videoOut, audioOut, label, drawOverlay = true }) {
   const info = segment.freeze;
   const D = info.duration.toFixed(6);
@@ -1746,8 +1778,15 @@ function buildFreezeFilters({ segment, montage, videoIn, audioIn, videoOut, audi
         `setpts=${shift}`
       )}[${label('fzfg')}]`
     );
+    const held = info.mode === 'start' ? 0 : segment.duration;
+    filters.push(...blurHoldFilters(label('fzbg'), label('fzblur'), {
+      at: held,
+      duration: info.duration,
+      total: segment.duration + info.duration,
+      label: (name) => label(`bl${name}`)
+    }));
     filters.push(
-      `[${label('fzbg')}][${label('fzfg')}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:format=auto,` +
+      `[${label('fzblur')}][${label('fzfg')}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:format=auto,` +
         `setsar=1,format=${montage.pixelFormat}[${videoOut}]`
     );
   } else {
@@ -1951,8 +1990,14 @@ function buildGraph({
         `setpts=PTS+${at}/TB`
       )}[${L('fzTop')}]`
     );
+    filters.push(...blurHoldFilters(videoOut, L('fzBlur'), {
+      at: freezeWindow.outputAt,
+      duration: freezeWindow.duration,
+      total: duration,
+      label: (name) => L(`fb${name}`)
+    }));
     filters.push(
-      `[${videoOut}][${L('fzTop')}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:format=auto,` +
+      `[${L('fzBlur')}][${L('fzTop')}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:format=auto,` +
         `setsar=1,format=${target.pixelFormat}[${L('fzFull')}]`
     );
     videoOut = L('fzFull');
