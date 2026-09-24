@@ -537,7 +537,8 @@ async function main() {
       useShorts: true, useFreeze: true, freezeFile: M.ov2s, freezePercent: 40
     });
     // Один процент на всю очередь: 40% от 10 с, 8 с и 6 с.
-    [['1/5', '00:04.000'], ['3/5', '00:03.200'], ['5/5', '00:02.400']].forEach(([index, clock]) => {
+    // 40% от 6 с при 24 fps попадает между кадрами и округляется к кадру 58 (00:02.417).
+    [['1/5', '00:04.000'], ['3/5', '00:03.200'], ['5/5', '00:02.417']].forEach(([index, clock]) => {
       check(run.logs.some((l) => l.message.startsWith(`[${index}] Overlay: стоп-кадр на ${clock} (40%)`)),
         `22 ролик ${index}: момент Overlay не ${clock} (40%)`);
     });

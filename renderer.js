@@ -222,7 +222,9 @@ const state = {
   renameReport: null,
   /** Первый ролик папки — шкала ползунков момента Shorts и Overlay. */
   reference: null,
-  freezePercent: 50
+  freezePercent: 50,
+  /** Секунды со старого ползунка: переводятся в процент, когда известна длина первого ролика. */
+  legacyFreezeSeconds: null
 };
 
 const FREEZE_FILE_HINT = 'Любой видеофайл; без звука — на время вставки тишина.';
@@ -475,15 +477,15 @@ function setFreezePercent(value, { fromInput = false } = {}) {
   const ref = state.reference;
   if (ref && ref.duration > 0) {
     const seconds = (ref.duration * percent) / 100;
-    el.freezeAtValue.textContent = `${percent}% · ${formatClock(seconds)} из ${formatClock(ref.duration)}`;
+    el.freezeAtValue.textContent = `${formatClock(seconds)} из ${formatClock(ref.duration)}`;
     const frame = ref.fps > 0 ? `, кадр ${Math.round(seconds * ref.fps)} при ${ref.fps} fps` : '';
     el.freezeAtNote.textContent =
-      `Один процент для всех роликов: у каждого момент считается от его длины, как у Shorts. ` +
-      `Пример — ${ref.name}: ${formatClock(seconds)}${frame}.`;
+      `Один и тот же процент для всех роликов, как у Shorts: у каждого момент считается от его длины. ` +
+      `На ${ref.name} это ${formatClock(seconds)}${frame}.`;
   } else {
     el.freezeAtValue.textContent = `${percent}%`;
     el.freezeAtNote.textContent =
-      'Один процент для всех роликов: у каждого момент считается от его длины, как у Shorts.';
+      'Один и тот же процент для всех роликов, как у Shorts: у каждого момент считается от его длины.';
   }
   updateScheme();
 }
@@ -616,6 +618,8 @@ function restoreSettings() {
   el.freezeFile.value = saved.freezeFile || '';
   if (saved.freezePercent != null && Number.isFinite(Number(saved.freezePercent))) {
     setFreezePercent(Number(saved.freezePercent));
+  } else if (saved.freezeAt != null && Number.isFinite(Number(saved.freezeAt))) {
+    state.legacyFreezeSeconds = Math.max(0, Number(saved.freezeAt));
   }
   if (Number.isFinite(Number(saved.freezeSize))) {
     el.freezeSize.value = clamp(Number(saved.freezeSize), 30, 100);
@@ -729,6 +733,13 @@ async function refreshSourceInfo() {
 
 function setReference(first) {
   state.reference = first;
+  if (state.legacyFreezeSeconds != null && first && first.duration > 0) {
+    const seconds = state.legacyFreezeSeconds;
+    state.legacyFreezeSeconds = null;
+    setFreezePercent((seconds / first.duration) * 100);
+    saveSettings();
+    return;
+  }
   setFreezePercent(state.freezePercent);
 }
 
