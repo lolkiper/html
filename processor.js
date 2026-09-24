@@ -1495,6 +1495,33 @@ function buildCloseupPrepFilters({ closeupIndex, wrap, target, duration, closeup
  * исходник сохраняет полный рост в колонке 540×1080, а не обрезается сверху
  * и снизу до квадрата. Правая половина по умолчанию увеличена в 1.8 раза.
  */
+/**
+ * Вставляет стоп-кадр длиной D в поток, который уже ужат до «живого» времени.
+ * at — секунда этого потока, на которой кадр замирает.
+ */
+function holdStreamFilters(inputLabel, outputLabel, { at, duration, active, fps, label }) {
+  const D = Number(duration).toFixed(6);
+  const rate = Number(fps) > 0 ? Number(fps) : 30;
+  if (!(at > 1 / rate)) {
+    return [`[${inputLabel}]fps=${rate},tpad=start_mode=clone:start_duration=${D}[${outputLabel}]`];
+  }
+  if (at >= active - 1 / rate) {
+    return [`[${inputLabel}]fps=${rate},tpad=stop_mode=clone:stop_duration=${D}[${outputLabel}]`];
+  }
+  // Пауза держит кадр момента T, тот же, что замирает у основного видео,
+  // а не предыдущий. После паузы хвост начинается с этого же кадра.
+  const A = Number(at).toFixed(6);
+  const frame = (1 / rate).toFixed(6);
+  const clone = Math.max(0, Number(duration) - 1 / rate).toFixed(6);
+  return [
+    `[${inputLabel}]split=3[${label('hs')}][${label('ps')}][${label('ts')}]`,
+    `[${label('hs')}]trim=duration=${A},setpts=PTS-STARTPTS[${label('hh')}]`,
+    `[${label('ps')}]trim=start=${A}:duration=${frame},setpts=PTS-STARTPTS,fps=${rate},tpad=stop_mode=clone:stop_duration=${clone}[${label('pp')}]`,
+    `[${label('ts')}]trim=start=${A},setpts=PTS-STARTPTS[${label('tt')}]`,
+    `[${label('hh')}][${label('pp')}][${label('tt')}]concat=n=3:v=1:a=0[${outputLabel}]`
+  ];
+}
+
 function buildSplitFilters({
   baseLabel,
   closeupIndex,
@@ -1506,7 +1533,8 @@ function buildSplitFilters({
   split,
   duration,
   prefix = '',
-  closeupRemaining = 0
+  closeupRemaining = 0,
+  freezeHold = null
 }) {
   const width = target.width;
   const height = target.height;
@@ -1523,19 +1551,33 @@ function buildSplitFilters({
 
   const leftSrc = { width: montage.width, height: montage.height };
   const rightSrc = { width: closeup.width, height: closeup.height };
+  const activeDuration = freezeHold ? Math.max(1 / target.fps, duration - freezeHold.duration) : duration;
   const closeupPrep = buildCloseupPrepFilters({
     closeupIndex,
     wrap: Boolean(closeupWrap),
     target,
-    duration,
+    duration: activeDuration,
     closeupFps: closeup.fps,
     closeupMedia: closeup,
     prefix,
     remaining: closeupRemaining
   });
   filters.push(...closeupPrep.filters);
-  const rightPrep = closeupPrep.prep;
+  let rightPrep = closeupPrep.prep;
+  if (freezeHold) {
+    const ready = L('cuReady');
+    filters.push(`${closeupPrep.prep}[${ready}]`);
+    filters.push(...holdStreamFilters(ready, L('cuHeld'), {
+      at: freezeHold.at,
+      duration: freezeHold.duration,
+      active: activeDuration,
+      fps: target.fps,
+      label: (name) => L(`cu${name}`)
+    }));
+    rightPrep = `[${L('cuHeld')}]`;
+  }
 
+  const rightChain = rightPrep.endsWith(']') ? rightPrep : `${rightPrep},`;
   if (feather === 0) {
     filters.push(
       coverFilter(
@@ -1546,7 +1588,7 @@ function buildSplitFilters({
     );
     filters.push(
       coverFilter(
-        `${rightPrep},`,
+        rightChain,
         rightSrc, rightWidth, height, split.rightZoom, split.rightOffset, width,
         L('splitRight')
       )
@@ -1568,7 +1610,7 @@ function buildSplitFilters({
   filters.push(`[${L('splitLeftWide')}]pad=${width}:${height}:0:0:black[${L('splitBase')}]`);
   filters.push(
     coverFilter(
-      `${rightPrep},`,
+      rightChain,
       rightSrc, rightWindow, height, split.rightZoom, split.rightOffset, width,
       L('splitRightRgb')
     )
@@ -1674,7 +1716,7 @@ function planInsertSegments({ source, shorts, splitAt, freeze, fps, inputs, inpu
  * Звук идёт строго последовательно через concat: главный звук на паузе,
  * пока играет overlay, без amix и без наложения.
  */
-function buildFreezeFilters({ segment, montage, videoIn, audioIn, videoOut, audioOut, label }) {
+function buildFreezeFilters({ segment, montage, videoIn, audioIn, videoOut, audioOut, label, drawOverlay = true }) {
   const info = segment.freeze;
   const D = info.duration.toFixed(6);
   const H = segment.duration.toFixed(6);
@@ -1691,22 +1733,27 @@ function buildFreezeFilters({ segment, montage, videoIn, audioIn, videoOut, audi
   filters.push(`[${videoIn}]${hold}[${label('fzbg')}]`);
 
   const shift = info.mode === 'start' ? 'PTS-STARTPTS' : `PTS-STARTPTS+${H}/TB`;
-  filters.push(
-    `[${videoStreamSpec(info.inputIndex, info.media)}]${filterChain(
-      `trim=duration=${D}`,
-      'setpts=PTS-STARTPTS',
-      info.media.vfr || needsFpsConvert(montage.fps, info.media.fps) ? `fps=${montage.fps}` : '',
-      `scale=${boxW}:${boxH}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${SCALE_FLAGS}`,
-      'setsar=1',
-      `tpad=stop_mode=clone:stop_duration=${D}`,
-      `trim=duration=${D}`,
-      `setpts=${shift}`
-    )}[${label('fzfg')}]`
-  );
-  filters.push(
-    `[${label('fzbg')}][${label('fzfg')}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:format=auto,` +
-      `setsar=1,format=${montage.pixelFormat}[${videoOut}]`
-  );
+  if (drawOverlay) {
+    filters.push(
+      `[${videoStreamSpec(info.inputIndex, info.media)}]${filterChain(
+        `trim=duration=${D}`,
+        'setpts=PTS-STARTPTS',
+        info.media.vfr || needsFpsConvert(montage.fps, info.media.fps) ? `fps=${montage.fps}` : '',
+        `scale=${boxW}:${boxH}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${SCALE_FLAGS}`,
+        'setsar=1',
+        `tpad=stop_mode=clone:stop_duration=${D}`,
+        `trim=duration=${D}`,
+        `setpts=${shift}`
+      )}[${label('fzfg')}]`
+    );
+    filters.push(
+      `[${label('fzbg')}][${label('fzfg')}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:format=auto,` +
+        `setsar=1,format=${montage.pixelFormat}[${videoOut}]`
+    );
+  } else {
+    // Картинка overlay рисуется позже, поверх уже собранного split-screen.
+    filters.push(`[${label('fzbg')}]format=${montage.pixelFormat}[${videoOut}]`);
+  }
 
   filters.push(`[${audioIn}]apad=whole_dur=${H},atrim=duration=${H},asetpts=PTS-STARTPTS[${label('fzma')}]`);
   if (info.media.hasAudio) {
@@ -1784,6 +1831,17 @@ function buildGraph({
     segments = planInsertSegments({ source, shorts, splitAt, freeze, fps: montage.fps, inputs, inputBase });
   }
 
+  let outputCursor = 0;
+  let freezeWindow = null;
+  segments.forEach((segment) => {
+    if (segment.freeze) {
+      const at = outputCursor + (segment.freeze.mode === 'stop' ? segment.duration : 0);
+      segment.freeze.outputAt = at;
+      freezeWindow = segment.freeze;
+    }
+    outputCursor += segment.duration + (segment.freeze ? segment.freeze.duration : 0);
+  });
+
   let overlayIndex = -1;
   if (overlay) {
     // Бесконечный луп: короткий оверлей повторяется, длинный обрежется по shortest=1.
@@ -1799,7 +1857,8 @@ function buildGraph({
     // где закончился ролик N-1. Если файл кончился — начинается сначала.
     // Playhead и буфер входов считаются заново для этого Shorts — хвост
     // предыдущей операции сюда не подмешивается.
-    const planned = planCloseupInputs(closeup, closeupStart, duration);
+    const closeupNeeded = freezeWindow ? Math.max(0.05, duration - freezeWindow.duration) : duration;
+    const planned = planCloseupInputs(closeup, closeupStart, closeupNeeded);
     closeupIndex = inputBase + inputs.length;
     closeupWrap = planned.wrap;
     closeupRemaining = planned.remaining;
@@ -1840,7 +1899,8 @@ function buildGraph({
         audioIn: rawAudio,
         videoOut: videoLabel,
         audioOut: audioLabel,
-        label: (name) => L(`${name}${i}`)
+        label: (name) => L(`${name}${i}`),
+        drawOverlay: !closeup
       }));
     }
 
@@ -1864,11 +1924,38 @@ function buildGraph({
       split: normalizeSplit(split),
       duration,
       prefix: labelPrefix,
-      closeupRemaining
+      closeupRemaining,
+      freezeHold: freezeWindow
+        ? { at: freezeWindow.outputAt, duration: freezeWindow.duration }
+        : null
     });
     filters.push(...built.filters);
     layout = built.layout;
     videoOut = L('sv');
+  }
+
+  // Со сплитом картинка overlay лежит поверх обеих половин, пока они стоят.
+  if (closeup && freezeWindow) {
+    const size = clamp(Number(freezeWindow.size) || 100, 10, 100) / 100;
+    const boxW = evenRound(target.width * size);
+    const boxH = evenRound(target.height * size);
+    const D = freezeWindow.duration.toFixed(6);
+    const at = freezeWindow.outputAt.toFixed(6);
+    filters.push(
+      `[${videoStreamSpec(freezeWindow.inputIndex, freezeWindow.media)}]${filterChain(
+        `trim=duration=${D}`,
+        'setpts=PTS-STARTPTS',
+        freezeWindow.media.vfr || needsFpsConvert(target.fps, freezeWindow.media.fps) ? `fps=${target.fps}` : '',
+        `scale=${boxW}:${boxH}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=${SCALE_FLAGS}`,
+        'setsar=1',
+        `setpts=PTS+${at}/TB`
+      )}[${L('fzTop')}]`
+    );
+    filters.push(
+      `[${videoOut}][${L('fzTop')}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:format=auto,` +
+        `setsar=1,format=${target.pixelFormat}[${L('fzFull')}]`
+    );
+    videoOut = L('fzFull');
   }
 
   // Оверлей ложится последним — поверх уже собранного split-screen.
@@ -2720,7 +2807,9 @@ class BatchProcessor {
           // Playhead двигаем по плану этого ролика, не по фактическому хвосту.
           // Иначе 20% текущего файла оседают как «остаток» следующего Shorts.
           // Позиция считается заранее, поэтому порядок параллельного рендера на неё не влияет.
-          if (closeup) closeupHead += timeline.duration;
+          // На время overlay сплит стоит, поэтому следующий ролик продолжает
+          // крупный план с кадра паузы, а не после пропущенных секунд вставки.
+          if (closeup) closeupHead += timeline.duration - (freeze ? freeze.duration : 0);
         } catch (err) {
           if (this.cancelled) break;
           summary.failed += 1;
