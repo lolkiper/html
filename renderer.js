@@ -58,8 +58,8 @@ const el = {
   freezeBody: document.getElementById('freeze-body'),
   freezeFile: document.getElementById('freeze-file'),
   freezeFileNote: document.getElementById('freeze-file-note'),
-  freezeAt: document.getElementById('freeze-at'),
-  freezeAtRange: document.getElementById('freeze-at-range'),
+  freezePercent: document.getElementById('freeze-percent'),
+  freezePercentRange: document.getElementById('freeze-percent-range'),
   freezeAtValue: document.getElementById('freeze-at-value'),
   freezeAtNote: document.getElementById('freeze-at-note'),
   freezeSize: document.getElementById('freeze-size'),
@@ -222,7 +222,7 @@ const state = {
   renameReport: null,
   /** Первый ролик папки — шкала ползунков момента Shorts и Overlay. */
   reference: null,
-  freezeAt: 0
+  freezePercent: 50
 };
 
 const FREEZE_FILE_HINT = 'Любой видеофайл; без звука — на время вставки тишина.';
@@ -233,15 +233,6 @@ function formatClock(seconds) {
   const mm = String(Math.floor(ms / 60000)).padStart(2, '0');
   const ss = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
   return `${mm}:${ss}.${String(ms % 1000).padStart(3, '0')}`;
-}
-
-/** "00:32.000", "1:02:03.5", "32.5", "32,5" -> секунды; иначе NaN. */
-function parseClock(text) {
-  const value = String(text || '').trim().replace(',', '.');
-  if (!value) return NaN;
-  const parts = value.split(':');
-  if (parts.length > 3 || parts.some((part) => !/^\d+(\.\d+)?$/.test(part))) return NaN;
-  return parts.reduce((total, part) => total * 60 + Number(part), 0);
 }
 
 const CLOSEUP_HINT = 'Для каждого следующего ролика крупный план продолжается с того места, где закончился предыдущий. Если видео кончится — начнётся сначала. Звук берётся из основного ролика.';
@@ -387,7 +378,7 @@ function setRunning(running) {
     el.percent, el.percentRange, el.encoder, el.exportMode, el.resourceUsage, el.parallelJobs,
     el.frame, el.fit, el.useOverlay,
     el.overlayOpacity, el.verbose,
-    el.useShorts, el.useFreeze, el.freezeFile, el.freezeAt, el.freezeAtRange, el.freezeSize,
+    el.useShorts, el.useFreeze, el.freezeFile, el.freezePercent, el.freezePercentRange, el.freezeSize,
     el.useSplit, el.closeupFile, el.leftShare, el.feather,
     el.leftZoom, el.leftOffset, el.rightZoom, el.rightOffset
   ];
@@ -458,7 +449,7 @@ function updateScheme() {
 
   el.schemeFreeze.dataset.off = String(!el.useFreeze.checked);
   el.schemeFreeze.textContent = el.useFreeze.checked
-    ? `Overlay-вставка: стоп-кадр на ${formatClock(state.freezeAt)}, основное видео ждёт, затем продолжается`
+    ? `Overlay-вставка: стоп-кадр после ${state.freezePercent}% ролика, основное видео ждёт, затем продолжается`
     : 'Overlay-вставка выключена';
 }
 
@@ -474,29 +465,25 @@ function updateFreezeState() {
   updateScheme();
 }
 
-function freezeMax() {
-  const ref = state.reference;
-  return ref && ref.duration > 0 ? ref.duration : null;
-}
-
-/** Ставит момент Overlay: ограничение 0..длина ролика, синхронизация ползунка, поля и подписи. */
-function setFreezeAt(seconds, { fromText = false } = {}) {
-  const max = freezeMax();
-  let value = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
-  if (max != null) value = Math.min(value, max);
-  value = Math.round(value * 1000) / 1000;
-  state.freezeAt = value;
-  el.freezeAtRange.max = String(max != null ? max : Math.max(60, value));
-  el.freezeAtRange.value = String(value);
-  el.freezeAtValue.textContent = formatClock(value);
-  if (!fromText || document.activeElement !== el.freezeAt) el.freezeAt.value = formatClock(value);
-  el.freezeAt.removeAttribute('aria-invalid');
+/** Процент Overlay: 0..100, шаг 0.1; синхронизирует поле, ползунок и подписи. */
+function setFreezePercent(value, { fromInput = false } = {}) {
+  const number = Number(value);
+  const percent = Number.isFinite(number) ? Math.round(clamp(number, 0, 100) * 10) / 10 : 50;
+  state.freezePercent = percent;
+  el.freezePercentRange.value = String(percent);
+  if (!fromInput || document.activeElement !== el.freezePercent) el.freezePercent.value = String(percent);
   const ref = state.reference;
   if (ref && ref.duration > 0) {
-    const frame = ref.fps > 0 ? ` · кадр ${Math.round(value * ref.fps)} при ${ref.fps} fps` : '';
+    const seconds = (ref.duration * percent) / 100;
+    el.freezeAtValue.textContent = `${percent}% · ${formatClock(seconds)} из ${formatClock(ref.duration)}`;
+    const frame = ref.fps > 0 ? `, кадр ${Math.round(seconds * ref.fps)} при ${ref.fps} fps` : '';
     el.freezeAtNote.textContent =
-      `Шкала — ${ref.name} (${formatClock(ref.duration)})${frame}. ` +
-      'У более коротких роликов момент ограничивается их концом.';
+      `Один процент для всех роликов: у каждого момент считается от его длины, как у Shorts. ` +
+      `Пример — ${ref.name}: ${formatClock(seconds)}${frame}.`;
+  } else {
+    el.freezeAtValue.textContent = `${percent}%`;
+    el.freezeAtNote.textContent =
+      'Один процент для всех роликов: у каждого момент считается от его длины, как у Shorts.';
   }
   updateScheme();
 }
@@ -510,7 +497,7 @@ function collectSettings() {
     useShorts: el.useShorts.checked,
     useFreeze: el.useFreeze.checked,
     freezeFile: el.freezeFile.value.trim(),
-    freezeAt: state.freezeAt,
+    freezePercent: state.freezePercent,
     freezeSize: Number(el.freezeSize.value),
     useOverlay: el.useOverlay.checked,
     overlayFile: el.overlayFile.value.trim(),
@@ -627,7 +614,9 @@ function restoreSettings() {
   el.useShorts.checked = saved.useShorts !== false;
   el.useFreeze.checked = Boolean(saved.useFreeze);
   el.freezeFile.value = saved.freezeFile || '';
-  if (Number.isFinite(Number(saved.freezeAt))) setFreezeAt(Number(saved.freezeAt));
+  if (saved.freezePercent != null && Number.isFinite(Number(saved.freezePercent))) {
+    setFreezePercent(Number(saved.freezePercent));
+  }
   if (Number.isFinite(Number(saved.freezeSize))) {
     el.freezeSize.value = clamp(Number(saved.freezeSize), 30, 100);
   }
@@ -740,11 +729,7 @@ async function refreshSourceInfo() {
 
 function setReference(first) {
   state.reference = first;
-  if (!first) {
-    el.freezeAtNote.textContent =
-      'Шкала — длительность первого ролика в папке. Время вводится как 00:32.000 или 32.5.';
-  }
-  setFreezeAt(state.freezeAt);
+  setFreezePercent(state.freezePercent);
 }
 
 async function refreshMediaInfo(inputNode, noteNode, fallbackText) {
@@ -866,27 +851,16 @@ el.useFreeze.addEventListener('change', () => {
   if (el.useFreeze.checked) refreshMediaInfo(el.freezeFile, el.freezeFileNote, FREEZE_FILE_HINT);
 });
 
-el.freezeAtRange.addEventListener('input', () => setFreezeAt(Number(el.freezeAtRange.value)));
-el.freezeAtRange.addEventListener('change', saveSettings);
+el.freezePercentRange.addEventListener('input', () => setFreezePercent(el.freezePercentRange.value));
+el.freezePercentRange.addEventListener('change', saveSettings);
 
-el.freezeAt.addEventListener('input', () => {
-  const seconds = parseClock(el.freezeAt.value);
-  if (Number.isFinite(seconds)) setFreezeAt(seconds, { fromText: true });
-  else el.freezeAt.setAttribute('aria-invalid', 'true');
+el.freezePercent.addEventListener('input', () => {
+  if (el.freezePercent.value.trim() === '') return;
+  setFreezePercent(el.freezePercent.value, { fromInput: true });
 });
-
-const commitFreezeText = () => {
-  const seconds = parseClock(el.freezeAt.value);
-  setFreezeAt(Number.isFinite(seconds) ? seconds : state.freezeAt);
-  el.freezeAt.value = formatClock(state.freezeAt);
+el.freezePercent.addEventListener('change', () => {
+  setFreezePercent(el.freezePercent.value.trim() === '' ? state.freezePercent : el.freezePercent.value);
   saveSettings();
-};
-el.freezeAt.addEventListener('change', commitFreezeText);
-el.freezeAt.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    commitFreezeText();
-  }
 });
 
 el.freezeSize.addEventListener('input', () => {

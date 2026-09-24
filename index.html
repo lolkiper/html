@@ -226,13 +226,13 @@
               </div>
 
               <div class="field">
-                <label for="freeze-at-range">Вставить overlay на: <b id="freeze-at-value">00:00.000</b></label>
+                <label for="freeze-percent">Вставить overlay после, % (0–100): <b id="freeze-at-value">50%</b></label>
                 <div class="percent-row">
-                  <input type="text" id="freeze-at" class="time-input" value="00:00.000" spellcheck="false" />
-                  <input type="range" id="freeze-at-range" min="0" max="60" step="0.001" value="0" />
+                  <input type="number" id="freeze-percent" min="0" max="100" step="0.1" value="50" />
+                  <input type="range" id="freeze-percent-range" min="0" max="100" step="0.1" value="50" />
                 </div>
                 <p class="field__note" id="freeze-at-note">
-                  Шкала — длительность первого ролика в папке. Время вводится как 00:32.000 или 32.5.
+                  Один процент для всех роликов: у каждого момент считается от его длины, как у Shorts.
                 </p>
               </div>
 
