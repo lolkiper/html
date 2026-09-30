@@ -1,0 +1,14 @@
+{
+  "dolphin_api_url": "http://localhost:3001",
+  "twitch_login_url": "https://www.twitch.tv/login",
+  "twitch_home_url": "https://www.twitch.tv",
+  "search_query": "Jumble",
+  "watch_duration_seconds": 300,
+  "page_load_timeout_seconds": 60,
+  "element_wait_timeout_seconds": 20,
+  "login_verify_timeout_seconds": 30,
+  "profiles_file": "profiles.txt",
+  "accounts_file": "accounts.txt",
+  "progress_file": "progress.json",
+  "log_dir": "logs"
+}
