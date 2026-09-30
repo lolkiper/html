@@ -130,7 +130,7 @@ app.whenReady().then(() => {
       console.log(`[Zaliver] Скопированы скрипты фермы: ${copied.join(', ')}`);
     }
     if (missing.length) {
-      const text = `Не найдены файлы: ${missing.join(', ')}\n\nПапка запуска:\n${baseDir}\n\nСкопируйте main.mjs и youtube-studio.mjs в эту папку или пересоберите через СБОРКА.bat`;
+      const text = `Не найдены файлы: ${missing.join(', ')}\n\nПапка запуска:\n${baseDir}\n\nСкопируйте main.mjs, youtube-studio.mjs и publish-plan.mjs в эту папку или пересоберите через СБОРКА.bat`;
       logStartupError('ensureFarmScripts', new Error(text));
       dialog.showErrorBox('YouTube Zaliver — ошибка запуска', text);
     }

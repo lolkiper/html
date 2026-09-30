@@ -4,6 +4,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { applyFarmModePreset } from './mode-presets.mjs';
 import {
+  buildPublishPlanFromDisk,
+  formatPublishPreview,
+  resolveTitlesFile,
+} from '../publish-plan.mjs';
+import {
   applyModeSettingsToConfig,
   getModeSettings,
   migrateModeSettings,
@@ -192,15 +197,38 @@ export function createFarmOrchestrator({ baseDir, onLog, onStatus }) {
         return false;
       }
 
-      jobs = profileIds.map((profileId) => ({
-        profileId,
-        channelNum: mapping[profileId]?.[0],
+      let videosDir = config.VIDEOS_DIR || './videos';
+      if (!path.isAbsolute(videosDir)) videosDir = path.join(baseDir, videosDir);
+      if (!fs.existsSync(videosDir) && videosDir.includes('yt-farm\\yt-farm')) {
+        videosDir = videosDir.replace('yt-farm\\yt-farm', 'yt-farm');
+      }
+
+      let plan;
+      try {
+        plan = buildPublishPlanFromDisk({
+          profileMapping: mapping,
+          videosDir,
+          titlesFile: resolveTitlesFile(videosDir, baseDir),
+        });
+      } catch (err) {
+        emit(999, err.message);
+        if (onStatus) onStatus('idle');
+        return false;
+      }
+
+      jobs = plan.items.map((item) => ({
+        profileId: item.profileId,
+        channelNum: item.channelNumber,
       }));
       nextJobIndex = 0;
       slotPool = Array.from({ length: concurrency }, (_, i) => i + 1);
 
-      const modeLabel = config.FARM_MODE === 'multi' ? 'МУЛЬТИ (10 видео + расписание)' : 'ОДИНАРНЫЙ (1 видео сразу)';
-      emit(999, `🔮 Залив запущен в режиме [${modeLabel}] — каналов: ${profileIds.length}, потоков: ${concurrency}`);
+      const modeLabel = config.FARM_MODE === 'multi' ? 'МУЛЬТИ (расписание)' : 'ОДИНАРНЫЙ (публикация сразу)';
+      emit(999, `🔮 Залив запущен в режиме [${modeLabel}] — каналов: ${plan.items.length}, потоков: ${concurrency}`);
+      emit(999, 'Очередь: индекс канала = индекс видео = индекс строки nazvaniya.txt');
+      for (const item of plan.items) {
+        emit(999, formatPublishPreview(item, plan.items.length));
+      }
 
       if (onStatus) onStatus('running');
       pumpQueue();

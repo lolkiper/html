@@ -11,7 +11,10 @@ if not exist "%TARGET%" (
 echo [copy-farm] Копирую скрипты в %TARGET%...
 copy /Y main.mjs "%TARGET%\" >nul
 copy /Y youtube-studio.mjs "%TARGET%\" >nul
+copy /Y publish-plan.mjs "%TARGET%\" >nul
+if exist "%TARGET%\resources\farm" copy /Y publish-plan.mjs "%TARGET%\resources\farm\" >nul
+if exist "%TARGET%\resources\app_unpacked" copy /Y publish-plan.mjs "%TARGET%\resources\app_unpacked\" >nul
 if not exist "%TARGET%\videos" mkdir "%TARGET%\videos"
 if not exist "%TARGET%\config.json" if exist config.example.json copy /Y config.example.json "%TARGET%\config.json" >nul
-echo [copy-farm] OK: main.mjs + youtube-studio.mjs
+echo [copy-farm] OK: main.mjs + youtube-studio.mjs + publish-plan.mjs
 exit /b 0

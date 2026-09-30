@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const FARM_FILES = ['main.mjs', 'youtube-studio.mjs'];
+const FARM_FILES = ['main.mjs', 'youtube-studio.mjs', 'publish-plan.mjs'];
 
 /**
  * Копирует main.mjs и youtube-studio.mjs рядом с EXE при первом запуске.

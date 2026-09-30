@@ -6,6 +6,7 @@
   },
   "files": [
     "panel/**/*",
+    "publish-plan.mjs",
     "package.json"
   ],
   "extraResources": [
@@ -18,6 +19,10 @@
       "to": "farm/youtube-studio.mjs"
     },
     {
+      "from": "publish-plan.mjs",
+      "to": "farm/publish-plan.mjs"
+    },
+    {
       "from": "config.example.json",
       "to": "farm/config.example.json"
     }
@@ -25,6 +30,7 @@
   "extraFiles": [
     { "from": "main.mjs", "to": "." },
     { "from": "youtube-studio.mjs", "to": "." },
+    { "from": "publish-plan.mjs", "to": "." },
     { "from": "config.example.json", "to": "config.example.json" },
     { "from": "videos", "to": "videos", "filter": ["**/*"] }
   ],
