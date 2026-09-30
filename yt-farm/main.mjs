@@ -5,14 +5,19 @@ import path from 'path';
 import axios from 'axios';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import {
+  buildPublishPlanFromDisk,
+  formatPublishPreview,
+  resolveTitlesFile,
+} from './publish-plan.mjs';
 
 /**
  * main.mjs — единственная точка входа фермы.
  * Worker: node main.mjs <slot> <dolphin_profile_id>
  * Панель: spawn(process.execPath, [main.mjs, slot, profileId], { cwd: process.cwd() })
  *
- * Мульти-режим (10 видео + расписание) — логика 1:1 из рабочего скрипта пользователя.
- * Одиночный режим (1 видео сразу) — отдельная ветка для переключателя в панели.
+ * Канал, видео и строка nazvaniya.txt берутся строго по одному индексу.
+ * Мульти-режим ставит это видео в расписание, одиночный публикует сразу.
  */
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -48,7 +53,7 @@ function normalizeConfig(raw) {
     MAX_PARALLEL_SLOTS: raw.MAX_PARALLEL_SLOTS ?? raw.CONCURRENCY_LIMIT ?? 1,
     SCHEDULE_SETTINGS: {
       ...schedule,
-      VIDEOS_PER_CHANNEL: schedule.VIDEOS_PER_CHANNEL ?? raw.VIDEOS_PER_CHANNEL ?? 50,
+      VIDEOS_PER_CHANNEL: schedule.VIDEOS_PER_CHANNEL ?? raw.VIDEOS_PER_CHANNEL ?? 10,
     },
     ANTIDETECT: raw.ANTIDETECT || {},
   };
@@ -58,7 +63,7 @@ const CONFIG = normalizeConfig(JSON.parse(fs.readFileSync(configPath, 'utf-8')))
 
 const SCHEDULE_SETTINGS = CONFIG.SCHEDULE_SETTINGS || {};
 const ANTIDETECT = CONFIG.ANTIDETECT || {};
-const VIDEOS_PER_CHANNEL = SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL ?? 50;
+const VIDEOS_PER_CHANNEL = SCHEDULE_SETTINGS.VIDEOS_PER_CHANNEL ?? 10;
 const BATCH_SIZE = SCHEDULE_SETTINGS.BATCH_SIZE ?? 10;
 const IS_MULTI_MODE = CONFIG.FARM_MODE === 'multi' || (CONFIG.FARM_MODE !== 'single' && BATCH_SIZE > 1);
 
@@ -99,7 +104,7 @@ function countChannelUploads(history, channelNumber) {
  * videoSegmentIndex = (partNum - 1) % videosPerChannel
  * Блок N = строки [N*4 .. N*4+3] в BASE_TITLES; финальная строка — randomBetween в этом диапазоне.
  */
-function pickBlockTitle(allTitles, partNum, videosPerChannel = 50, titlesPerBlock = TITLES_PER_BLOCK) {
+function pickBlockTitle(allTitles, partNum, videosPerChannel = 10, titlesPerBlock = TITLES_PER_BLOCK) {
   const videoSegmentIndex = (partNum - 1) % videosPerChannel;
   const blockStartIndex = videoSegmentIndex * titlesPerBlock;
   const blockEndIndex = blockStartIndex + titlesPerBlock - 1;
@@ -206,8 +211,8 @@ function pauseBetweenUploads() {
 const SCHEDULE_DEFAULTS = {
   SCHEDULE_HOURS: [7, 13, 19, 1],
   LOW_SCHEDULE_THRESHOLD: 10,
-  VIDEOS_PER_CHANNEL: 50,
-  SCHEDULE_EXTENSION_BUFFER: 50,
+  VIDEOS_PER_CHANNEL: 10,
+  SCHEDULE_EXTENSION_BUFFER: 10,
 };
 
 function mergeScheduleSettings(settings = {}) {
@@ -591,6 +596,7 @@ async function collectChannelStats(page, channelNumber) {
 
   console.log(`\n📊 [КАНАЛ №${channelNumber}] Захожу на главную https://studio.youtube.com/ для финального сбора статистики...`);
   try {
+    await asyncSleep(6000); // ⏳ Пауза перед сбором статистики
     await page.goto('https://studio.youtube.com/', { waitUntil: 'networkidle' }).catch(() => {});
     await new Promise((r) => setTimeout(r, capDelay(6000)));
 
@@ -638,14 +644,33 @@ async function stopDolphin(profileId) {
   }).catch(() => {});
 }
 
-/** Мульти-режим: 10 видео + расписание — 1:1 из рабочего скрипта */
+function indexedAssignment(profileId, finalVideosDir) {
+  const plan = buildPublishPlanFromDisk({
+    profileMapping: CONFIG.PROFILE_MAPPING,
+    videosDir: finalVideosDir,
+    titlesFile: resolveTitlesFile(finalVideosDir, baseDir),
+  });
+  const assignment = plan.items.find((item) => String(item.profileId) === String(profileId));
+  if (!assignment) {
+    throw new Error(`Ошибка: профиль ${profileId} отсутствует в очереди публикации. Публикация остановлена.`);
+  }
+  if (!fs.existsSync(path.join(finalVideosDir, assignment.videoName))) {
+    throw new Error(`Ошибка: отсутствует видео №${assignment.index + 1} (${assignment.videoName}). Публикация остановлена.`);
+  }
+  return { plan, assignment };
+}
+
+function alreadyUploadedFile(history, fileName) {
+  return (history.uploaded || []).some((item) => item.file === fileName);
+}
+
+/** Мульти-режим: одно видео канала по общему индексу + расписание */
 async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
   const CURRENT_SLOT = slot;
   const directProfileId = profileId;
 
-  const allTitles = CONFIG.BASE_TITLES || [];
   const history = await loadHistory(directProfileId);
-  const availableVideos = [];
+  const { plan, assignment } = indexedAssignment(directProfileId, finalVideosDir);
 
   const discovered = await syncChannelsFromMapping(CONFIG.PROFILE_MAPPING);
   const isNewChannel = discovered.new.some((c) => c.channelNumber === channelNumber);
@@ -665,30 +690,25 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
     console.log(`📋 Канал №${channelNumber} — известный, свободных слотов: ${remaining}, всего в графике: ${schedulePrep.schedule.length}`);
   }
 
-  const startVideoNum = (channelNumber - 1) * VIDEOS_PER_CHANNEL + 1;
-
-  for (let i = 0; i < VIDEOS_PER_CHANNEL; i++) {
-    const currentVideoIndex = startVideoNum + i;
-    const filename = `part${currentVideoIndex}.mov`;
-    const alreadyUploaded = history.uploaded.some((item) => item.file === filename);
-    if (!alreadyUploaded) {
-      availableVideos.push({ file: filename, channel: channelNumber });
-    }
-  }
-
-  if (availableVideos.length === 0) {
-    console.log(`✅ Все ${VIDEOS_PER_CHANNEL} видео для Канала №${channelNumber} уже были опубликованы ранее!`);
+  if (alreadyUploadedFile(history, assignment.videoName)) {
+    console.log(`✅ [${assignment.index + 1}/${plan.items.length}] ${assignment.videoName} уже опубликован на этом канале. Индекс не передаётся другому видео или названию.`);
     console.log(JSON.stringify({
       DATA_TYPE: 'STATS_UPDATE', channelNum: channelNumber, profileId: directProfileId,
-      subs: 'Готово', views: '100%', uploaded: VIDEOS_PER_CHANNEL, status: 'АКТИВЕН',
+      subs: 'Готово', views: '100%', uploaded: countChannelUploads(history, channelNumber), status: 'АКТИВЕН',
     }));
-    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: все видео уже в history`);
+    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: видео индекса ${assignment.index + 1} уже в history`);
     return;
   }
 
-  shuffle(availableVideos);
-  const currentBatch = availableVideos.slice(0, BATCH_SIZE);
-  console.log(`🎯 Слот ${CURRENT_SLOT} собрал пачку из ${currentBatch.length} видео для этого пакетного захода.`);
+  const currentBatch = [{
+    file: assignment.videoName,
+    title: assignment.title,
+    channel: channelNumber,
+    planIndex: assignment.index,
+    planTotal: plan.items.length,
+    channelLabel: assignment.channelLabel,
+  }];
+  console.log(`🎯 Слот ${CURRENT_SLOT}: индекс ${assignment.index + 1}/${plan.items.length} — ${assignment.channelLabel} + ${assignment.videoName}`);
 
   const batchTimeSlots = await schedulePrep.batchSlots(currentBatch.length);
   if (batchTimeSlots.length < currentBatch.length) {
@@ -725,14 +745,17 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
       break;
     }
 
-    videoToUpload.title = resolveTitleForUpload(
-      allTitles,
-      channelNumber,
-      videoToUpload.file,
-      VIDEOS_PER_CHANNEL,
-    );
+    if (!fs.existsSync(path.join(finalVideosDir, videoToUpload.file))) {
+      throw new Error(`Ошибка: отсутствует видео №${videoToUpload.planIndex + 1} (${videoToUpload.file}). Публикация остановлена.`);
+    }
 
-    console.log(`\n🎬 [Видео ${i + 1}/${currentBatch.length}] Начинаю процесс для: ${videoToUpload.file}`);
+    console.log(`\n${formatPublishPreview({
+      index: videoToUpload.planIndex,
+      channelLabel: videoToUpload.channelLabel,
+      videoName: videoToUpload.file,
+      title: videoToUpload.title,
+    }, videoToUpload.planTotal)}`);
+    console.log(`🎬 Начинаю загрузку: ${videoToUpload.file}`);
     console.log(`📅 Целевой тайм-слот публикации: ${videoTimeSlot}`);
 
     let attempts = 3;
@@ -807,37 +830,32 @@ async function runFarmMulti(slot, profileId, channelNumber, finalVideosDir) {
   workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: загружено ${totalUploadedInSession} видео, канал №${channelNumber}`);
 }
 
-/** Одиночный режим: 1 видео, публикация сразу */
+/** Одиночный режим: видео этого индекса, публикация сразу */
 async function runFarmSingle(slot, profileId, channelNumber, finalVideosDir) {
   const CURRENT_SLOT = slot;
   const directProfileId = profileId;
   const history = await loadHistory(directProfileId);
-  const allTitles = CONFIG.BASE_TITLES || [];
-  const startVideoNum = (channelNumber - 1) * VIDEOS_PER_CHANNEL + 1;
-  const availableVideos = [];
+  const { plan, assignment } = indexedAssignment(directProfileId, finalVideosDir);
 
-  for (let i = 0; i < VIDEOS_PER_CHANNEL; i++) {
-    const currentVideoIndex = startVideoNum + i;
-    const filename = `part${currentVideoIndex}.mov`;
-    const alreadyUploaded = history.uploaded.some((item) => item.file === filename);
-    if (!alreadyUploaded) {
-      availableVideos.push({ file: filename, channel: channelNumber });
-    }
-  }
-
-  if (availableVideos.length === 0) {
-    console.log(`✅ Все ${VIDEOS_PER_CHANNEL} видео для Канала №${channelNumber} уже были опубликованы ранее!`);
+  if (alreadyUploadedFile(history, assignment.videoName)) {
+    console.log(`✅ [${assignment.index + 1}/${plan.items.length}] ${assignment.videoName} уже опубликован на этом канале. Индекс не передаётся другому видео или названию.`);
     console.log(JSON.stringify({
       DATA_TYPE: 'STATS_UPDATE', channelNum: channelNumber, profileId: directProfileId,
-      subs: 'Готово', views: '100%', uploaded: VIDEOS_PER_CHANNEL, status: 'АКТИВЕН',
+      subs: 'Готово', views: '100%', uploaded: countChannelUploads(history, channelNumber), status: 'АКТИВЕН',
     }));
-    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: все видео уже в history`);
+    workerLog(`🏁 Слот ${CURRENT_SLOT} завершён: видео индекса ${assignment.index + 1} уже в history`);
     return;
   }
 
-  shuffle(availableVideos);
-  const currentBatch = availableVideos.slice(0, 1);
-  console.log(`🎯 Слот ${CURRENT_SLOT} — одиночный режим: 1 видео, публикация сразу`);
+  const videoToUpload = {
+    file: assignment.videoName,
+    title: assignment.title,
+    channel: channelNumber,
+    planIndex: assignment.index,
+    planTotal: plan.items.length,
+    channelLabel: assignment.channelLabel,
+  };
+  console.log(`🎯 Слот ${CURRENT_SLOT}: индекс ${assignment.index + 1}/${plan.items.length} — публикация сразу`);
 
   let browser = null;
   let context = null;
@@ -856,15 +874,18 @@ async function runFarmSingle(slot, profileId, channelNumber, finalVideosDir) {
 
   const page = context.pages()[0] || await context.newPage();
   page.setDefaultTimeout(60000);
-  const videoToUpload = currentBatch[0];
-  videoToUpload.title = resolveTitleForUpload(
-    allTitles,
-    channelNumber,
-    videoToUpload.file,
-    VIDEOS_PER_CHANNEL,
-  );
 
-  console.log(`\n🎬 [Видео 1/1] Начинаю процесс для: ${videoToUpload.file}`);
+  if (!fs.existsSync(path.join(finalVideosDir, videoToUpload.file))) {
+    throw new Error(`Ошибка: отсутствует видео №${videoToUpload.planIndex + 1} (${videoToUpload.file}). Публикация остановлена.`);
+  }
+
+  console.log(`\n${formatPublishPreview({
+    index: videoToUpload.planIndex,
+    channelLabel: videoToUpload.channelLabel,
+    videoName: videoToUpload.file,
+    title: videoToUpload.title,
+  }, videoToUpload.planTotal)}`);
+  console.log(`🎬 Начинаю загрузку: ${videoToUpload.file}`);
   console.log(`📅 Публикация: сразу (без расписания)`);
 
   let attempts = 3;
